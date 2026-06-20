@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.stintflow</groupId>
+        <artifactId>stint-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>stint-aws</artifactId>
+    <name>Stint :: Connectors :: AWS</name>
+    <description>AWS connectors: S3 (blob), DynamoDB (state), SQS/SNS/EventBridge (transport), SQS-delay (timer). Quarkus + native friendly; floci-testable.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-spi</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-core</artifactId>
+        </dependency>
+
+        <!-- CDI + config -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-arc</artifactId>
+        </dependency>
+
+        <!-- Quarkus AWS extensions (native-friendly). Versions managed by the platform BOM. -->
+        <dependency>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-s3</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-dynamodb</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-sqs</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-sns</artifactId>
+        </dependency>
+
+        <!-- Sync HTTP client used by the Quarkus AWS extensions -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+        </dependency>
+
+        <!-- EventBridge has no Quarkus extension yet: raw SDK v2 client.
+             NATIVE CAVEAT: needs reflection registration for native image (documented in README). -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>eventbridge</artifactId>
+        </dependency>
+    </dependencies>
+</project>

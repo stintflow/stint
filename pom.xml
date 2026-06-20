@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.stintflow</groupId>
+    <artifactId>stint-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>Stint :: Parent</name>
+    <description>Cloud-agnostic, distributed, serverless execution engine for CNCF Serverless Workflows.</description>
+
+    <!-- Project: Stint. GitHub org: stintflow (github.com/stintflow). Not git-initialised yet. -->
+
+    <properties>
+        <maven.compiler.release>25</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
+        <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
+        <!-- 3.33.x is the first line that supports JDK 25 (matches the sibling quarkus-flow project). -->
+        <quarkus.platform.version>3.33.2</quarkus.platform.version>
+
+        <cloudevents.version>4.0.1</cloudevents.version>
+
+        <compiler-plugin.version>3.13.0</compiler-plugin.version>
+        <surefire-plugin.version>3.2.5</surefire-plugin.version>
+        <archunit.version>1.4.0</archunit.version>
+        <assertj.version>3.26.3</assertj.version>
+    </properties>
+
+    <modules>
+        <module>stint-spi</module>
+        <module>stint-core</module>
+        <module>stint-worker-sdk</module>
+        <module>connectors/stint-inmemory</module>
+        <module>connectors/stint-aws</module>
+        <module>bundles/stint-bundle-local</module>
+        <module>bundles/stint-bundle-aws</module>
+        <module>examples/stint-example-build-report</module>
+        <module>stint-it</module>
+    </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Quarkus core platform BOM -->
+            <dependency>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>${quarkus.platform.artifact-id}</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- Platform-aligned member BOM: manages quarkus-amazon-* extensions AND the underlying
+                 AWS SDK v2 versions (so raw clients like eventbridge / url-connection-client align too). -->
+            <dependency>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>quarkus-amazon-services-bom</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- CloudEvents: the agnostic wire contract. CNCF lib, NOT a cloud SDK. -->
+            <dependency>
+                <groupId>io.cloudevents</groupId>
+                <artifactId>cloudevents-bom</artifactId>
+                <version>${cloudevents.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- Internal modules -->
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-spi</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-worker-sdk</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-inmemory</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-aws</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-bundle-local</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-bundle-aws</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.tngtech.archunit</groupId>
+                <artifactId>archunit-junit5</artifactId>
+                <version>${archunit.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${compiler-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${surefire-plugin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>
