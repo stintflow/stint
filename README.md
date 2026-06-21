@@ -1,6 +1,7 @@
 # Stint
 
 [![CI](https://github.com/stintflow/stint/actions/workflows/ci.yml/badge.svg)](https://github.com/stintflow/stint/actions/workflows/ci.yml)
+[![Integration (floci)](https://github.com/stintflow/stint/actions/workflows/it.yml/badge.svg)](https://github.com/stintflow/stint/actions/workflows/it.yml)
 
 > Cloud-agnostic, distributed, serverless execution engine for **CNCF Serverless Workflows**.
 > AWS-first in practice, cloud-blind by design.
