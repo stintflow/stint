@@ -25,6 +25,15 @@ public class S3BlobStore implements BlobStore {
     @ConfigProperty(name = "stint.aws.s3.bucket", defaultValue = "stint-blobs")
     String bucket;
 
+    public S3BlobStore() {
+    }
+
+    /** Test/manual wiring outside CDI. */
+    public S3BlobStore(S3Client s3, String bucket) {
+        this.s3 = s3;
+        this.bucket = bucket;
+    }
+
     @Override
     public CompletionStage<URI> put(byte[] data, String key) {
         return CompletableFuture.supplyAsync(() -> {

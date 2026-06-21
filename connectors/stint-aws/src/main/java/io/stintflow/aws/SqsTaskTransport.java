@@ -33,6 +33,16 @@ public class SqsTaskTransport extends AbstractSqsResultTransport {
     @ConfigProperty(name = "stint.aws.sqs.result-queue-url")
     String resultQueueUrl;
 
+    public SqsTaskTransport() {
+    }
+
+    /** Test/manual wiring outside CDI. */
+    public SqsTaskTransport(SqsClient sqs, String invokeQueueUrl, String resultQueueUrl) {
+        this.sqs = sqs;
+        this.invokeQueueUrl = invokeQueueUrl;
+        this.resultQueueUrl = resultQueueUrl;
+    }
+
     @Override
     public CompletionStage<Void> dispatch(TaskInvocation invocation) {
         return CompletableFuture.runAsync(() -> {

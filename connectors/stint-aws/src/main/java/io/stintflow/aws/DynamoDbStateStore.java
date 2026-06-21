@@ -41,6 +41,15 @@ public class DynamoDbStateStore implements StateStore {
     @ConfigProperty(name = "stint.aws.dynamodb.table", defaultValue = "stint-instances")
     String table;
 
+    public DynamoDbStateStore() {
+    }
+
+    /** Test/manual wiring outside CDI. */
+    public DynamoDbStateStore(DynamoDbClient ddb, String table) {
+        this.ddb = ddb;
+        this.table = table;
+    }
+
     @Override
     public CompletionStage<Void> save(InstanceSnapshot snap) {
         return CompletableFuture.supplyAsync(() -> {

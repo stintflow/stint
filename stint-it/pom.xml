@@ -17,7 +17,47 @@
     <dependencies>
         <dependency>
             <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-sdk</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-inmemory</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
             <artifactId>stint-aws</artifactId>
+        </dependency>
+        <!-- reuse the build-report workflow + handlers -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-example-build-report</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- AWS SDK clients to provision resources on floci (versions via amazon-services BOM) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sqs</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <dependency>
@@ -36,17 +76,24 @@
             <version>${assertj.version}</version>
             <scope>test</scope>
         </dependency>
-
-        <!-- plain SDK clients to drive floci directly in the smoke test -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>s3</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>url-connection-client</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- *IT tests run in the integration-test phase (mvn verify), not in mvn test. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>${surefire-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

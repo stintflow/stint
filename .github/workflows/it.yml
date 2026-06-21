@@ -1,0 +1,28 @@
+name: Integration (floci)
+
+# Runs the build-report workflow end-to-end against the floci AWS emulator (real S3 + DynamoDB + SQS),
+# booted by Testcontainers. GitHub-hosted runners ship Docker, so this is where the distributed path
+# is validated for real. Kept separate from CI so a floci hiccup never reddens the unit-test badge.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  floci-it:
+    name: build-report over floci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Integration tests
+        run: mvn -B -ntp -pl stint-it -am verify
