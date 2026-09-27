@@ -42,6 +42,7 @@
         <module>bundles/stint-bundle-local</module>
         <module>bundles/stint-bundle-aws</module>
         <module>examples/stint-example-build-report</module>
+        <module>examples/stint-example-send-report</module>
         <module>stint-it</module>
     </modules>
 
