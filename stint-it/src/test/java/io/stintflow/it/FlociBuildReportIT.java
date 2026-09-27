@@ -32,15 +32,6 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
-import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
-import software.amazon.awssdk.services.dynamodb.model.BillingMode;
-import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
-import software.amazon.awssdk.services.dynamodb.model.GlobalSecondaryIndex;
-import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
-import software.amazon.awssdk.services.dynamodb.model.KeyType;
-import software.amazon.awssdk.services.dynamodb.model.Projection;
-import software.amazon.awssdk.services.dynamodb.model.ProjectionType;
-import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
@@ -52,7 +43,8 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 class FlociBuildReportIT {
 
     private static final String BUCKET = "stint-blobs";
-    private static final String TABLE = "stint-instances";
+    static final String INSTANCES_TABLE = "stint-instances";
+    static final String WAITS_TABLE = "stint-waits";
 
     @Test
     void build_report_runs_end_to_end_against_floci() throws Exception {
@@ -73,13 +65,13 @@ class FlociBuildReportIT {
 
                 // --- provision AWS resources on floci ---
                 s3.createBucket(b -> b.bucket(BUCKET));
-                createInstancesTable(ddb);
+                DynamoDbTestTables.create(ddb, INSTANCES_TABLE, WAITS_TABLE);
                 String invokeUrl = sqs.createQueue(q -> q.queueName("stint-invoke")).queueUrl();
                 String resultUrl = sqs.createQueue(q -> q.queueName("stint-result")).queueUrl();
 
                 // --- wire the real AWS connectors ---
                 BlobStore blob = new S3BlobStore(s3, BUCKET);
-                StateStore state = new DynamoDbStateStore(ddb, TABLE);
+                StateStore state = new DynamoDbStateStore(ddb, INSTANCES_TABLE, WAITS_TABLE);
                 SqsTaskTransport transport = new SqsTaskTransport(sqs, invokeUrl, resultUrl);
                 TimerService timer = new InMemoryTimerService();
 
@@ -107,24 +99,5 @@ class FlociBuildReportIT {
                 }
             }
         }
-    }
-
-    private static void createInstancesTable(DynamoDbClient ddb) {
-        ddb.createTable(CreateTableRequest.builder()
-                .tableName(TABLE)
-                .attributeDefinitions(
-                        AttributeDefinition.builder().attributeName("instanceId")
-                                .attributeType(ScalarAttributeType.S).build(),
-                        AttributeDefinition.builder().attributeName("waitingFor")
-                                .attributeType(ScalarAttributeType.S).build())
-                .keySchema(KeySchemaElement.builder().attributeName("instanceId").keyType(KeyType.HASH).build())
-                .globalSecondaryIndexes(GlobalSecondaryIndex.builder()
-                        .indexName("waitingFor-index")
-                        .keySchema(KeySchemaElement.builder().attributeName("waitingFor").keyType(KeyType.HASH).build())
-                        .projection(Projection.builder().projectionType(ProjectionType.ALL).build())
-                        .build())
-                .billingMode(BillingMode.PAY_PER_REQUEST)
-                .build());
-        ddb.waiter().waitUntilTableExists(r -> r.tableName(TABLE));
     }
 }
