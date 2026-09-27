@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import io.stintflow.core.Json;
+import io.stintflow.wire.Json;
 import io.stintflow.spi.TimerFire;
 import io.stintflow.spi.TimerFireHandler;
 import io.stintflow.spi.TimerRequest;

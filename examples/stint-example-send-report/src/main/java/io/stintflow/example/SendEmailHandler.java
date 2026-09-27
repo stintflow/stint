@@ -5,7 +5,7 @@ import java.util.concurrent.CompletionStage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import io.stintflow.core.Json;
+import io.stintflow.wire.Json;
 import io.stintflow.worker.TaskContext;
 import io.stintflow.worker.TaskHandler;
 

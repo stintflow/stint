@@ -5,7 +5,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import io.cloudevents.CloudEvent;
-import io.stintflow.core.CeWire;
+import io.stintflow.wire.CeWire;
 import io.stintflow.worker.WorkerRuntime;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;

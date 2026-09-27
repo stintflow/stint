@@ -7,8 +7,8 @@ import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.stintflow.core.CeWire;
-import io.stintflow.core.DefaultCloudEventCodec;
+import io.stintflow.wire.CeWire;
+import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.spi.TaskResultHandler;
 import io.stintflow.spi.TaskTransport;
 import io.stintflow.spi.wire.CloudEventCodec;

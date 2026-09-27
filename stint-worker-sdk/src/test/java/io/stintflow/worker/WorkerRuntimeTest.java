@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import io.stintflow.core.DefaultCloudEventCodec;
-import io.stintflow.core.Json;
+import io.stintflow.wire.DefaultCloudEventCodec;
+import io.stintflow.wire.Json;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;

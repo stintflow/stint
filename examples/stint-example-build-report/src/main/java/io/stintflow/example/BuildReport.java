@@ -2,7 +2,7 @@ package io.stintflow.example;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import io.stintflow.core.Json;
+import io.stintflow.wire.Json;
 import io.stintflow.core.WorkflowDefinition;
 import io.stintflow.core.builder.WorkflowBuilder;
 import io.stintflow.core.expr.Expr;

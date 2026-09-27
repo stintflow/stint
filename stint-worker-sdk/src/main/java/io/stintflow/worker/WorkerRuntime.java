@@ -3,8 +3,8 @@ package io.stintflow.worker;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
-import io.stintflow.core.ClaimCheck;
-import io.stintflow.core.DefaultCloudEventCodec;
+import io.stintflow.wire.ClaimCheck;
+import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.TaskInvocation;

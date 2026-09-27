@@ -1,4 +1,4 @@
-package io.stintflow.core;
+package io.stintflow.wire;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

@@ -15,7 +15,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.stintflow.aws.DynamoDbStateStore;
 import io.stintflow.aws.S3BlobStore;
 import io.stintflow.aws.SqsTaskTransport;
-import io.stintflow.core.Json;
+import io.stintflow.wire.Json;
 import io.stintflow.core.WorkflowEngine;
 import io.stintflow.core.WorkflowRegistry;
 import io.stintflow.example.BuildReport;

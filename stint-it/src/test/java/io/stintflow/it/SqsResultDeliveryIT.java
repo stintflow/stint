@@ -16,8 +16,8 @@ import org.testcontainers.utility.DockerImageName;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.aws.SqsTaskTransport;
-import io.stintflow.core.CeWire;
-import io.stintflow.core.Json;
+import io.stintflow.wire.CeWire;
+import io.stintflow.wire.Json;
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskResultHandler;
@@ -54,7 +54,7 @@ class SqsResultDeliveryIT {
                 SqsTaskTransport transport = new SqsTaskTransport(sqs, invokeUrl, resultUrl);
 
                 TaskResult result = TaskResult.completed("corr-redelivery-1", Json.obj());
-                var event = new io.stintflow.core.DefaultCloudEventCodec().toEvent(result, "inst-redelivery-1");
+                var event = new io.stintflow.wire.DefaultCloudEventCodec().toEvent(result, "inst-redelivery-1");
                 sqs.sendMessage(b -> b.queueUrl(resultUrl).messageBody(new String(CeWire.toJson(event))));
 
                 AtomicInteger attempts = new AtomicInteger();

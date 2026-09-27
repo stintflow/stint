@@ -1,4 +1,4 @@
-package io.stintflow.core;
+package io.stintflow.wire;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

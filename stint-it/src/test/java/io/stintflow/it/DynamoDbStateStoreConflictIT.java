@@ -15,7 +15,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import io.stintflow.aws.DynamoDbStateStore;
-import io.stintflow.core.Json;
+import io.stintflow.wire.Json;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
 import io.stintflow.spi.SaveOutcome;

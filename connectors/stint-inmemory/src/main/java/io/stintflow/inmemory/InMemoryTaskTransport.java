@@ -7,7 +7,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
 
-import io.stintflow.core.DefaultCloudEventCodec;
+import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.spi.AdapterCapabilities;
 import io.stintflow.spi.AdapterCapabilities.DeliveryGuarantee;
 import io.stintflow.spi.ErrorInfo;

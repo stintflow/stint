@@ -34,6 +34,7 @@
 
     <modules>
         <module>stint-spi</module>
+        <module>stint-wire</module>
         <module>stint-core</module>
         <module>stint-dsl</module>
         <module>stint-worker-sdk</module>
@@ -81,6 +82,11 @@
             <dependency>
                 <groupId>io.github.stintflow</groupId>
                 <artifactId>stint-spi</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-wire</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

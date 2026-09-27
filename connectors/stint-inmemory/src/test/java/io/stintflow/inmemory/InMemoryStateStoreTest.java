@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import io.stintflow.core.Json;
+import io.stintflow.wire.Json;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
 import io.stintflow.spi.SaveOutcome;
