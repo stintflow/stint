@@ -11,9 +11,14 @@ import java.util.concurrent.CompletionStage;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import io.stintflow.core.Json;
+import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
+import io.stintflow.spi.RetryState;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
 import io.stintflow.spi.Wait;
@@ -95,6 +100,9 @@ public class DynamoDbStateStore implements StateStore {
         item.put("context", AttributeValue.fromS(snap.context().toString()));
         item.put("status", AttributeValue.fromS(snap.status().name()));
         item.put("version", AttributeValue.fromN(Long.toString(snap.version())));
+        if (snap.retryState() != null) {
+            item.put("retryState", AttributeValue.fromS(retryStateToJson(snap.retryState()).toString()));
+        }
         item.put("updatedAt", AttributeValue.fromN(Long.toString(snap.updatedAt().toEpochMilli())));
 
         Put.Builder builder = Put.builder().tableName(instancesTable).item(item);
@@ -171,6 +179,7 @@ public class DynamoDbStateStore implements StateStore {
 
     private static InstanceSnapshot toSnapshot(Map<String, AttributeValue> item) {
         AttributeValue waitingKey = item.get("waitingKey");
+        AttributeValue retryState = item.get("retryState");
         return new InstanceSnapshot(
                 item.get("instanceId").s(),
                 WorkflowRef.parse(item.get("definition").s()),
@@ -179,6 +188,62 @@ public class DynamoDbStateStore implements StateStore {
                 Json.read(item.get("context").s().getBytes()),
                 InstanceStatus.valueOf(item.get("status").s()),
                 Long.parseLong(item.get("version").n()),
+                retryState == null ? null : retryStateFromJson(Json.read(retryState.s().getBytes())),
                 Instant.ofEpochMilli(Long.parseLong(item.get("updatedAt").n())));
+    }
+
+    private static ObjectNode retryStateToJson(RetryState state) {
+        ObjectNode node = Json.obj();
+        node.put("tryNodePointer", state.tryNodePointer());
+        node.put("attempt", state.attempt());
+        node.put("firstAttemptAt", state.firstAttemptAt().toEpochMilli());
+        if (state.currentCorrelationId() != null) {
+            node.put("currentCorrelationId", state.currentCorrelationId());
+        }
+        if (state.lastError() != null) {
+            node.set("lastError", errorToJson(state.lastError()));
+        }
+        return node;
+    }
+
+    private static RetryState retryStateFromJson(JsonNode node) {
+        ErrorInfo lastError = node.hasNonNull("lastError") ? errorFromJson(node.get("lastError")) : null;
+        return new RetryState(
+                node.get("tryNodePointer").asText(),
+                node.get("attempt").asInt(),
+                Instant.ofEpochMilli(node.get("firstAttemptAt").asLong()),
+                lastError,
+                node.hasNonNull("currentCorrelationId") ? node.get("currentCorrelationId").asText() : null);
+    }
+
+    private static ObjectNode errorToJson(ErrorInfo error) {
+        ObjectNode node = Json.obj();
+        node.put("type", error.type().toString());
+        if (error.status() != null) {
+            node.put("status", error.status());
+        }
+        if (error.title() != null) {
+            node.put("title", error.title());
+        }
+        if (error.detail() != null) {
+            node.put("detail", error.detail());
+        }
+        if (error.instance() != null) {
+            node.put("instance", error.instance());
+        }
+        if (error.retryAfter() != null) {
+            node.put("retryAfter", error.retryAfter().toString());
+        }
+        return node;
+    }
+
+    private static ErrorInfo errorFromJson(JsonNode node) {
+        return new ErrorInfo(
+                java.net.URI.create(node.get("type").asText()),
+                node.hasNonNull("status") ? node.get("status").asInt() : null,
+                node.hasNonNull("title") ? node.get("title").asText() : null,
+                node.hasNonNull("detail") ? node.get("detail").asText() : null,
+                node.hasNonNull("instance") ? node.get("instance").asText() : null,
+                node.hasNonNull("retryAfter") ? java.time.Duration.parse(node.get("retryAfter").asText()) : null);
     }
 }
