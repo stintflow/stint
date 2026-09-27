@@ -22,6 +22,10 @@
         </dependency>
         <dependency>
             <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-dsl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
             <artifactId>stint-worker-sdk</artifactId>
         </dependency>
         <dependency>
@@ -72,6 +76,35 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>generate-workflow-manifest</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <includeProjectDependencies>false</includeProjectDependencies>
+                            <includePluginDependencies>true</includePluginDependencies>
+                            <mainClass>io.stintflow.dsl.build.WorkflowManifestGenerator</mainClass>
+                            <arguments>
+                                <argument>${project.basedir}/src/main/resources/stint/workflows</argument>
+                                <argument>${project.build.outputDirectory}/stint/workflows/index.txt</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+                <dependencies>
+                    <dependency>
+                        <groupId>io.github.stintflow</groupId>
+                        <artifactId>stint-dsl</artifactId>
+                        <version>${project.version}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
         </plugins>
     </build>
