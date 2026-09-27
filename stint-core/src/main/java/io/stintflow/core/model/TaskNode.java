@@ -1,11 +1,11 @@
 package io.stintflow.core.model;
 
 /**
- * A node in the workflow's task tree (SDD 1.1, RF1). Sealed to the four kinds this increment
- * supports; {@code TryNode}, {@code EmitNode}, {@code ListenNode}, {@code WaitNode} and
- * {@code ForkNode} are extension points for later SDDs (1.3 and Fase 2), not implemented here.
+ * A node in the workflow's task tree (SDD 1.1, RF1; {@link TryNode} added in SDD 1.3). Sealed to
+ * these five kinds; {@code EmitNode}, {@code ListenNode}, {@code WaitNode} and {@code ForkNode} are
+ * extension points for later SDDs (Fase 2), not implemented here.
  */
-public sealed interface TaskNode permits DoNode, CallRemoteNode, SetNode, SwitchNode {
+public sealed interface TaskNode permits DoNode, CallRemoteNode, SetNode, SwitchNode, TryNode {
 
     /** The task's name, as it appears as the single key of its {@code do} list entry. */
     String name();

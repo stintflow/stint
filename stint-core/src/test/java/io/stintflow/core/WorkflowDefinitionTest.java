@@ -85,6 +85,6 @@ class WorkflowDefinitionTest {
     }
 
     private static CallRemoteNode task(String name, String pointer, FlowDirective then) {
-        return new CallRemoteNode(name, pointer, DataFlow.NONE, then, "route-" + name);
+        return new CallRemoteNode(name, pointer, DataFlow.NONE, then, "route-" + name, null);
     }
 }

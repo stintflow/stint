@@ -1,5 +1,6 @@
 package io.stintflow.core.builder;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -9,9 +10,11 @@ import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DataFlow;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.FlowDirective;
+import io.stintflow.core.model.RetryPolicy;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
+import io.stintflow.core.model.TryNode;
 import io.stintflow.spi.WorkflowRef;
 
 /**
@@ -36,11 +39,17 @@ public final class WorkflowBuilder {
     }
 
     public WorkflowBuilder callRemote(String name, String routingKey, DataFlow dataFlow) {
-        return callRemote(name, routingKey, dataFlow, FlowDirective.CONTINUE);
+        return callRemote(name, routingKey, dataFlow, FlowDirective.CONTINUE, null);
     }
 
     public WorkflowBuilder callRemote(String name, String routingKey, DataFlow dataFlow, FlowDirective then) {
-        tasks.add(new CallRemoteNode(name, pointerFor(name), dataFlow, then, routingKey));
+        return callRemote(name, routingKey, dataFlow, then, null);
+    }
+
+    /** @param timeout {@code timeout.after}; {@code null} = engine default (SDD 1.3, RF3). */
+    public WorkflowBuilder callRemote(String name, String routingKey, DataFlow dataFlow, FlowDirective then,
+            Duration timeout) {
+        tasks.add(new CallRemoteNode(name, pointerFor(name), dataFlow, then, routingKey, timeout));
         return this;
     }
 
@@ -57,6 +66,27 @@ public final class WorkflowBuilder {
         // then() is unused on SwitchNode itself — control always transfers via the matched case.
         tasks.add(new SwitchNode(name, pointerFor(name), dataFlow, FlowDirective.CONTINUE, cases));
         return this;
+    }
+
+    /**
+     * {@code try}/{@code catch}/{@code retry} (SDD 1.3, RF5) around a single remote call.
+     *
+     * @param bodyName    name of the inner {@code call: remote} (its own pointer nests under the try's)
+     * @param routingKey  the remote call's routing key
+     * @param bodyFlow    the remote call's own data flow (its {@code then} is unused — see {@link TryNode})
+     * @param timeout     the remote call's {@code timeout.after}; {@code null} = engine default
+     */
+    public WorkflowBuilder tryRemote(String name, DataFlow dataFlow, String bodyName, String routingKey,
+            DataFlow bodyFlow, Duration timeout, TryNode.Catch catchClause, FlowDirective then) {
+        String tryPointer = pointerFor(name);
+        CallRemoteNode body = new CallRemoteNode(bodyName, tryPointer + "/try", bodyFlow, FlowDirective.CONTINUE,
+                routingKey, timeout);
+        tasks.add(new TryNode(name, tryPointer, dataFlow, then, body, catchClause));
+        return this;
+    }
+
+    public static TryNode.Catch catchAnyWithRetry(RetryPolicy retry, Expr compensation, FlowDirective then) {
+        return new TryNode.Catch(null, null, null, retry, compensation, then);
     }
 
     public WorkflowDefinition build(WorkflowRef ref) {
