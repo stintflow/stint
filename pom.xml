@@ -29,11 +29,13 @@
         <surefire-plugin.version>3.2.5</surefire-plugin.version>
         <archunit.version>1.4.0</archunit.version>
         <assertj.version>3.26.3</assertj.version>
+        <exec-plugin.version>3.2.0</exec-plugin.version>
     </properties>
 
     <modules>
         <module>stint-spi</module>
         <module>stint-core</module>
+        <module>stint-dsl</module>
         <module>stint-worker-sdk</module>
         <module>connectors/stint-inmemory</module>
         <module>connectors/stint-aws</module>
@@ -82,6 +84,11 @@
             <dependency>
                 <groupId>io.github.stintflow</groupId>
                 <artifactId>stint-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-dsl</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -149,6 +156,11 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${surefire-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>${exec-plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
