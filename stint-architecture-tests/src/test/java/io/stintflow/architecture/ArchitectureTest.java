@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.junit.AnalyzeClasses;
-import com.tngtech.archunit.junit.ArchIgnore;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
@@ -45,14 +44,11 @@ class ArchitectureTest {
                     "io.quarkiverse.langchain4j..");
 
     /**
-     * SDD 1.5, sec. 1/8a: 14 pre-existing violations found (worker-sdk and every connector reach
-     * into {@code Json}, {@code CeWire}, {@code DefaultCloudEventCodec} and {@code ClaimCheck} in
-     * {@code io.stintflow.core}) — pre-dating every SDD in this phase, not a regression from one of
-     * them. {@code @ArchIgnore} (not {@code allowEmptyShould}, not JUnit's {@code @Disabled}, which
-     * ArchUnit's JUnit 5 engine does not honor) until RF1/RF2 move those four classes to
-     * {@code stint-wire} and every connector points there instead.
+     * SDD 1.5, RF1/RF2: reactivated once {@code Json}, {@code CeWire}, {@code DefaultCloudEventCodec}
+     * and {@code ClaimCheck} moved from {@code io.stintflow.core} to {@code io.stintflow.wire} — the
+     * 14 pre-existing violations this rule found (sec. 1/8a) are gone now that every connector and
+     * the worker SDK point at {@code stint-wire} instead.
      */
-    @ArchIgnore
     @ArchTest
     static final ArchRule worker_sdk_and_connectors_do_not_depend_on_core = noClasses()
             .that().resideInAnyPackage("io.stintflow.worker..", "io.stintflow.inmemory..", "io.stintflow.aws..")
