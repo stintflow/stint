@@ -22,6 +22,8 @@ public final class StintEvents {
     public static final String EXT_TASK_ID = "taskid";
     public static final String EXT_ATTEMPT = "attempt";
     public static final String EXT_DEFINITION = "definition";
+    /** {@link #TYPE_TIMER_FIRE} extension: the timerId, which is also the {@code Wait} key it guards (SDD 1.3). */
+    public static final String EXT_TIMER_ID = "timerid";
 
     public static final String CONTENT_TYPE_JSON = "application/json";
 }

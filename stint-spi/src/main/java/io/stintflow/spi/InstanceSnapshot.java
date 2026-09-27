@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.JsonNode;
  * @param status      lifecycle status
  * @param version     optimistic-concurrency version; {@code 0} means "not yet persisted" — the
  *                    condition {@link StateStore#save} uses to distinguish create from update
+ * @param retryState  retry bookkeeping (SDD 1.3, RF10) while inside a {@code TryNode}, or {@code null}
  * @param updatedAt   last mutation timestamp
  */
 public record InstanceSnapshot(
@@ -27,6 +28,7 @@ public record InstanceSnapshot(
         JsonNode context,
         InstanceStatus status,
         long version,
+        RetryState retryState,
         Instant updatedAt) {
 
     public enum InstanceStatus {RUNNING, WAITING, COMPLETED, FAILED, ABORTED}
