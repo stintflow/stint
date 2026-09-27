@@ -66,6 +66,14 @@ public final class JqExpressionEvaluator implements ExpressionEvaluator {
         return results.get(0);
     }
 
+    @Override
+    public void validate(Expr expr) {
+        if (expr instanceof Expr.Jq jq) {
+            compiled.computeIfAbsent(jq.source(), this::compile);
+        }
+        // Expr.Lambda is plain Java, already compiled by the JVM — nothing to validate.
+    }
+
     private JsonQuery compile(String source) {
         try {
             return JsonQuery.compile(source, JQ_VERSION);
