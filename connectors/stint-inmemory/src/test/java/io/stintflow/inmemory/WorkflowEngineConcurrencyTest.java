@@ -104,12 +104,15 @@ class WorkflowEngineConcurrencyTest {
 
         TaskInvocation invocation = transport.awaitDispatch(5, TimeUnit.SECONDS);
         String waitKey = "task:" + invocation.correlationId();
+        String timerKey = "timer:" + invocation.correlationId();
         assertThat(state.findWait(waitKey).toCompletableFuture().get(5, TimeUnit.SECONDS)).isPresent();
+        assertThat(state.findWait(timerKey).toCompletableFuture().get(5, TimeUnit.SECONDS)).isPresent();
 
         transport.deliverResult(TaskResult.completed(invocation.correlationId(), Json.obj()))
                 .toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         assertThat(state.findWait(waitKey).toCompletableFuture().get(5, TimeUnit.SECONDS)).isEmpty();
+        assertThat(state.findWait(timerKey).toCompletableFuture().get(5, TimeUnit.SECONDS)).isEmpty();
         InstanceSnapshot finalSnap = state.load(instanceId).toCompletableFuture().get(5, TimeUnit.SECONDS).orElseThrow();
         assertThat(finalSnap.status()).isEqualTo(InstanceStatus.COMPLETED);
     }
@@ -133,12 +136,14 @@ class WorkflowEngineConcurrencyTest {
 
         TaskInvocation invocation = transport.awaitDispatch(5, TimeUnit.SECONDS);
         String waitKey = "task:" + invocation.correlationId();
+        String timerKey = "timer:" + invocation.correlationId();
 
         transport.deliverResult(TaskResult.failed(invocation.correlationId(),
-                        new ErrorInfo("boom", "simulated worker failure")))
+                        ErrorInfo.of(new RuntimeException("simulated worker failure"))))
                 .toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         assertThat(state.findWait(waitKey).toCompletableFuture().get(5, TimeUnit.SECONDS)).isEmpty();
+        assertThat(state.findWait(timerKey).toCompletableFuture().get(5, TimeUnit.SECONDS)).isEmpty();
         InstanceSnapshot finalSnap = state.load(instanceId).toCompletableFuture().get(5, TimeUnit.SECONDS).orElseThrow();
         assertThat(finalSnap.status()).isEqualTo(InstanceStatus.FAILED);
     }

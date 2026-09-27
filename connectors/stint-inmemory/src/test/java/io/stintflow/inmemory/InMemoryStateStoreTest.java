@@ -38,7 +38,7 @@ class InMemoryStateStoreTest {
         ObjectNode context = Json.obj();
 
         InstanceSnapshot initial = new InstanceSnapshot(instanceId, REF, "/do/0/echo", waitKey, context,
-                InstanceStatus.WAITING, 1, Instant.now());
+                InstanceStatus.WAITING, 1, null, Instant.now());
         store.save(initial, 0, List.of(new Wait(waitKey, instanceId, "/do/0/echo", Instant.now())), List.of())
                 .toCompletableFuture().get(5, TimeUnit.SECONDS);
 
@@ -65,7 +65,7 @@ class InMemoryStateStoreTest {
         try {
             barrier.await(5, TimeUnit.SECONDS); // both threads start the save at the same instant
             InstanceSnapshot next = new InstanceSnapshot(instanceId, REF, "/do/1/after", null, Json.obj(),
-                    InstanceStatus.COMPLETED, 2, Instant.now());
+                    InstanceStatus.COMPLETED, 2, null, Instant.now());
             SaveOutcome outcome = store.save(next, 1, List.of(), List.of(waitKey))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
             result.set(outcome);
