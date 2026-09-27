@@ -23,6 +23,7 @@
         <quarkus.platform.version>3.33.2</quarkus.platform.version>
 
         <cloudevents.version>4.0.1</cloudevents.version>
+        <jackson-jq.version>1.6.0</jackson-jq.version>
 
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
         <surefire-plugin.version>3.2.5</surefire-plugin.version>
@@ -113,6 +114,25 @@
                 <groupId>com.tngtech.archunit</groupId>
                 <artifactId>archunit-junit5</artifactId>
                 <version>${archunit.version}</version>
+            </dependency>
+
+            <!-- SDD 1.1: default ExpressionEvaluator implementation (RF5). Pure Java, JsonNode-native,
+                 no reflection-heavy magic beyond ServiceLoader for built-ins (see SDD 1.1 sec. 8a).
+                 Jackson transitives are excluded so the Quarkus BOM's Jackson versions win. -->
+            <dependency>
+                <groupId>net.thisptr</groupId>
+                <artifactId>jackson-jq</artifactId>
+                <version>${jackson-jq.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>com.fasterxml.jackson.core</groupId>
+                        <artifactId>jackson-databind</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>com.fasterxml.jackson.core</groupId>
+                        <artifactId>jackson-core</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
         </dependencies>
     </dependencyManagement>

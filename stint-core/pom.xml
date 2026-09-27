@@ -23,6 +23,10 @@
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-json-jackson</artifactId>
         </dependency>
+        <dependency>
+            <groupId>net.thisptr</groupId>
+            <artifactId>jackson-jq</artifactId>
+        </dependency>
 
         <!-- tests -->
         <dependency>
