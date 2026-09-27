@@ -12,6 +12,7 @@ import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
+import io.stintflow.core.model.TryNode;
 
 /**
  * The local interpreter (SDD 1.1, RF6): walks local nodes ({@code set}, {@code switch}, {@code do})
@@ -61,6 +62,10 @@ public final class TreeInterpreter {
 
             if (node instanceof CallRemoteNode remote) {
                 return InterpretResult.suspend(remote, pointer, effectiveInput, context);
+            }
+
+            if (node instanceof TryNode tryNode) {
+                return InterpretResult.suspendInTry(tryNode, effectiveInput, context);
             }
 
             if (node instanceof DoNode doNode) {
@@ -128,6 +133,38 @@ public final class TreeInterpreter {
             return InterpretResult.complete(pointer, newContext);
         }
         return run(def, nextPointer.get(), outputData, newContext);
+    }
+
+    /**
+     * SDD 1.3: applies a just-succeeded {@link TryNode} body's {@code output.as}/{@code export.as}
+     * and continues via the {@code TryNode}'s own {@code then} (not the body's, which is unused for
+     * a try'd call — mirrors {@link #resume}).
+     */
+    public InterpretResult resumeTry(WorkflowDefinition def, TryNode tryNode, JsonNode rawOutput, JsonNode context) {
+        CallRemoteNode body = tryNode.body();
+        JsonNode outputData = DataFlowSupport.applyExpr(evaluator, body.dataFlow().outputAs(), rawOutput, context, def.ref());
+        JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, body.dataFlow().exportAs(), outputData, context, def.ref());
+
+        Optional<String> nextPointer = def.next(tryNode.pointer(), tryNode.then());
+        if (nextPointer.isEmpty()) {
+            return InterpretResult.complete(tryNode.pointer(), newContext);
+        }
+        return run(def, nextPointer.get(), outputData, newContext);
+    }
+
+    /** Continues from {@code catchClause.then()} once a caught error has been handled (SDD 1.3). */
+    public InterpretResult resumeFromCatch(WorkflowDefinition def, TryNode tryNode, JsonNode data, JsonNode context) {
+        Optional<String> nextPointer = def.next(tryNode.pointer(), tryNode.catchClause().then());
+        if (nextPointer.isEmpty()) {
+            return InterpretResult.complete(tryNode.pointer(), context);
+        }
+        return run(def, nextPointer.get(), data, context);
+    }
+
+    /** Exposed so {@code WorkflowEngine} can evaluate a {@code TryNode}'s catch filter/compensation
+     *  with the exact same {@link io.stintflow.core.expr.ExpressionEvaluator} the rest of the tree uses. */
+    public ExpressionEvaluator evaluator() {
+        return evaluator;
     }
 
     private SwitchNode.Case chooseCase(SwitchNode switchNode, JsonNode data, JsonNode context, WorkflowDefinition def) {
