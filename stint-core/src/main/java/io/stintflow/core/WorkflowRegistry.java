@@ -32,9 +32,20 @@ public final class WorkflowRegistry {
         this.maxTimerDelay = maxTimerDelay;
     }
 
+    /**
+     * SDD 1.4, sec. 8f: registering the same {@link WorkflowRef} twice with structurally equal
+     * content (e.g. a classpath reload) is an idempotent no-op — in-flight instances never see a
+     * version's definition change. Registering it again with different content is rejected: bump
+     * {@code document.version} instead of silently replacing a version instances may be running.
+     */
     public void register(WorkflowDefinition def) {
         validateTimeouts(def.root());
-        byRef.put(def.ref().canonical(), def);
+        WorkflowDefinition existing = byRef.putIfAbsent(def.ref().canonical(), def);
+        if (existing != null && !existing.equals(def)) {
+            throw new IllegalStateException("Workflow " + def.ref().canonical()
+                    + " is already registered with different content; bump document.version instead of "
+                    + "re-registering the same version with a changed definition.");
+        }
     }
 
     public Optional<WorkflowDefinition> find(WorkflowRef ref) {
