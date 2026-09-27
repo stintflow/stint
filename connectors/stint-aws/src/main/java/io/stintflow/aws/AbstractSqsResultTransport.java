@@ -23,6 +23,12 @@ import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
  * <p>
  * This is the "one inbound, many outbound" shape that lets the dispatch side vary per AWS service
  * while result handling stays uniform.
+ * <p>
+ * SDD 1.3, sec. 8g/RF9: a message is deleted only after {@code handler.handle(...)} completes
+ * successfully. A failure leaves it for SQS to redeliver once its visibility timeout elapses —
+ * relying on the engine already being idempotent per-correlation (SDD 1.2), so at-least-once
+ * redelivery is safe. Result handling here is bookkeeping-only (no remote calls), so it comfortably
+ * fits inside a queue's default visibility timeout — no heartbeat/extension is implemented (RNF3).
  */
 public abstract class AbstractSqsResultTransport implements TaskTransport {
 
@@ -61,16 +67,24 @@ public abstract class AbstractSqsResultTransport implements TaskTransport {
                         .waitTimeSeconds(5)
                         .build());
                 for (Message m : resp.messages()) {
-                    var event = CeWire.fromJson(m.body().getBytes(StandardCharsets.UTF_8));
-                    handler.handle(codec.toResult(event));
-                    sqs().deleteMessage(DeleteMessageRequest.builder()
-                            .queueUrl(resultQueueUrl())
-                            .receiptHandle(m.receiptHandle())
-                            .build());
+                    handleOne(handler, m);
                 }
             } catch (Exception e) {
                 LOG.warn("Result poll failed: {}", e.getMessage());
             }
+        }
+    }
+
+    private void handleOne(TaskResultHandler handler, Message m) {
+        try {
+            var event = CeWire.fromJson(m.body().getBytes(StandardCharsets.UTF_8));
+            handler.handle(codec.toResult(event)).toCompletableFuture().join();
+            sqs().deleteMessage(DeleteMessageRequest.builder()
+                    .queueUrl(resultQueueUrl())
+                    .receiptHandle(m.receiptHandle())
+                    .build());
+        } catch (Exception e) {
+            LOG.warn("Result handling failed, leaving message for redelivery: {}", e.getMessage());
         }
     }
 
