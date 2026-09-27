@@ -87,6 +87,23 @@ class WorkerRuntimeTest {
     }
 
     @Test
+    void ca3_handler_reads_the_full_workflow_definition_from_the_context() throws Exception {
+        WorkflowRef[] seen = new WorkflowRef[1];
+        TaskHandlerRegistry handlers = new TaskHandlerRegistry()
+                .register("reads-definition", ctx -> {
+                    seen[0] = ctx.definition();
+                    return CompletableFuture.completedFuture(Json.obj());
+                });
+        WorkerRuntime runtime = new WorkerRuntime(handlers, NO_BLOB);
+        invoke(runtime, "reads-definition", Json.obj());
+
+        assertThat(seen[0]).isEqualTo(new WorkflowRef("test", "wf", "1.0.0"));
+        assertThat(seen[0].namespace()).isEqualTo("test");
+        assertThat(seen[0].name()).isEqualTo("wf");
+        assertThat(seen[0].version()).isEqualTo("1.0.0");
+    }
+
+    @Test
     void handler_succeeding_still_works() throws Exception {
         TaskHandlerRegistry handlers = new TaskHandlerRegistry()
                 .register("ok", ctx -> CompletableFuture.completedFuture(ctx.input()));
