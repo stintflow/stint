@@ -18,9 +18,11 @@ import io.stintflow.spi.WorkflowRef;
  * Both steps are {@code remote}: the orchestrator dispatches them over the transport and suspends.
  * <p>
  * SDD 1.1: migrated from the flat {@code List<RemoteStep>} model to the tree model, built here via
- * {@link WorkflowBuilder} with the lambda {@link Expr} adapter (RF7) rather than jq, since the
- * original per-step mappers are plain Java and there is no YAML front-end yet (SDD 1.4). Each step's
- * {@code export.as} merges its output into {@code $context} (read back by the next step's
+ * {@link WorkflowBuilder}. Most per-step mappers use the lambda {@link Expr} adapter (RF7), since
+ * they are plain Java and there is no YAML front-end yet (SDD 1.4); {@code extractData}'s
+ * {@code input.from} uses a real jq expression instead, so this example — the one CA7 builds native —
+ * actually exercises the default {@code ExpressionEvaluator} at runtime, not just the adapter. Each
+ * step's {@code export.as} merges its output into {@code $context} (read back by the next step's
  * {@code input.from}), reproducing the original accumulating-context behaviour exactly — this is
  * why {@link io.stintflow.core.WorkflowEngine}'s completion value is the final {@code $context}.
  * <p>
@@ -38,11 +40,7 @@ public final class BuildReport {
 
     public static WorkflowDefinition definition() {
         DataFlow extractDataFlow = new DataFlow(
-                Expr.of((context, data) -> {
-                    ObjectNode in = Json.obj();
-                    in.set("query", context.get("reportQuery"));
-                    return in;
-                }),
+                Expr.jq("{query: $context.reportQuery}"),
                 null, // output.as: identity — the raw {pointer, rows} becomes the flowing data
                 Expr.of((context, output) -> {
                     ObjectNode merged = ((ObjectNode) context).deepCopy();
