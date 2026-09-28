@@ -30,6 +30,7 @@
         <archunit.version>1.5.1</archunit.version>
         <assertj.version>3.26.3</assertj.version>
         <exec-plugin.version>3.2.0</exec-plugin.version>
+        <enforcer-plugin.version>3.5.0</enforcer-plugin.version>
     </properties>
 
     <modules>
@@ -169,6 +170,11 @@
                     <groupId>org.codehaus.mojo</groupId>
                     <artifactId>exec-maven-plugin</artifactId>
                     <version>${exec-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-enforcer-plugin</artifactId>
+                    <version>${enforcer-plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
