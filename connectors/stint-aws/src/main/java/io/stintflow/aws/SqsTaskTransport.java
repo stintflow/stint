@@ -7,7 +7,7 @@ import java.util.concurrent.CompletionStage;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-import io.stintflow.core.CeWire;
+import io.stintflow.wire.CeWire;
 import io.stintflow.spi.AdapterCapabilities;
 import io.stintflow.spi.AdapterCapabilities.DeliveryGuarantee;
 import io.stintflow.spi.TaskInvocation;

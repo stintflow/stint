@@ -63,3 +63,57 @@ payload > `maxPayloadBytes` → claim-check via `BlobStore`; no `dedupSupported`
 | SQS standard | at-least-once | no | 256 KB | 15 min | no |
 | SNS→SQS | at-least-once | no | 256 KB | no | no |
 | EventBridge | at-least-once | no | 256 KB | no | no |
+
+## Writing your own connector: package migration (SDD 1.5)
+
+If you built a connector against `Json`, `CeWire`, `DefaultCloudEventCodec` or `ClaimCheck` before SDD
+1.5, they moved from `io.stintflow.core` to `io.stintflow.wire` (new module `stint-wire`). No behaviour
+changed — only the import and the Maven dependency:
+
+```diff
+- import io.stintflow.core.Json;
+- import io.stintflow.core.CeWire;
+- import io.stintflow.core.DefaultCloudEventCodec;
+- import io.stintflow.core.ClaimCheck;
++ import io.stintflow.wire.Json;
++ import io.stintflow.wire.CeWire;
++ import io.stintflow.wire.DefaultCloudEventCodec;
++ import io.stintflow.wire.ClaimCheck;
+```
+
+```diff
+  <dependency>
+      <groupId>io.github.stintflow</groupId>
+-     <artifactId>stint-core</artifactId>
++     <artifactId>stint-wire</artifactId>
+  </dependency>
+```
+
+A connector only needs `stint-core` if it also touches the tree model (`WorkflowDefinition`, the
+interpreter, etc.) directly — the four wire classes above never required it, and neither did any
+shipped connector. This is a breaking API change, acceptable pre-1.0 (no published version depended on
+the old package).
+
+## Consuming `stint-aws` as an external dependency
+
+Found while validating Stint as a plain external library (not part of any SDD's registered scope):
+
+- **CDI discovery — fixed in the library.** `stint-aws` now ships a build-time `META-INF/jandex.idx`
+  (`jandex-maven-plugin`), so its `@ApplicationScoped` classes (`S3BlobStore`, `DynamoDbStateStore`,
+  `Sqs/Sns/EventBridgeTaskTransport`, `SqsDelayTimerService`) are auto-discovered as CDI beans by any
+  Quarkus consumer, exactly as they are inside the Stint reactor. No consumer-side
+  `quarkus.index-dependency.*` workaround needed.
+- **S3 path-style access — consumer's own config, not something the library should force.** Pointing
+  `S3Client` at floci/LocalStack needs `quarkus.s3.path-style-access=true` (the default
+  virtual-hosted-style addressing tries to resolve `<bucket>.<host>`, which doesn't exist for a local
+  emulator). This is deliberately **not** hardcoded in `stint-aws`: real AWS S3 is moving away from
+  path-style, so forcing it in the library would break production consumers to help local testing.
+  Set it in your own `application.properties` alongside `quarkus.s3.endpoint-override`:
+  ```properties
+  quarkus.s3.endpoint-override=http://localhost:4566
+  quarkus.s3.path-style-access=true
+  quarkus.s3.aws.region=us-east-1
+  quarkus.s3.aws.credentials.type=static
+  quarkus.s3.aws.credentials.static-provider.access-key-id=test
+  quarkus.s3.aws.credentials.static-provider.secret-access-key=test
+  ```

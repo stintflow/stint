@@ -23,23 +23,30 @@
         <quarkus.platform.version>3.33.2</quarkus.platform.version>
 
         <cloudevents.version>4.0.1</cloudevents.version>
+        <jackson-jq.version>1.6.0</jackson-jq.version>
 
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
         <surefire-plugin.version>3.2.5</surefire-plugin.version>
-        <archunit.version>1.4.0</archunit.version>
+        <archunit.version>1.5.1</archunit.version>
         <assertj.version>3.26.3</assertj.version>
+        <exec-plugin.version>3.2.0</exec-plugin.version>
+        <enforcer-plugin.version>3.5.0</enforcer-plugin.version>
     </properties>
 
     <modules>
         <module>stint-spi</module>
+        <module>stint-wire</module>
         <module>stint-core</module>
+        <module>stint-dsl</module>
         <module>stint-worker-sdk</module>
         <module>connectors/stint-inmemory</module>
         <module>connectors/stint-aws</module>
         <module>bundles/stint-bundle-local</module>
         <module>bundles/stint-bundle-aws</module>
         <module>examples/stint-example-build-report</module>
+        <module>examples/stint-example-send-report</module>
         <module>stint-it</module>
+        <module>stint-architecture-tests</module>
     </modules>
 
     <dependencyManagement>
@@ -80,7 +87,17 @@
             </dependency>
             <dependency>
                 <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-wire</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
                 <artifactId>stint-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-dsl</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -114,6 +131,25 @@
                 <artifactId>archunit-junit5</artifactId>
                 <version>${archunit.version}</version>
             </dependency>
+
+            <!-- SDD 1.1: default ExpressionEvaluator implementation (RF5). Pure Java, JsonNode-native,
+                 no reflection-heavy magic beyond ServiceLoader for built-ins (see SDD 1.1 sec. 8a).
+                 Jackson transitives are excluded so the Quarkus BOM's Jackson versions win. -->
+            <dependency>
+                <groupId>net.thisptr</groupId>
+                <artifactId>jackson-jq</artifactId>
+                <version>${jackson-jq.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>com.fasterxml.jackson.core</groupId>
+                        <artifactId>jackson-databind</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>com.fasterxml.jackson.core</groupId>
+                        <artifactId>jackson-core</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -129,6 +165,16 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${surefire-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>${exec-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-enforcer-plugin</artifactId>
+                    <version>${enforcer-plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>

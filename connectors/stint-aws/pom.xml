@@ -22,7 +22,7 @@
         </dependency>
         <dependency>
             <groupId>io.github.stintflow</groupId>
-            <artifactId>stint-core</artifactId>
+            <artifactId>stint-wire</artifactId>
         </dependency>
 
         <!-- CDI + config -->
@@ -62,4 +62,51 @@
             <artifactId>eventbridge</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Embeds a Jandex index in the jar so every @ApplicationScoped class here (S3BlobStore,
+                 DynamoDbStateStore, Sqs/Sns/EventBridgeTaskTransport, SqsDelayTimerService) is
+                 discoverable as a CDI bean by ANY Quarkus consumer of this jar, with no
+                 quarkus.index-dependency workaround needed on their side. Found while validating
+                 stint-aws as an external library dependency (not part of any SDD's registered scope;
+                 approved directly in chat). -->
+            <plugin>
+                <groupId>org.jboss.jandex</groupId>
+                <artifactId>jandex-maven-plugin</artifactId>
+                <version>1.2.3</version>
+                <executions>
+                    <execution>
+                        <id>make-index</id>
+                        <goals>
+                            <goal>jandex</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- SDD 1.5, CA1: fails fast at mvn validate, before any compile/test — complements the
+                 consolidated ArchUnit suite with a build-time-earliest check of the same boundary. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>no-stint-core</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>io.github.stintflow:stint-core:*:*:compile</exclude>
+                                    </excludes>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>
