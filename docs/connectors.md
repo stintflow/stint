@@ -63,3 +63,33 @@ payload > `maxPayloadBytes` → claim-check via `BlobStore`; no `dedupSupported`
 | SQS standard | at-least-once | no | 256 KB | 15 min | no |
 | SNS→SQS | at-least-once | no | 256 KB | no | no |
 | EventBridge | at-least-once | no | 256 KB | no | no |
+
+## Writing your own connector: package migration (SDD 1.5)
+
+If you built a connector against `Json`, `CeWire`, `DefaultCloudEventCodec` or `ClaimCheck` before SDD
+1.5, they moved from `io.stintflow.core` to `io.stintflow.wire` (new module `stint-wire`). No behaviour
+changed — only the import and the Maven dependency:
+
+```diff
+- import io.stintflow.core.Json;
+- import io.stintflow.core.CeWire;
+- import io.stintflow.core.DefaultCloudEventCodec;
+- import io.stintflow.core.ClaimCheck;
++ import io.stintflow.wire.Json;
++ import io.stintflow.wire.CeWire;
++ import io.stintflow.wire.DefaultCloudEventCodec;
++ import io.stintflow.wire.ClaimCheck;
+```
+
+```diff
+  <dependency>
+      <groupId>io.github.stintflow</groupId>
+-     <artifactId>stint-core</artifactId>
++     <artifactId>stint-wire</artifactId>
+  </dependency>
+```
+
+A connector only needs `stint-core` if it also touches the tree model (`WorkflowDefinition`, the
+interpreter, etc.) directly — the four wire classes above never required it, and neither did any
+shipped connector. This is a breaking API change, acceptable pre-1.0 (no published version depended on
+the old package).
