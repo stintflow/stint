@@ -131,7 +131,7 @@ class TryNodeRetryTest {
         WorkflowEngine engine = newEngine(registry, transport, state, timer, blob, clock);
 
         CompletionStage<com.fasterxml.jackson.databind.JsonNode> resultFuture = engine.startAndWait(ref, Json.obj());
-        transport.awaitDispatch(5, TimeUnit.SECONDS);
+        TaskInvocation firstDispatch = transport.awaitDispatch(5, TimeUnit.SECONDS);
 
         clock.advance(DEFAULT_TIMEOUT.plusSeconds(1));
         timer.tick(); // attempt 1 times out -> schedules retry
@@ -142,9 +142,13 @@ class TryNodeRetryTest {
         clock.advance(DEFAULT_TIMEOUT.plusSeconds(1));
         timer.tick(); // attempt 2 also times out -> limit exhausted
 
-        assertThatThrownBy(() -> resultFuture.toCompletableFuture().get(5, TimeUnit.SECONDS))
-                .hasMessageContaining("Retry limit exhausted")
-                .hasMessageContaining(ErrorInfo.TYPE_TIMEOUT.toString());
+        // SDD 1.5, sec. 8d: awaitCompletion learns FAILED from the StateStore, which (like the old
+        // in-memory shortcut it replaces) does not persist *why* — so the assertion moves from the
+        // exception's text to the persisted status, which is what's actually knowable now.
+        assertThatThrownBy(() -> resultFuture.toCompletableFuture().get(5, TimeUnit.SECONDS));
+        InstanceSnapshot snap = state.load(firstDispatch.workflowInstanceId())
+                .toCompletableFuture().get(5, TimeUnit.SECONDS).orElseThrow();
+        assertThat(snap.status()).isEqualTo(InstanceStatus.FAILED);
     }
 
     @Test
@@ -407,8 +411,12 @@ class TryNodeRetryTest {
                         ErrorInfo.of(new RuntimeException("boom"))))
                 .toCompletableFuture().get(5, TimeUnit.SECONDS);
 
-        assertThatThrownBy(() -> resultFuture.toCompletableFuture().get(5, TimeUnit.SECONDS))
-                .hasMessageContaining("exceeds the timer's max delay");
+        // SDD 1.5, sec. 8d: same as ca2 above — the persisted status is what's knowable now, not the
+        // exception's text (the StateStore never carried the failure reason, only that one occurred).
+        assertThatThrownBy(() -> resultFuture.toCompletableFuture().get(5, TimeUnit.SECONDS));
+        InstanceSnapshot snap = state.load(invocation.workflowInstanceId())
+                .toCompletableFuture().get(5, TimeUnit.SECONDS).orElseThrow();
+        assertThat(snap.status()).isEqualTo(InstanceStatus.FAILED);
     }
 
     private static WorkflowEngine newEngine(WorkflowRegistry registry, TaskTransport transport, StateStore state,

@@ -1,18 +1,19 @@
 package io.stintflow.core;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.InstantSource;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -58,12 +59,19 @@ import io.stintflow.wire.Json;
  */
 public final class WorkflowEngine {
 
+    private static final Logger LOG = System.getLogger(WorkflowEngine.class.getName());
+
     private static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(5);
 
     /** SDD 1.2, sec. 8d: retry budget for a save() that lost a version/wait race (NOT the business-level TryNode retry). */
     static final int MAX_RETRY_ATTEMPTS = 5;
     private static final long BASE_BACKOFF_MILLIS = 10;
     private static final long MAX_BACKOFF_MILLIS = 200;
+
+    /** SDD 1.5, RF4: how often {@link #awaitCompletion} rechecks the StateStore — an engine
+     *  implementation detail (not business time), so a real short delay is fine even in tests. */
+    private static final Duration AWAIT_POLL_INTERVAL = Duration.ofMillis(20);
+    private static final Duration DEFAULT_AWAIT_TIMEOUT = Duration.ofSeconds(30);
 
     private static final ScheduledExecutorService RETRY_SCHEDULER = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "stint-engine-retry");
@@ -78,8 +86,6 @@ public final class WorkflowEngine {
     private final BlobStore blob;
     private final TreeInterpreter interpreter;
     private final InstantSource clock;
-
-    private final Map<String, CompletableFuture<JsonNode>> completions = new ConcurrentHashMap<>();
 
     public WorkflowEngine(WorkflowRegistry registry, TaskTransport transport, StateStore state,
                           TimerService timer, BlobStore blob) {
@@ -111,7 +117,6 @@ public final class WorkflowEngine {
         WorkflowDefinition def = registry.find(ref)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown workflow: " + ref.canonical()));
         String instanceId = UUID.randomUUID().toString();
-        completions.computeIfAbsent(instanceId, k -> new CompletableFuture<>());
         // $context starts equal to the workflow's raw input (RF5/SDD 1.1 sec. 8c): there is no prior
         // export.as yet, so the instance's accumulated context and its initial data coincide.
         InterpretResult result = interpreter.run(def, WorkflowDefinition.ROOT_POINTER, input, input);
@@ -131,9 +136,56 @@ public final class WorkflowEngine {
         return instanceId;
     }
 
-    /** Convenience for tests/sync callers: start and complete with the final {@code $context}. */
+    /** Convenience for tests/sync callers: start and await completion with the default timeout. */
     public CompletionStage<JsonNode> startAndWait(WorkflowRef ref, JsonNode input) {
-        return completions.get(start(ref, input));
+        return awaitCompletion(start(ref, input), DEFAULT_AWAIT_TIMEOUT);
+    }
+
+    /**
+     * SDD 1.5, RF4: waits for {@code instanceId} to reach a terminal {@link InstanceStatus} by
+     * polling the {@link StateStore} — works across JVMs/engine instances sharing the same store,
+     * unlike the old in-memory-only shortcut this replaces. Completes with the instance's final
+     * {@code $context} on {@code COMPLETED}; completes exceptionally on {@code FAILED} or timeout
+     * (never with an empty result — a silent empty result would hide a real failure).
+     * <p>
+     * Known limitation (sec. 8d): {@link InstanceSnapshot} does not persist <em>why</em> an instance
+     * failed, only that it did — the exceptional completion on {@code FAILED} can report the
+     * instance id and its last position, not the original {@link ErrorInfo}. Not intended for
+     * high-volume production use (poll cost is linear in the number of concurrent waiters); fine for
+     * tests and one-off synchronous calls.
+     */
+    public CompletionStage<JsonNode> awaitCompletion(String instanceId, Duration timeout) {
+        CompletableFuture<JsonNode> result = new CompletableFuture<>();
+        pollForCompletion(instanceId, clock.instant().plus(timeout), result);
+        return result;
+    }
+
+    private void pollForCompletion(String instanceId, Instant deadline, CompletableFuture<JsonNode> result) {
+        state.load(instanceId).whenComplete((optSnap, ex) -> {
+            if (ex != null) {
+                result.completeExceptionally(ex);
+                return;
+            }
+            if (optSnap.isPresent()) {
+                InstanceSnapshot snap = optSnap.get();
+                if (snap.status() == InstanceStatus.COMPLETED) {
+                    result.complete(snap.context());
+                    return;
+                }
+                if (snap.status() == InstanceStatus.FAILED) {
+                    result.completeExceptionally(new RuntimeException(
+                            "Instance " + instanceId + " failed (last position: " + snap.position() + ")"));
+                    return;
+                }
+            }
+            if (clock.instant().isAfter(deadline)) {
+                result.completeExceptionally(
+                        new TimeoutException("Instance " + instanceId + " did not complete within the timeout"));
+                return;
+            }
+            RETRY_SCHEDULER.schedule(() -> pollForCompletion(instanceId, deadline, result),
+                    AWAIT_POLL_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
+        });
     }
 
     // --- events that can resume a suspended instance (SDD 1.3, sec. 8a: handled uniformly) --------
@@ -501,12 +553,18 @@ public final class WorkflowEngine {
                 });
     }
 
+    /**
+     * SDD 1.5, RF4: the StateStore save that reaches {@code COMPLETED} has already happened by the
+     * time this runs — {@link #awaitCompletion} discovers it independently by polling the store, so
+     * this is just an observability hook now (the in-memory-only completions map it used to feed is
+     * gone: it never worked across JVMs and its entries were never evicted).
+     */
     private void complete(String instanceId, JsonNode context) {
-        completions.computeIfAbsent(instanceId, k -> new CompletableFuture<>()).complete(context);
+        LOG.log(Level.DEBUG, "Instance {0} completed", instanceId);
     }
 
     private void completeExceptionally(String instanceId, Throwable t) {
-        completions.computeIfAbsent(instanceId, k -> new CompletableFuture<>()).completeExceptionally(t);
+        LOG.log(Level.WARNING, "Instance " + instanceId + " failed", t);
     }
 
     /** Best-effort: an I/O failure (not a version/wait conflict) happened mid-transition. */
