@@ -18,7 +18,7 @@ Each **port** (abstraction) is a socket; each **connector** is a plug. The core 
 | Ecosystem | Connector | MVP |
 |---|---|---|
 | Local | in-memory | 🟢 |
-| AWS | DynamoDB (+ `waitingFor-index` GSI) | 🟢 |
+| AWS | DynamoDB (`stint-instances` + `stint-waits` + `stint-outbox`) | 🟢 |
 | Generic | Postgres · Redis · Mongo | ⚪ |
 | Azure / GCP | Cosmos · Firestore | ⚪ |
 
@@ -37,6 +37,45 @@ Each **port** (abstraction) is a socket; each **connector** is a plug. The core 
 | AWS | S3 | 🟢 |
 | Generic | MinIO (S3-API) | 🟢 (via S3 connector) |
 | Azure / GCP | Blob Storage · Cloud Storage | ⚪ |
+
+## EventPublisher — the domain channel (SDD 2.2)
+| Ecosystem | Connector | MVP |
+|---|---|---|
+| Local | in-memory (`InMemoryEventPublisher`) | 🟢 |
+| AWS | EventBridge, dedicated bus (`EventBridgeEventPublisher`, default) | 🟢 |
+| AWS | SNS, dedicated topic (`SnsEventPublisher`, `@Alternative`) | 🟢 |
+| Generic | Kafka · NATS | ⚪ |
+
+Facts (`emit`) never share a destination with engine traffic:
+
+- **EventBridge:** `stint.aws.eventbridge.domain-bus=<bus>` — must differ from
+  `stint.aws.eventbridge.bus` (the task bus); the same value fails at startup. `Source` = the fact's
+  `source`, `DetailType` = its `type`, `Detail` = the CloudEvent (structured JSON). Consumers: a rule
+  with an SQS target and `InputPath: "$.detail"` (the SDD 2.1 setup below).
+- **SNS:** `stint.aws.sns.domain-topic-arn=<arn>` — must differ from `stint.aws.sns.topic-arn`. The
+  message is the CloudEvent; a `type` message attribute enables `FilterPolicy`. SQS subscriptions should
+  set `RawMessageDelivery=true` so the queue gets the bare CloudEvent.
+
+### Outbox (DynamoDB `stint-outbox`)
+Facts are written in the same `TransactWriteItems` as the state that produced them, published right
+after, and deleted once the broker accepted them. Nothing pending is ever expired (no TTL).
+
+- Table `stint.aws.dynamodb.outbox-table` (default `stint-outbox`): PK `eventId` (S).
+- GSI `pending-by-age`: PK `shard` (S), SK `createdAt` (N), projection ALL. Shards:
+  `stint.aws.dynamodb.outbox-shards` (default 4). The sweep queries each shard — never a scan — and only
+  pending facts are in the table.
+- Run the sweep in production: `engine.outboxRelay().start(Duration.ofSeconds(30))`. A fact pending for
+  more than 15 minutes is logged at ERROR on every sweep.
+- At most 25 facts per workflow step (DynamoDB transactions hold 100 items).
+
+### Facts store (large payloads → `dataref`)
+When a fact is larger than the channel allows (≈256 KB), its `data` goes to a dedicated bucket and the
+event carries the standard CloudEvents `dataref` extension (`s3://<facts-bucket>/facts/<ns>/<name>/<id>`).
+
+- `stint.aws.s3.facts-bucket=<bucket>` — separate from `stint.aws.s3.bucket` (internal claim-check).
+- The engine never deletes facts: add a lifecycle rule (≥ 30 days recommended — longer than any
+  consumer's replay window, e.g. 14-day queue + 14-day DLQ).
+- Grant the engine `s3:PutObject` on `facts/*`; grant consumers `s3:GetObject` through the bucket policy.
 
 ## DomainEventSource — inbound domain events (SDD 2.1; replaces `TriggerSource`)
 | Ecosystem | Connector | MVP |

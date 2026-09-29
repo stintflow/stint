@@ -45,7 +45,7 @@ bundles/
   stint-bundle-aws       core + AWS
 examples/
   stint-example-build-report   "query → stage S3 pointer → format", loaded from build-report.yaml
-  stint-example-send-report    schedule + emit + call:remote — proves strict-vs-permissive DSL loading
+  stint-example-send-report    schedule + emit + call:remote — strict-vs-permissive loading; emits report-sent
 stint-architecture-tests   the single consolidated ArchUnit suite for the whole reactor (test-only)
 stint-it                 floci (local AWS emulator) integration tests
 ```
@@ -122,11 +122,39 @@ new DomainEventRouter(List.of(new StartReaction(bindings, engine)))
   engine doesn't know are never acked and end in the queue's DLQ. See `docs/connectors.md` for the
   SQS/EventBridge setup.
 
+## Publishing domain facts with `emit` (SDD 2.2)
+
+`emit` (DSL 1.0) publishes a fact on the **domain channel** — an `EventPublisher`, never the task
+transport, so consumers can't couple to the engine's internal protocol:
+
+```yaml
+- reportSent:
+    emit:
+      event:
+        with:
+          source: https://stintflow.io/reports/send-report
+          type: io.stintflow.reports.report-sent.v1
+          data: ${ $context }
+```
+
+- **Never lost, never out of sync with state:** a fact is written to an outbox in the *same* save as
+  the state that produced it, published right after, and removed only once the broker accepted it. A
+  periodic sweep (`engine.outboxRelay().start(Duration.ofSeconds(30))`) republishes anything a crash left
+  behind.
+- **Stable ids:** the author's `id` if declared; otherwise the engine derives one from the instance, the
+  state version the step started from, the node and its occurrence — a re-run after a crash emits the
+  same id. Delivery is at-least-once: consumers deduplicate by (`source`, `id`), as SDD 2.1 triggers do.
+- **Lean events:** a fact larger than the channel allows goes out with the standard CloudEvents
+  `dataref` extension pointing into a dedicated facts store; the engine never deletes it.
+- `io.stintflow.task.*` and `io.stintflow.timer.*` are reserved: rejected when loading, registering or
+  running an `emit`.
+
 ## Honest MVP cuts (deliberate, documented)
 
-1. **DSL Fase 2 constructs**: `schedule`, `emit`, `listen`, `fork`, `wait`, `for` and call types other
+1. **DSL Fase 2 constructs**: `schedule`, `listen`, `fork`, `wait`, `for` and call types other
    than the `remote` Stint extension are valid CNCF DSL 1.0 but not implemented yet (event-started
-   workflows exist programmatically via `TriggerBindings`; reading `schedule.on` from YAML is SDD 2.4) — `stint-dsl` fails
+   workflows exist programmatically via `TriggerBindings`; reading `schedule.on` from YAML is SDD 2.4;
+   `emit` is implemented since SDD 2.2) — `stint-dsl` fails
    the load citing the construct and its JSON Pointer, unless loaded permissively (see
    `stint-example-send-report`).
 2. **AWS transports**: SQS is the default (native + floci-testable). SNS and EventBridge are included
