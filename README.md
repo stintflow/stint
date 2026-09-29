@@ -37,8 +37,9 @@ stint-core               the cloud-blind orchestrator: dispatch / suspend / resu
 stint-dsl                YAML/JSON front-end: compiles the CNCF DSL 1.0 into stint-core's tree model
 stint-worker-sdk         uniform TaskHandler programming model (depends on stint-wire, not stint-core)
 connectors/
-  stint-inmemory         single-JVM transport/state/timer/blob — the local dev+test path
+  stint-inmemory         single-JVM transport/state/timer/blob/domain-event bus — the local dev+test path
   stint-aws              S3 (blob) · DynamoDB (state) · SQS/SNS/EventBridge (transport) · SQS-delay (timer)
+                         · SQS inbound queue for domain events (fed directly or by an EventBridge rule)
 bundles/
   stint-bundle-local     core + in-memory
   stint-bundle-aws       core + AWS
@@ -96,10 +97,36 @@ extensions: correlationid · workflowinstanceid · taskid · attempt · definiti
 `definition` carries the workflow's `namespace:name:version` — `TaskContext.definition()` on the worker
 side is the exact version the running instance started with, not necessarily the latest registered one.
 
+## Starting workflows from domain events (SDD 2.1)
+
+Workflows don't call each other: they publish facts as CloudEvents and other workflows start when a
+fact they're bound to arrives. One consumer per bus (`DomainEventSource`) feeds a `DomainEventRouter`;
+a `TriggerBindings` registry maps event filters to definitions (one event may start several):
+
+```java
+TriggerBindings bindings = new TriggerBindings(registry);
+bindings.bind(new TriggerBinding("invoice-on-order",
+        EventFilter.ofType("io.acme.order.placed.v1"), new WorkflowRef("billing", "invoice-order", "1.0.0")));
+new DomainEventRouter(List.of(new StartReaction(bindings, engine)))
+        .subscribeTo(new SqsDomainEventSource(sqs, inboundQueueUrl)); // or an InMemoryDomainEventBus
+```
+
+- **Exactly one instance per (event, definition):** the instance id is derived from the definition and
+  the event's `source` + `id`, so creating the instance *is* the idempotency check — a redelivered or
+  concurrent duplicate is a no-op.
+- **Input:** as in the DSL 1.0 spec, the workflow input is the array of triggering events;
+  `$workflow.input[0]` is the event (with every attribute and extension), alongside `$workflow.id` and
+  `$workflow.startedAt`.
+- **Acknowledgement:** a message is acked only after every effect is recorded. Events matching no
+  binding are acked and dropped; bodies that aren't CloudEvents and events bound to a definition this
+  engine doesn't know are never acked and end in the queue's DLQ. See `docs/connectors.md` for the
+  SQS/EventBridge setup.
+
 ## Honest MVP cuts (deliberate, documented)
 
 1. **DSL Fase 2 constructs**: `schedule`, `emit`, `listen`, `fork`, `wait`, `for` and call types other
-   than the `remote` Stint extension are valid CNCF DSL 1.0 but not implemented yet — `stint-dsl` fails
+   than the `remote` Stint extension are valid CNCF DSL 1.0 but not implemented yet (event-started
+   workflows exist programmatically via `TriggerBindings`; reading `schedule.on` from YAML is SDD 2.4) — `stint-dsl` fails
    the load citing the construct and its JSON Pointer, unless loaded permissively (see
    `stint-example-send-report`).
 2. **AWS transports**: SQS is the default (native + floci-testable). SNS and EventBridge are included

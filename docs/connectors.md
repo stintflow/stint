@@ -38,12 +38,60 @@ Each **port** (abstraction) is a socket; each **connector** is a plug. The core 
 | Generic | MinIO (S3-API) | 🟢 (via S3 connector) |
 | Azure / GCP | Blob Storage · Cloud Storage | ⚪ |
 
-## TriggerSource — ingress
+## DomainEventSource — inbound domain events (SDD 2.1; replaces `TriggerSource`)
 | Ecosystem | Connector | MVP |
 |---|---|---|
-| Local | HTTP (REST resource) | 🟢 |
-| AWS | API Gateway · EventBridge rule · SQS | ⚪ |
+| Local | in-memory bus (`InMemoryDomainEventBus`) | 🟢 |
+| AWS | SQS inbound queue (`SqsDomainEventSource`) | 🟢 |
+| AWS | EventBridge rule → SQS inbound queue (infrastructure, see below) | 🟢 |
+| AWS | API Gateway | ⚪ |
 | K8s | Knative Service / source | ⚪ |
+
+Programmatic starts (e.g. the example's HTTP resource calling `engine.start`) don't go through this
+port and aren't idempotent.
+
+### Contract
+- One consumer per bus: the engine's `DomainEventRouter` starts every definition bound to the event
+  (`TriggerBindings`) and, from SDD 2.3, resumes instances waiting in `listen` — never a second
+  subscriber on the same queue.
+- **Ack only after every effect is recorded** (the handler's stage completed normally). Otherwise the
+  message stays for redelivery and, past `maxReceiveCount`, the queue's own redrive moves it to the DLQ.
+
+| Case | What happens | Acked? |
+|---|---|---|
+| Body isn't a CloudEvent (bad JSON, missing `id`/`source`/`type`/`specversion`) | logged at ERROR | no → DLQ |
+| Valid event, no binding matches | logged at INFO, dropped | yes |
+| Binding matches a definition this engine doesn't know (deploy skew) | logged | no → DLQ (redrive back after the deploy) |
+| Transient store/transport/timer failure | logged | no → redelivered |
+| Instance created, then its local part fails (e.g. bad `input.from`) | instance persisted as `FAILED` | yes |
+
+- **Idempotency:** the instance id is `evt-` + a name-based UUID of (definition, event `source`, event
+  `id`); creating it is the conditional first save, so duplicates are no-ops. The dedup window is the
+  instance's lifetime — if you ever add instance retention/archival, keep it longer than the inbound
+  queue's `MessageRetentionPeriod` (≤ 14 days) and EventBridge's retry window (≤ 24 h). A redelivery
+  after the instance was deleted starts a new execution.
+
+### SQS setup (Stint doesn't create queues)
+- Inbound queue: `RedrivePolicy {"deadLetterTargetArn": "<dlq-arn>", "maxReceiveCount": "5"}`,
+  `VisibilityTimeout` 30 s, `MessageRetentionPeriod` 4 days (default).
+- DLQ: `MessageRetentionPeriod` 14 days. Move messages back with `StartMessageMoveTask` once fixed.
+- Config: `stint.aws.sqs.domain-events-queue-url=<inbound queue url>`.
+- Each message body is one CloudEvent in **structured JSON mode**.
+
+### EventBridge rule → SQS
+Point a rule at the inbound queue and set the target's `InputPath` to `$.detail`, so the queue gets the
+bare CloudEvent, not the EventBridge envelope (without it the body has no `specversion` and goes to the
+DLQ). Publishers put the CloudEvent JSON in `Detail`:
+
+```bash
+aws events put-rule --name order-placed \
+  --event-pattern '{"source":["com.acme.orders"],"detail-type":["io.acme.order.placed.v1"]}'
+aws events put-targets --rule order-placed \
+  --targets '[{"Id":"stint-inbound","Arn":"<inbound-queue-arn>","InputPath":"$.detail"}]'
+```
+
+The queue policy must allow `events.amazonaws.com` to `sqs:SendMessage` (not needed on floci).
+Verified end to end on floci by `FlociDomainEventTriggerIT`.
 
 ## Worker bindings (worker-side runtime)
 | Platform | Binding | MVP |
