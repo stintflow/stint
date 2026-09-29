@@ -14,6 +14,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -382,15 +383,10 @@ public final class WorkflowEngine {
                 snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState, clock.instant(),
                 inst.input(), inst.startedAt());
 
-        return state.save(next, snap.version(),
-                        List.of(new Wait(retryKey, instanceId, snap.position(), clock.instant())), consumeKeys)
-                .thenCompose(outcome -> {
-                    if (outcome != SaveOutcome.OK) {
-                        return CompletableFuture.completedFuture(outcome);
-                    }
-                    return timer.schedule(new TimerRequest(retryKey, instanceId, null, clock.instant().plus(delay)))
-                            .thenApply(v -> outcome);
-                });
+        return armThenSave(new TimerRequest(retryKey, instanceId, null, clock.instant().plus(delay)),
+                () -> state.save(next, snap.version(),
+                        List.of(new Wait(retryKey, instanceId, snap.position(), clock.instant())), consumeKeys),
+                () -> done());
     }
 
     private CompletionStage<SaveOutcome> redispatchRetry(Instance inst, WorkflowDefinition def, TryNode tryNode,
@@ -418,19 +414,12 @@ public final class WorkflowEngine {
                     TaskInvocation inv = new TaskInvocation(instanceId, snap.position(), correlationId,
                             snap.definition(), body.routingKey(), wireInput, nextAttempt);
 
-                    return state.save(next, snap.version(),
+                    return armThenSave(new TimerRequest(timerKey, instanceId, correlationId, clock.instant().plus(timeout)),
+                            () -> state.save(next, snap.version(),
                                     List.of(new Wait(taskKey, instanceId, snap.position(), clock.instant()),
                                             new Wait(timerKey, instanceId, snap.position(), clock.instant())),
-                                    List.of(retryWaitKey))
-                            .thenCompose(outcome -> {
-                                if (outcome != SaveOutcome.OK) {
-                                    return CompletableFuture.completedFuture(outcome);
-                                }
-                                return timer.schedule(new TimerRequest(timerKey, instanceId, correlationId,
-                                                clock.instant().plus(timeout)))
-                                        .thenCompose(v -> transport.dispatch(inv))
-                                        .thenApply(v -> outcome);
-                            });
+                                    List.of(retryWaitKey)),
+                            () -> transport.dispatch(inv));
                 });
     }
 
@@ -535,19 +524,33 @@ public final class WorkflowEngine {
                     TaskInvocation inv = new TaskInvocation(instanceId, position, correlationId, def.ref(),
                             node.routingKey(), wireInput, attempt);
 
-                    return state.save(snap, expectedVersion,
+                    return armThenSave(new TimerRequest(timerKey, instanceId, correlationId, clock.instant().plus(timeout)),
+                            () -> state.save(snap, expectedVersion,
                                     List.of(new Wait(taskKey, instanceId, position, clock.instant()),
                                             new Wait(timerKey, instanceId, position, clock.instant())),
-                                    consumeWaitKeys)
-                            .thenCompose(outcome -> {
-                                if (outcome != SaveOutcome.OK) {
-                                    return CompletableFuture.completedFuture(outcome);
-                                }
-                                return timer.schedule(new TimerRequest(timerKey, instanceId, correlationId,
-                                                clock.instant().plus(timeout)))
-                                        .thenCompose(v -> transport.dispatch(inv))
-                                        .thenApply(v -> outcome);
-                            });
+                                    consumeWaitKeys),
+                            () -> transport.dispatch(inv));
+                });
+    }
+
+    /**
+     * SDD 2.1, RF8: arms the timer <em>before</em> the save that registers the wait it guards, then runs
+     * {@code afterSaved} (the dispatch) only once the save is OK. A crash after the save can no longer
+     * leave a WAITING instance with no timer and no task in flight: the timer is already armed, fires,
+     * and the instance follows its timeout/retry policy (SDD 1.3). If the save loses (CONFLICT) or
+     * fails, the armed timer is an orphan: it's cancelled best-effort, and if it fires anyway
+     * {@code findWait} finds nothing and the fire is a no-op (SDD 1.3, sec. 8a).
+     */
+    private CompletionStage<SaveOutcome> armThenSave(TimerRequest timerRequest,
+            Supplier<CompletionStage<SaveOutcome>> save,
+            Supplier<CompletionStage<Void>> afterSaved) {
+        return timer.schedule(timerRequest)
+                .thenCompose(timerId -> save.get())
+                .thenCompose(outcome -> {
+                    if (outcome != SaveOutcome.OK) {
+                        return timer.cancel(timerRequest.timerId()).thenApply(v -> outcome);
+                    }
+                    return afterSaved.get().thenApply(v -> outcome);
                 });
     }
 
