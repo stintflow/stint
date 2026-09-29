@@ -56,7 +56,7 @@ class DynamoDbStateStoreConflictIT {
                 String waitKey = "task:corr-conflict-1";
 
                 InstanceSnapshot initial = new InstanceSnapshot(instanceId, REF, "/do/0/echo", waitKey,
-                        Json.obj(), InstanceStatus.WAITING, 1, null, Instant.now());
+                        Json.obj(), InstanceStatus.WAITING, 1, null, Instant.now(), null, null);
                 store.save(initial, 0, List.of(new Wait(waitKey, instanceId, "/do/0/echo", Instant.now())), List.of())
                         .toCompletableFuture().get(10, TimeUnit.SECONDS);
 
@@ -87,7 +87,7 @@ class DynamoDbStateStoreConflictIT {
         try {
             barrier.await(10, TimeUnit.SECONDS);
             InstanceSnapshot next = new InstanceSnapshot(instanceId, REF, "/do/1/after", null, Json.obj(),
-                    InstanceStatus.COMPLETED, 2, null, Instant.now());
+                    InstanceStatus.COMPLETED, 2, null, Instant.now(), null, null);
             SaveOutcome outcome = store.save(next, 1, List.of(), List.of(waitKey))
                     .toCompletableFuture().get(10, TimeUnit.SECONDS);
             result.set(outcome);

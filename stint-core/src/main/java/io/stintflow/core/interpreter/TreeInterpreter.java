@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.stintflow.core.WorkflowDefinition;
 import io.stintflow.core.expr.EvalScope;
 import io.stintflow.core.expr.ExpressionEvaluator;
+import io.stintflow.core.expr.WorkflowDescriptor;
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.SetNode;
@@ -50,6 +51,11 @@ public final class TreeInterpreter {
      * @param context the current {@code $context}
      */
     public InterpretResult run(WorkflowDefinition def, String pointer, JsonNode data, JsonNode context) {
+        return run(def, WorkflowDescriptor.of(def.ref()), pointer, data, context);
+    }
+
+    /** As {@link #run(WorkflowDefinition, String, JsonNode, JsonNode)}, with {@code $workflow} describing a running instance (SDD 2.1, RF6). */
+    public InterpretResult run(WorkflowDefinition def, WorkflowDescriptor wf, String pointer, JsonNode data, JsonNode context) {
         int steps = 0;
         while (true) {
             if (steps++ >= localNodeLimit) {
@@ -58,7 +64,7 @@ public final class TreeInterpreter {
             }
 
             TaskNode node = def.at(pointer);
-            JsonNode effectiveInput = DataFlowSupport.applyExpr(evaluator, node.dataFlow().inputFrom(), data, context, def.ref());
+            JsonNode effectiveInput = DataFlowSupport.applyExpr(evaluator, node.dataFlow().inputFrom(), data, context, wf);
 
             if (node instanceof CallRemoteNode remote) {
                 return InterpretResult.suspend(remote, pointer, effectiveInput, context);
@@ -85,9 +91,9 @@ public final class TreeInterpreter {
 
             if (node instanceof SetNode setNode) {
                 JsonNode rawOutput = setNode.set() == null ? effectiveInput
-                        : evaluator.eval(setNode.set(), effectiveInput, new EvalScope(context, def.ref()));
-                JsonNode outputData = DataFlowSupport.applyExpr(evaluator, node.dataFlow().outputAs(), rawOutput, context, def.ref());
-                JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, def.ref());
+                        : evaluator.eval(setNode.set(), effectiveInput, new EvalScope(context, wf));
+                JsonNode outputData = DataFlowSupport.applyExpr(evaluator, node.dataFlow().outputAs(), rawOutput, context, wf);
+                JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, wf);
 
                 Optional<String> nextPointer = def.next(pointer, setNode.then());
                 if (nextPointer.isEmpty()) {
@@ -100,9 +106,9 @@ public final class TreeInterpreter {
             }
 
             if (node instanceof SwitchNode switchNode) {
-                SwitchNode.Case chosen = chooseCase(switchNode, effectiveInput, context, def);
-                JsonNode outputData = DataFlowSupport.applyExpr(evaluator, node.dataFlow().outputAs(), effectiveInput, context, def.ref());
-                JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, def.ref());
+                SwitchNode.Case chosen = chooseCase(switchNode, effectiveInput, context, wf);
+                JsonNode outputData = DataFlowSupport.applyExpr(evaluator, node.dataFlow().outputAs(), effectiveInput, context, wf);
+                JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, wf);
 
                 Optional<String> nextPointer = def.next(pointer, chosen.then());
                 if (nextPointer.isEmpty()) {
@@ -123,16 +129,16 @@ public final class TreeInterpreter {
      * raw remote result, then continues the walk (or completes) from {@code def.next(pointer, ...)}.
      * Used by {@code WorkflowEngine} on {@code onResult}, so all data-flow semantics stay in one place.
      */
-    public InterpretResult resume(WorkflowDefinition def, String pointer, CallRemoteNode node,
+    public InterpretResult resume(WorkflowDefinition def, WorkflowDescriptor wf, String pointer, CallRemoteNode node,
             JsonNode rawOutput, JsonNode context) {
-        JsonNode outputData = DataFlowSupport.applyExpr(evaluator, node.dataFlow().outputAs(), rawOutput, context, def.ref());
-        JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, def.ref());
+        JsonNode outputData = DataFlowSupport.applyExpr(evaluator, node.dataFlow().outputAs(), rawOutput, context, wf);
+        JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, wf);
 
         Optional<String> nextPointer = def.next(pointer, node.then());
         if (nextPointer.isEmpty()) {
             return InterpretResult.complete(pointer, newContext);
         }
-        return run(def, nextPointer.get(), outputData, newContext);
+        return run(def, wf, nextPointer.get(), outputData, newContext);
     }
 
     /**
@@ -140,25 +146,25 @@ public final class TreeInterpreter {
      * and continues via the {@code TryNode}'s own {@code then} (not the body's, which is unused for
      * a try'd call — mirrors {@link #resume}).
      */
-    public InterpretResult resumeTry(WorkflowDefinition def, TryNode tryNode, JsonNode rawOutput, JsonNode context) {
+    public InterpretResult resumeTry(WorkflowDefinition def, WorkflowDescriptor wf, TryNode tryNode, JsonNode rawOutput, JsonNode context) {
         CallRemoteNode body = tryNode.body();
-        JsonNode outputData = DataFlowSupport.applyExpr(evaluator, body.dataFlow().outputAs(), rawOutput, context, def.ref());
-        JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, body.dataFlow().exportAs(), outputData, context, def.ref());
+        JsonNode outputData = DataFlowSupport.applyExpr(evaluator, body.dataFlow().outputAs(), rawOutput, context, wf);
+        JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, body.dataFlow().exportAs(), outputData, context, wf);
 
         Optional<String> nextPointer = def.next(tryNode.pointer(), tryNode.then());
         if (nextPointer.isEmpty()) {
             return InterpretResult.complete(tryNode.pointer(), newContext);
         }
-        return run(def, nextPointer.get(), outputData, newContext);
+        return run(def, wf, nextPointer.get(), outputData, newContext);
     }
 
     /** Continues from {@code catchClause.then()} once a caught error has been handled (SDD 1.3). */
-    public InterpretResult resumeFromCatch(WorkflowDefinition def, TryNode tryNode, JsonNode data, JsonNode context) {
+    public InterpretResult resumeFromCatch(WorkflowDefinition def, WorkflowDescriptor wf, TryNode tryNode, JsonNode data, JsonNode context) {
         Optional<String> nextPointer = def.next(tryNode.pointer(), tryNode.catchClause().then());
         if (nextPointer.isEmpty()) {
             return InterpretResult.complete(tryNode.pointer(), context);
         }
-        return run(def, nextPointer.get(), data, context);
+        return run(def, wf, nextPointer.get(), data, context);
     }
 
     /** Exposed so {@code WorkflowEngine} can evaluate a {@code TryNode}'s catch filter/compensation
@@ -167,12 +173,12 @@ public final class TreeInterpreter {
         return evaluator;
     }
 
-    private SwitchNode.Case chooseCase(SwitchNode switchNode, JsonNode data, JsonNode context, WorkflowDefinition def) {
+    private SwitchNode.Case chooseCase(SwitchNode switchNode, JsonNode data, JsonNode context, WorkflowDescriptor wf) {
         for (SwitchNode.Case c : switchNode.cases()) {
             if (c.when() == null) {
                 return c;
             }
-            JsonNode result = evaluator.eval(c.when(), data, new EvalScope(context, def.ref()));
+            JsonNode result = evaluator.eval(c.when(), data, new EvalScope(context, wf));
             if (isTruthy(result)) {
                 return c;
             }

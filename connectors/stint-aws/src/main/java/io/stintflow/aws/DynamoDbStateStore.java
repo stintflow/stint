@@ -104,6 +104,12 @@ public class DynamoDbStateStore implements StateStore {
             item.put("retryState", AttributeValue.fromS(retryStateToJson(snap.retryState()).toString()));
         }
         item.put("updatedAt", AttributeValue.fromN(Long.toString(snap.updatedAt().toEpochMilli())));
+        if (snap.input() != null) {
+            item.put("input", AttributeValue.fromS(snap.input().toString()));
+        }
+        if (snap.startedAt() != null) {
+            item.put("startedAt", AttributeValue.fromN(Long.toString(snap.startedAt().toEpochMilli())));
+        }
 
         Put.Builder builder = Put.builder().tableName(instancesTable).item(item);
         if (expectedVersion == 0) {
@@ -180,6 +186,9 @@ public class DynamoDbStateStore implements StateStore {
     private static InstanceSnapshot toSnapshot(Map<String, AttributeValue> item) {
         AttributeValue waitingKey = item.get("waitingKey");
         AttributeValue retryState = item.get("retryState");
+        // SDD 2.1, RF6: tolerant read — items written before SDD 2.1 have neither attribute.
+        AttributeValue input = item.get("input");
+        AttributeValue startedAt = item.get("startedAt");
         return new InstanceSnapshot(
                 item.get("instanceId").s(),
                 WorkflowRef.parse(item.get("definition").s()),
@@ -189,7 +198,9 @@ public class DynamoDbStateStore implements StateStore {
                 InstanceStatus.valueOf(item.get("status").s()),
                 Long.parseLong(item.get("version").n()),
                 retryState == null ? null : retryStateFromJson(Json.read(retryState.s().getBytes())),
-                Instant.ofEpochMilli(Long.parseLong(item.get("updatedAt").n())));
+                Instant.ofEpochMilli(Long.parseLong(item.get("updatedAt").n())),
+                input == null ? null : Json.read(input.s().getBytes()),
+                startedAt == null ? null : Instant.ofEpochMilli(Long.parseLong(startedAt.n())));
     }
 
     private static ObjectNode retryStateToJson(RetryState state) {

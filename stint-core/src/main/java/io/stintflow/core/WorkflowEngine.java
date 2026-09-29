@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.stintflow.core.expr.EvalScope;
 import io.stintflow.core.expr.ExpressionEvaluator;
 import io.stintflow.core.expr.JqExpressionEvaluator;
+import io.stintflow.core.expr.WorkflowDescriptor;
 import io.stintflow.core.interpreter.DataFlowSupport;
 import io.stintflow.core.interpreter.InterpretResult;
 import io.stintflow.core.interpreter.TreeInterpreter;
@@ -116,13 +117,14 @@ public final class WorkflowEngine {
     public String start(WorkflowRef ref, JsonNode input) {
         WorkflowDefinition def = registry.find(ref)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown workflow: " + ref.canonical()));
-        String instanceId = UUID.randomUUID().toString();
+        Instance inst = new Instance(UUID.randomUUID().toString(), input, clock.instant());
+        String instanceId = inst.id();
         // $context starts equal to the workflow's raw input (RF5/SDD 1.1 sec. 8c): there is no prior
         // export.as yet, so the instance's accumulated context and its initial data coincide.
-        InterpretResult result = interpreter.run(def, WorkflowDefinition.ROOT_POINTER, input, input);
+        InterpretResult result = interpreter.run(def, inst.descriptor(ref), WorkflowDefinition.ROOT_POINTER, input, input);
         // A freshly minted UUID has no concurrent writer, so a CONFLICT here is a genuine bug, not a
         // race to retry — no retry loop needed for the very first save.
-        commit(instanceId, def, result, 0, List.of())
+        commit(inst, def, result, 0, List.of())
                 .thenAccept(outcome -> {
                     if (outcome != SaveOutcome.OK) {
                         completeExceptionally(instanceId,
@@ -261,7 +263,7 @@ public final class WorkflowEngine {
                 InstanceSnapshot snap = optSnap.get();
                 InstanceSnapshot failedSnap = new InstanceSnapshot(snap.instanceId(), snap.definition(),
                         snap.position(), null, snap.context(), InstanceStatus.FAILED, snap.version() + 1, null,
-                        clock.instant());
+                        clock.instant(), snap.input(), snap.startedAt());
                 return state.save(failedSnap, snap.version(), List.of(), List.of(waitKey))
                         .thenAccept(outcome -> completeExceptionally(snap.instanceId(), new RuntimeException(
                                 "State store write conflict persisted after " + MAX_RETRY_ATTEMPTS
@@ -273,17 +275,19 @@ public final class WorkflowEngine {
     /** Applies a task result or timer fire to the snapshot it was found waiting on; returns the save outcome. */
     private CompletionStage<SaveOutcome> advance(InstanceSnapshot snap, ResumeEvent event, String waitKey) {
         WorkflowDefinition def = registry.find(snap.definition()).orElseThrow();
-        String instanceId = snap.instanceId();
+        Instance inst = Instance.of(snap);
+        String instanceId = inst.id();
+        WorkflowDescriptor wf = inst.descriptor(snap.definition());
         TaskNode node = def.at(snap.position());
 
         if (WaitKeys.isRetry(waitKey)) {
             if (!(node instanceof TryNode tryNode)) {
-                return commitTerminal(instanceId, snap.definition(), snap.position(), snap.context(),
+                return commitTerminal(inst, snap.definition(), snap.position(), snap.context(),
                         InstanceStatus.FAILED, snap.version(), List.of(waitKey),
                         () -> completeExceptionally(instanceId, new IllegalStateException(
                                 "Instance " + instanceId + " has a retry wait but is not at a TryNode: " + snap.position())));
             }
-            return redispatchRetry(instanceId, def, tryNode, snap, waitKey);
+            return redispatchRetry(inst, def, tryNode, snap, waitKey);
         }
 
         String correlationId = WaitKeys.rawId(waitKey);
@@ -294,16 +298,16 @@ public final class WorkflowEngine {
         if (succeeded) {
             TaskResult result = ((ResumeEvent.TaskCompleted) event).result();
             if (!(node instanceof CallRemoteNode) && !(node instanceof TryNode)) {
-                return commitTerminal(instanceId, snap.definition(), snap.position(), snap.context(),
+                return commitTerminal(inst, snap.definition(), snap.position(), snap.context(),
                         InstanceStatus.FAILED, snap.version(), consumeKeys,
                         () -> completeExceptionally(instanceId, new IllegalStateException(
                                 "Instance " + instanceId + " was waiting at an unexpected node: " + snap.position())));
             }
             return ClaimCheck.rehydrate(result.output(), blob).thenCompose(rawOutput -> {
                 InterpretResult next = node instanceof TryNode tryNode
-                        ? interpreter.resumeTry(def, tryNode, rawOutput, snap.context())
-                        : interpreter.resume(def, snap.position(), (CallRemoteNode) node, rawOutput, snap.context());
-                return commit(instanceId, def, next, snap.version(), consumeKeys);
+                        ? interpreter.resumeTry(def, wf, tryNode, rawOutput, snap.context())
+                        : interpreter.resume(def, wf, snap.position(), (CallRemoteNode) node, rawOutput, snap.context());
+                return commit(inst, def, next, snap.version(), consumeKeys);
             });
         }
 
@@ -311,23 +315,25 @@ public final class WorkflowEngine {
                 : ErrorInfo.timeout("Task at " + snap.position() + " did not respond within its timeout");
 
         if (node instanceof TryNode tryNode) {
-            return handleTryFailure(instanceId, def, tryNode, snap, error, consumeKeys);
+            return handleTryFailure(inst, def, tryNode, snap, error, consumeKeys);
         }
-        return commitTerminal(instanceId, snap.definition(), snap.position(), snap.context(),
+        return commitTerminal(inst, snap.definition(), snap.position(), snap.context(),
                 InstanceStatus.FAILED, snap.version(), consumeKeys,
                 () -> completeExceptionally(instanceId, new RuntimeException("Task failed: " + error)));
     }
 
     // --- TryNode: catch / retry / compensation (SDD 1.3) -------------------------------------------
 
-    private CompletionStage<SaveOutcome> handleTryFailure(String instanceId, WorkflowDefinition def, TryNode tryNode,
+    private CompletionStage<SaveOutcome> handleTryFailure(Instance inst, WorkflowDefinition def, TryNode tryNode,
             InstanceSnapshot snap, ErrorInfo error, List<String> consumeKeys) {
+        String instanceId = inst.id();
+        WorkflowDescriptor wf = inst.descriptor(def.ref());
         TryNode.Catch catchClause = tryNode.catchClause();
         ExpressionEvaluator evaluator = interpreter.evaluator();
         JsonNode errorJson = errorToJsonForEval(error);
 
-        if (!matchesCatch(catchClause, errorJson, snap.context(), evaluator, def.ref())) {
-            return commitTerminal(instanceId, snap.definition(), snap.position(), snap.context(),
+        if (!matchesCatch(catchClause, errorJson, snap.context(), evaluator, wf)) {
+            return commitTerminal(inst, snap.definition(), snap.position(), snap.context(),
                     InstanceStatus.FAILED, snap.version(), consumeKeys,
                     () -> completeExceptionally(instanceId, new RuntimeException("Uncaught task failure: " + error)));
         }
@@ -346,14 +352,14 @@ public final class WorkflowEngine {
                 Duration delay = withMinimumDelay(applyJitter(retry.delayFor(attempt + 1), retry.jitterRatio()),
                         error.retryAfter());
                 if (delay.compareTo(timer.maxDelay()) <= 0) {
-                    return scheduleRetryDelay(instanceId, snap, tryNode, attempt, firstAttemptAt, error, delay, consumeKeys);
+                    return scheduleRetryDelay(inst, snap, tryNode, attempt, firstAttemptAt, error, delay, consumeKeys);
                 }
-                return commitTerminal(instanceId, snap.definition(), snap.position(), snap.context(),
+                return commitTerminal(inst, snap.definition(), snap.position(), snap.context(),
                         InstanceStatus.FAILED, snap.version(), consumeKeys,
                         () -> completeExceptionally(instanceId, new RuntimeException(
                                 "Retry delay " + delay + " exceeds the timer's max delay " + timer.maxDelay())));
             }
-            return commitTerminal(instanceId, snap.definition(), snap.position(), snap.context(),
+            return commitTerminal(inst, snap.definition(), snap.position(), snap.context(),
                     InstanceStatus.FAILED, snap.version(), consumeKeys,
                     () -> completeExceptionally(instanceId, new RuntimeException(
                             "Retry limit exhausted after " + attempt + " attempt(s): " + error)));
@@ -361,18 +367,20 @@ public final class WorkflowEngine {
 
         // caught, no retry policy: optional local compensation, then continue via catch.then
         JsonNode resultData = catchClause.compensation() == null ? errorJson
-                : evaluator.eval(catchClause.compensation(), errorJson, new EvalScope(snap.context(), def.ref()));
-        InterpretResult next = interpreter.resumeFromCatch(def, tryNode, resultData, snap.context());
-        return commit(instanceId, def, next, snap.version(), consumeKeys);
+                : evaluator.eval(catchClause.compensation(), errorJson, new EvalScope(snap.context(), wf));
+        InterpretResult next = interpreter.resumeFromCatch(def, wf, tryNode, resultData, snap.context());
+        return commit(inst, def, next, snap.version(), consumeKeys);
     }
 
-    private CompletionStage<SaveOutcome> scheduleRetryDelay(String instanceId, InstanceSnapshot snap, TryNode tryNode,
+    private CompletionStage<SaveOutcome> scheduleRetryDelay(Instance inst, InstanceSnapshot snap, TryNode tryNode,
             int attempt, Instant firstAttemptAt, ErrorInfo error, Duration delay, List<String> consumeKeys) {
+        String instanceId = inst.id();
         String retryId = UUID.randomUUID().toString();
         String retryKey = WaitKeys.retry(retryId);
         RetryState newRetryState = new RetryState(tryNode.pointer(), attempt, firstAttemptAt, error, null);
         InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(), retryKey,
-                snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState, clock.instant());
+                snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState, clock.instant(),
+                inst.input(), inst.startedAt());
 
         return state.save(next, snap.version(),
                         List.of(new Wait(retryKey, instanceId, snap.position(), clock.instant())), consumeKeys)
@@ -385,8 +393,9 @@ public final class WorkflowEngine {
                 });
     }
 
-    private CompletionStage<SaveOutcome> redispatchRetry(String instanceId, WorkflowDefinition def, TryNode tryNode,
+    private CompletionStage<SaveOutcome> redispatchRetry(Instance inst, WorkflowDefinition def, TryNode tryNode,
             InstanceSnapshot snap, String retryWaitKey) {
+        String instanceId = inst.id();
         RetryState prior = snap.retryState();
         int nextAttempt = (prior != null ? prior.attempt() : 1) + 1;
         Instant firstAttemptAt = prior != null ? prior.firstAttemptAt() : clock.instant();
@@ -396,7 +405,7 @@ public final class WorkflowEngine {
         CallRemoteNode body = tryNode.body();
 
         JsonNode effectiveInput = DataFlowSupport.applyExpr(interpreter.evaluator(), tryNode.dataFlow().inputFrom(),
-                snap.context(), snap.context(), def.ref());
+                snap.context(), snap.context(), inst.descriptor(def.ref()));
 
         return ClaimCheck.offload(effectiveInput, transport.capabilities(), blob, instanceId + "/" + body.name())
                 .thenCompose(wireInput -> {
@@ -404,7 +413,7 @@ public final class WorkflowEngine {
                             prior != null ? prior.lastError() : null, correlationId);
                     InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(),
                             taskKey, snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState,
-                            clock.instant());
+                            clock.instant(), inst.input(), inst.startedAt());
                     Duration timeout = effectiveTimeout(body);
                     TaskInvocation inv = new TaskInvocation(instanceId, snap.position(), correlationId,
                             snap.definition(), body.routingKey(), wireInput, nextAttempt);
@@ -426,17 +435,17 @@ public final class WorkflowEngine {
     }
 
     private boolean matchesCatch(TryNode.Catch catchClause, JsonNode errorJson, JsonNode context,
-            ExpressionEvaluator evaluator, WorkflowRef ref) {
+            ExpressionEvaluator evaluator, WorkflowDescriptor wf) {
         if (catchClause.errorFilter() != null && !isTruthy(evaluator.eval(catchClause.errorFilter(), errorJson,
-                new EvalScope(context, ref)))) {
+                new EvalScope(context, wf)))) {
             return false;
         }
         if (catchClause.when() != null && !isTruthy(evaluator.eval(catchClause.when(), errorJson,
-                new EvalScope(context, ref)))) {
+                new EvalScope(context, wf)))) {
             return false;
         }
         return catchClause.exceptWhen() == null
-                || !isTruthy(evaluator.eval(catchClause.exceptWhen(), errorJson, new EvalScope(context, ref)));
+                || !isTruthy(evaluator.eval(catchClause.exceptWhen(), errorJson, new EvalScope(context, wf)));
     }
 
     private static boolean isTruthy(JsonNode node) {
@@ -487,26 +496,28 @@ public final class WorkflowEngine {
 
     // --- persisting an InterpretResult: Suspend / SuspendInTry / Complete / Failed ------------------
 
-    private CompletionStage<SaveOutcome> commit(String instanceId, WorkflowDefinition def, InterpretResult result,
+    private CompletionStage<SaveOutcome> commit(Instance inst, WorkflowDefinition def, InterpretResult result,
             long expectedVersion, List<String> consumeWaitKeys) {
+        String instanceId = inst.id();
         return switch (result) {
-            case InterpretResult.Suspend s -> commitSuspend(instanceId, def, s.node(), s.pointer(), s.dispatchInput(),
+            case InterpretResult.Suspend s -> commitSuspend(inst, def, s.node(), s.pointer(), s.dispatchInput(),
                     s.context(), expectedVersion, consumeWaitKeys, null);
-            case InterpretResult.SuspendInTry s -> commitSuspend(instanceId, def, s.tryNode().body(),
+            case InterpretResult.SuspendInTry s -> commitSuspend(inst, def, s.tryNode().body(),
                     s.tryNode().pointer(), s.dispatchInput(), s.context(), expectedVersion, consumeWaitKeys,
                     new RetryState(s.tryNode().pointer(), 1, clock.instant(), null, null));
-            case InterpretResult.Complete c -> commitTerminal(instanceId, def.ref(), c.pointer(), c.context(),
+            case InterpretResult.Complete c -> commitTerminal(inst, def.ref(), c.pointer(), c.context(),
                     InstanceStatus.COMPLETED, expectedVersion, consumeWaitKeys,
                     () -> complete(instanceId, c.context()));
-            case InterpretResult.Failed f -> commitTerminal(instanceId, def.ref(), f.pointer(), f.context(),
+            case InterpretResult.Failed f -> commitTerminal(inst, def.ref(), f.pointer(), f.context(),
                     InstanceStatus.FAILED, expectedVersion, consumeWaitKeys,
                     () -> completeExceptionally(instanceId, new RuntimeException(f.message())));
         };
     }
 
-    private CompletionStage<SaveOutcome> commitSuspend(String instanceId, WorkflowDefinition def, CallRemoteNode node,
+    private CompletionStage<SaveOutcome> commitSuspend(Instance inst, WorkflowDefinition def, CallRemoteNode node,
             String position, JsonNode dispatchInput, JsonNode context, long expectedVersion,
             List<String> consumeWaitKeys, RetryState initialRetryState) {
+        String instanceId = inst.id();
         String correlationId = UUID.randomUUID().toString();
         String taskKey = WaitKeys.task(correlationId);
         String timerKey = WaitKeys.timer(correlationId);
@@ -517,7 +528,8 @@ public final class WorkflowEngine {
         return ClaimCheck.offload(dispatchInput, transport.capabilities(), blob, instanceId + "/" + node.name())
                 .thenCompose(wireInput -> {
                     InstanceSnapshot snap = new InstanceSnapshot(instanceId, def.ref(), position, taskKey, context,
-                            InstanceStatus.WAITING, expectedVersion + 1, retryState, clock.instant());
+                            InstanceStatus.WAITING, expectedVersion + 1, retryState, clock.instant(),
+                            inst.input(), inst.startedAt());
                     Duration timeout = effectiveTimeout(node);
                     int attempt = retryState != null ? retryState.attempt() : 1;
                     TaskInvocation inv = new TaskInvocation(instanceId, position, correlationId, def.ref(),
@@ -539,11 +551,12 @@ public final class WorkflowEngine {
                 });
     }
 
-    private CompletionStage<SaveOutcome> commitTerminal(String instanceId, WorkflowRef ref, String position,
+    private CompletionStage<SaveOutcome> commitTerminal(Instance inst, WorkflowRef ref, String position,
             JsonNode context, InstanceStatus status, long expectedVersion, List<String> consumeWaitKeys,
             Runnable onSuccess) {
+        String instanceId = inst.id();
         InstanceSnapshot snap = new InstanceSnapshot(instanceId, ref, position, null, context, status,
-                expectedVersion + 1, null, clock.instant());
+                expectedVersion + 1, null, clock.instant(), inst.input(), inst.startedAt());
         return state.save(snap, expectedVersion, List.of(), consumeWaitKeys)
                 .thenApply(outcome -> {
                     if (outcome == SaveOutcome.OK) {
@@ -571,11 +584,28 @@ public final class WorkflowEngine {
     private void failExistingInstance(String instanceId, Throwable t) {
         state.load(instanceId).thenAccept(opt -> opt.ifPresent(snap -> {
             InstanceSnapshot failedSnap = new InstanceSnapshot(instanceId, snap.definition(), snap.position(),
-                    null, snap.context(), InstanceStatus.FAILED, snap.version() + 1, null, clock.instant());
+                    null, snap.context(), InstanceStatus.FAILED, snap.version() + 1, null, clock.instant(),
+                    snap.input(), snap.startedAt());
             List<String> consume = snap.waitingKey() == null ? List.of() : List.of(snap.waitingKey());
             state.save(failedSnap, snap.version(), List.of(), consume);
         }));
         completeExceptionally(instanceId, t);
+    }
+
+    /**
+     * What identifies a running instance across every transition (SDD 2.1, RF6): its id plus the raw
+     * input and start time the DSL 1.0 {@code $workflow} descriptor exposes. Carried unchanged into
+     * every snapshot so a resume on another engine sees the same {@code $workflow}.
+     */
+    private record Instance(String id, JsonNode input, Instant startedAt) {
+
+        static Instance of(InstanceSnapshot snap) {
+            return new Instance(snap.instanceId(), snap.input(), snap.startedAt());
+        }
+
+        WorkflowDescriptor descriptor(WorkflowRef ref) {
+            return new WorkflowDescriptor(id, input, startedAt, ref);
+        }
     }
 
     private static long backoffMillis(int attempt) {

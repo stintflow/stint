@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.stintflow.core.expr.EvalScope;
 import io.stintflow.core.expr.Expr;
 import io.stintflow.core.expr.ExpressionEvaluator;
-import io.stintflow.spi.WorkflowRef;
+import io.stintflow.core.expr.WorkflowDescriptor;
 
 /**
  * Shared identity-default semantics for {@code input.from}/{@code output.as}/{@code export.as}
@@ -18,12 +18,12 @@ public final class DataFlowSupport {
     }
 
     /** {@code input.from}/{@code output.as} default to the identity expression (RF5). */
-    public static JsonNode applyExpr(ExpressionEvaluator evaluator, Expr expr, JsonNode data, JsonNode context, WorkflowRef ref) {
-        return expr == null ? data : evaluator.eval(expr, data, new EvalScope(context, ref));
+    public static JsonNode applyExpr(ExpressionEvaluator evaluator, Expr expr, JsonNode data, JsonNode context, WorkflowDescriptor workflow) {
+        return expr == null ? data : evaluator.eval(expr, data, new EvalScope(context, workflow));
     }
 
     /** {@code export.as} defaults to leaving {@code $context} unchanged (RF5) — not identity-over-output. */
-    public static JsonNode applyExportAs(ExpressionEvaluator evaluator, Expr exportAs, JsonNode transformedOutput, JsonNode context, WorkflowRef ref) {
-        return exportAs == null ? context : evaluator.eval(exportAs, transformedOutput, new EvalScope(context, ref));
+    public static JsonNode applyExportAs(ExpressionEvaluator evaluator, Expr exportAs, JsonNode transformedOutput, JsonNode context, WorkflowDescriptor workflow) {
+        return exportAs == null ? context : evaluator.eval(exportAs, transformedOutput, new EvalScope(context, workflow));
     }
 }
