@@ -15,6 +15,7 @@ import io.stintflow.core.WorkflowDefinition;
 import io.stintflow.core.expr.Expr;
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DoNode;
+import io.stintflow.core.model.EmitNode;
 import io.stintflow.spi.WorkflowRef;
 
 /** SDD 1.4: core {@link DslLoader} behaviour — call:remote compilation, CA4, sec. 8a/8b decisions. */
@@ -175,5 +176,74 @@ class DslLoaderTest {
         assertThat(defs).hasSize(2);
         assertThat(defs.get(0).ref().name()).isEqualTo("fixture-a");
         assertThat(defs.get(1).ref().name()).isEqualTo("fixture-b");
+    }
+
+    @Test
+    void emit_compiles_to_an_emit_node_keeping_its_literal_type_sdd22() {
+        String doc = """
+                document:
+                  dsl: '1.0.0'
+                  name: sample
+                  version: '1.0.0'
+                do:
+                  - announce:
+                      emit:
+                        event:
+                          with:
+                            source: https://acme.example/billing
+                            type: io.acme.order.invoiced.v1
+                            data:
+                              orderId: ${ .orderId }
+                """;
+
+        WorkflowDefinition def = new DslLoader().load(yaml(doc), "sample.yaml", LoadOptions.STRICT);
+        assertThat(def.root().tasks()).singleElement().isInstanceOfSatisfying(
+                EmitNode.class,
+                emit -> assertThat(emit.declaredType()).isEqualTo("io.acme.order.invoiced.v1"));
+    }
+
+    @Test
+    void emit_without_source_fails_the_load_with_its_pointer_sdd22() {
+        String doc = """
+                document:
+                  dsl: '1.0.0'
+                  name: sample
+                  version: '1.0.0'
+                do:
+                  - announce:
+                      emit:
+                        event:
+                          with:
+                            type: io.acme.order.invoiced.v1
+                """;
+
+        assertThatThrownBy(() -> new DslLoader().load(yaml(doc), "sample.yaml", LoadOptions.PERMISSIVE))
+                .isInstanceOf(DslValidationException.class)
+                .satisfies(e -> assertThat(((DslValidationException) e).violations()).anySatisfy(v ->
+                        assertThat(v.pointer()).isEqualTo("/do/0/announce/emit/event/with/source")));
+    }
+
+    @Test
+    void emit_with_a_reserved_literal_type_fails_the_load_sdd22_ca5() {
+        String doc = """
+                document:
+                  dsl: '1.0.0'
+                  name: sample
+                  version: '1.0.0'
+                do:
+                  - spoof:
+                      emit:
+                        event:
+                          with:
+                            source: https://acme.example
+                            type: io.stintflow.timer.fire.v1
+                """;
+
+        assertThatThrownBy(() -> new DslLoader().load(yaml(doc), "sample.yaml", LoadOptions.PERMISSIVE))
+                .isInstanceOf(DslValidationException.class)
+                .satisfies(e -> assertThat(((DslValidationException) e).violations()).anySatisfy(v -> {
+                    assertThat(v.pointer()).isEqualTo("/do/0/spoof/emit/event/with/type");
+                    assertThat(v.message()).contains("reserved");
+                }));
     }
 }
