@@ -1,5 +1,7 @@
 package io.stintflow.inmemory;
 
+import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -9,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
 import io.stintflow.spi.InstanceSnapshot;
+import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
 import io.stintflow.spi.Wait;
@@ -16,17 +19,20 @@ import io.stintflow.spi.Wait;
 /**
  * {@link StateStore} backed by two {@link ConcurrentHashMap}s, with a per-instance {@link ReentrantLock}
  * around {@link #save} so the version check and the add/consume of waits are one atomic step —
- * mirroring what {@code TransactWriteItems} gives the Dynamo connector (SDD 1.2, RF4).
+ * mirroring what {@code TransactWriteItems} gives the Dynamo connector (SDD 1.2, RF4). The outbox
+ * (SDD 2.2) is a third map, written under the same lock as the snapshot it belongs to.
  */
 public final class InMemoryStateStore implements StateStore {
 
     private final Map<String, InstanceSnapshot> instances = new ConcurrentHashMap<>();
     private final Map<String, Wait> waits = new ConcurrentHashMap<>();
     private final Map<String, ReentrantLock> locks = new ConcurrentHashMap<>();
+    private final Map<String, OutboxEntry> outbox = new ConcurrentHashMap<>();
 
     @Override
     public CompletionStage<SaveOutcome> save(InstanceSnapshot snapshot, long expectedVersion,
-                                              List<Wait> addWaits, List<String> consumeWaitKeys) {
+                                              List<Wait> addWaits, List<String> consumeWaitKeys,
+                                              List<OutboxEntry> addOutbox) {
         ReentrantLock lock = locks.computeIfAbsent(snapshot.instanceId(), id -> new ReentrantLock());
         lock.lock();
         try {
@@ -45,12 +51,20 @@ public final class InMemoryStateStore implements StateStore {
                     return CompletableFuture.completedFuture(SaveOutcome.CONFLICT);
                 }
             }
+            for (OutboxEntry entry : addOutbox) {
+                if (outbox.containsKey(entry.eventId())) {
+                    return CompletableFuture.completedFuture(SaveOutcome.CONFLICT);
+                }
+            }
 
             for (String key : consumeWaitKeys) {
                 waits.remove(key);
             }
             for (Wait toAdd : addWaits) {
                 waits.put(toAdd.waitKey(), toAdd);
+            }
+            for (OutboxEntry entry : addOutbox) {
+                outbox.put(entry.eventId(), entry);
             }
             instances.put(snapshot.instanceId(), snapshot);
             return CompletableFuture.completedFuture(SaveOutcome.OK);
@@ -73,6 +87,23 @@ public final class InMemoryStateStore implements StateStore {
     public CompletionStage<Void> delete(String instanceId) {
         instances.remove(instanceId);
         locks.remove(instanceId);
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @Override
+    public CompletionStage<List<OutboxEntry>> pendingOutbox(Instant createdAtOrBefore, int limit) {
+        List<OutboxEntry> pending = outbox.values().stream()
+                .filter(e -> !e.createdAt().isAfter(createdAtOrBefore))
+                .sorted(Comparator.comparing(OutboxEntry::createdAt).thenComparingInt(OutboxEntry::seq)
+                        .thenComparing(OutboxEntry::eventId))
+                .limit(limit)
+                .toList();
+        return CompletableFuture.completedFuture(pending);
+    }
+
+    @Override
+    public CompletionStage<Void> removeOutbox(String eventId) {
+        outbox.remove(eventId);
         return CompletableFuture.completedFuture(null);
     }
 }

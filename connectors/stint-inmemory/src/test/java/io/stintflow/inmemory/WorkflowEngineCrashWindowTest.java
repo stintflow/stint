@@ -33,6 +33,7 @@ import io.stintflow.spi.AdapterCapabilities;
 import io.stintflow.spi.AdapterCapabilities.DeliveryGuarantee;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
+import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
 import io.stintflow.spi.TaskInvocation;
@@ -142,8 +143,8 @@ class WorkflowEngineCrashWindowTest {
 
         @Override
         public CompletionStage<SaveOutcome> save(InstanceSnapshot snapshot, long expectedVersion,
-                List<Wait> addWaits, List<String> consumeWaitKeys) {
-            return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys).thenCompose(outcome -> {
+                List<Wait> addWaits, List<String> consumeWaitKeys, List<OutboxEntry> addOutbox) {
+            return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys, addOutbox).thenCompose(outcome -> {
                 if (outcome == SaveOutcome.OK && remainingCrashes.getAndDecrement() > 0) {
                     crashSignals.add(Boolean.TRUE);
                     return CompletableFuture.failedFuture(new IllegalStateException("simulated crash after save"));
@@ -165,6 +166,16 @@ class WorkflowEngineCrashWindowTest {
         @Override
         public CompletionStage<Void> delete(String instanceId) {
             return delegate.delete(instanceId);
+        }
+
+        @Override
+        public CompletionStage<List<OutboxEntry>> pendingOutbox(Instant createdAtOrBefore, int limit) {
+            return delegate.pendingOutbox(createdAtOrBefore, limit);
+        }
+
+        @Override
+        public CompletionStage<Void> removeOutbox(String eventId) {
+            return delegate.removeOutbox(eventId);
         }
 
         void awaitCrash() throws InterruptedException, TimeoutException {

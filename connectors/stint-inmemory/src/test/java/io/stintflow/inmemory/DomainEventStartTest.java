@@ -5,6 +5,7 @@ import static io.stintflow.inmemory.DomainEventFixture.orderPlaced;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.BrokenBarrierException;
@@ -29,6 +30,7 @@ import io.stintflow.core.trigger.EventFilter;
 import io.stintflow.core.trigger.TriggerBinding;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
+import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
 import io.stintflow.spi.TaskInvocation;
@@ -157,16 +159,16 @@ class DomainEventStartTest {
 
         @Override
         public CompletionStage<SaveOutcome> save(InstanceSnapshot snapshot, long expectedVersion,
-                List<Wait> addWaits, List<String> consumeWaitKeys) {
+                List<Wait> addWaits, List<String> consumeWaitKeys, List<OutboxEntry> addOutbox) {
             if (expectedVersion != 0) {
-                return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys);
+                return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys, addOutbox);
             }
             try {
                 barrier.await(5, TimeUnit.SECONDS);
             } catch (InterruptedException | BrokenBarrierException | TimeoutException e) {
                 return CompletableFuture.failedFuture(e);
             }
-            return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys)
+            return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys, addOutbox)
                     .thenApply(outcome -> {
                         createOutcomes.add(outcome);
                         return outcome;
@@ -184,11 +186,11 @@ class DomainEventStartTest {
 
         @Override
         public CompletionStage<SaveOutcome> save(InstanceSnapshot snapshot, long expectedVersion,
-                List<Wait> addWaits, List<String> consumeWaitKeys) {
+                List<Wait> addWaits, List<String> consumeWaitKeys, List<OutboxEntry> addOutbox) {
             if (expectedVersion == 0 && failed.compareAndSet(false, true)) {
                 return CompletableFuture.failedFuture(new IllegalStateException("simulated state store outage"));
             }
-            return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys);
+            return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys, addOutbox);
         }
     }
 
@@ -212,6 +214,16 @@ class DomainEventStartTest {
         @Override
         public CompletionStage<Void> delete(String instanceId) {
             return delegate.delete(instanceId);
+        }
+
+        @Override
+        public CompletionStage<List<OutboxEntry>> pendingOutbox(Instant createdAtOrBefore, int limit) {
+            return delegate.pendingOutbox(createdAtOrBefore, limit);
+        }
+
+        @Override
+        public CompletionStage<Void> removeOutbox(String eventId) {
+            return delegate.removeOutbox(eventId);
         }
     }
 }

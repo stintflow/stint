@@ -6,6 +6,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -40,6 +41,7 @@ import io.stintflow.inmemory.InMemoryTaskTransport;
 import io.stintflow.inmemory.InMemoryTimerService;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
+import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
 import io.stintflow.spi.Wait;
@@ -207,8 +209,8 @@ class FlociDomainEventTriggerIT {
 
         @Override
         public CompletionStage<SaveOutcome> save(InstanceSnapshot snapshot, long expectedVersion,
-                List<Wait> addWaits, List<String> consumeWaitKeys) {
-            return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys).thenApply(outcome -> {
+                List<Wait> addWaits, List<String> consumeWaitKeys, List<OutboxEntry> addOutbox) {
+            return delegate.save(snapshot, expectedVersion, addWaits, consumeWaitKeys, addOutbox).thenApply(outcome -> {
                 if (expectedVersion == 0) {
                     if (outcome == SaveOutcome.OK) {
                         createdOk.incrementAndGet();
@@ -233,6 +235,16 @@ class FlociDomainEventTriggerIT {
         @Override
         public CompletionStage<Void> delete(String instanceId) {
             return delegate.delete(instanceId);
+        }
+
+        @Override
+        public CompletionStage<List<OutboxEntry>> pendingOutbox(Instant createdAtOrBefore, int limit) {
+            return delegate.pendingOutbox(createdAtOrBefore, limit);
+        }
+
+        @Override
+        public CompletionStage<Void> removeOutbox(String eventId) {
+            return delegate.removeOutbox(eventId);
         }
     }
 }
