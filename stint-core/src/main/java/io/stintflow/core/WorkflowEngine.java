@@ -2,6 +2,7 @@ package io.stintflow.core;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.InstantSource;
@@ -43,6 +44,8 @@ import io.stintflow.spi.TimerRequest;
 import io.stintflow.spi.TimerService;
 import io.stintflow.spi.Wait;
 import io.stintflow.spi.WorkflowRef;
+import io.cloudevents.CloudEvent;
+import io.stintflow.wire.CeWire;
 import io.stintflow.wire.ClaimCheck;
 import io.stintflow.wire.Json;
 
@@ -137,6 +140,64 @@ public final class WorkflowEngine {
                     return null;
                 });
         return instanceId;
+    }
+
+    /**
+     * SDD 2.1, RF2/RF6: starts {@code target} from an inbound domain event, <em>exactly once</em> per
+     * (event, definition).
+     * <p>
+     * The instance id is derived from the definition and the event's {@code source} + {@code id}
+     * ({@link #triggeredInstanceId}), so the idempotency key <em>is</em> the instance: creation is the
+     * existing conditional {@code expectedVersion=0} save (SDD 1.2) — one write, no window between "key
+     * recorded" and "instance recorded" (sec. 8a). A redelivery or a concurrent duplicate loses that
+     * save with {@code CONFLICT}, finds the instance and completes normally with the same id (no-op).
+     * <p>
+     * Unlike {@link #start}, the returned stage covers every effect (save, timer, dispatch), so a
+     * {@link io.stintflow.spi.DomainEventSource} can acknowledge the message only after it completes.
+     * The workflow input is DSL 1.0's "array containing the events that trigger the execution"
+     * ({@code dsl.md}): {@code [<the event in CloudEvents structured JSON>]}. A failure while running
+     * the local part of the workflow (e.g. a bad {@code input.from}) persists the instance as
+     * {@code FAILED} and still completes normally (sec. 8d) — redelivering it would fail the same way.
+     */
+    public CompletionStage<String> startFromEvent(WorkflowRef target, CloudEvent trigger) {
+        WorkflowDefinition def = registry.find(target).orElse(null);
+        if (def == null) {
+            return CompletableFuture.failedFuture(
+                    new IllegalArgumentException("Unknown workflow: " + target.canonical()));
+        }
+        String instanceId = triggeredInstanceId(target, trigger);
+        JsonNode input = Json.MAPPER.createArrayNode().add(Json.read(CeWire.toJson(trigger)));
+        Instance inst = new Instance(instanceId, input, clock.instant());
+        InterpretResult result;
+        try {
+            result = interpreter.run(def, inst.descriptor(target), WorkflowDefinition.ROOT_POINTER, input, input);
+        } catch (RuntimeException e) {
+            result = new InterpretResult.Failed(WorkflowDefinition.ROOT_POINTER, input,
+                    "Failed to start from event " + trigger.getId() + ": " + e.getMessage());
+        }
+        return commit(inst, def, result, 0, List.of()).thenCompose(outcome -> {
+            if (outcome == SaveOutcome.OK) {
+                return CompletableFuture.completedFuture(instanceId);
+            }
+            return state.load(instanceId).thenApply(existing -> {
+                if (existing.isEmpty()) {
+                    throw new IllegalStateException("CONFLICT creating " + instanceId + " but no such instance exists");
+                }
+                LOG.log(Level.DEBUG, "Duplicate delivery of event {0} from {1}: instance {2} already exists",
+                        trigger.getId(), trigger.getSource(), instanceId);
+                return instanceId;
+            });
+        });
+    }
+
+    /**
+     * SDD 2.1, sec. 8a: {@code "evt-" + UUIDv3(definition, source, id)}. Name-based only — a stable
+     * name, not a security property. The definition (including its version) is part of the key
+     * because one event may start several definitions (sec. 8b), each an independent execution.
+     */
+    public static String triggeredInstanceId(WorkflowRef target, CloudEvent trigger) {
+        String name = target.canonical() + '\n' + trigger.getSource() + '\n' + trigger.getId();
+        return "evt-" + UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8));
     }
 
     /** Convenience for tests/sync callers: start and await completion with the default timeout. */
@@ -403,7 +464,10 @@ public final class WorkflowEngine {
         JsonNode effectiveInput = DataFlowSupport.applyExpr(interpreter.evaluator(), tryNode.dataFlow().inputFrom(),
                 snap.context(), snap.context(), inst.descriptor(def.ref()));
 
-        return ClaimCheck.offload(effectiveInput, transport.capabilities(), blob, instanceId + "/" + body.name())
+        // Keyed per attempt: with deterministic event-started ids (SDD 2.1, 8a) two racing duplicates must
+        // never overwrite each other's claim-checked payload.
+        return ClaimCheck.offload(effectiveInput, transport.capabilities(), blob,
+                        instanceId + "/" + body.name() + "/" + correlationId)
                 .thenCompose(wireInput -> {
                     RetryState newRetryState = new RetryState(tryNode.pointer(), nextAttempt, firstAttemptAt,
                             prior != null ? prior.lastError() : null, correlationId);
@@ -514,7 +578,9 @@ public final class WorkflowEngine {
                 : new RetryState(initialRetryState.tryNodePointer(), initialRetryState.attempt(),
                         initialRetryState.firstAttemptAt(), initialRetryState.lastError(), correlationId);
 
-        return ClaimCheck.offload(dispatchInput, transport.capabilities(), blob, instanceId + "/" + node.name())
+        // Keyed per attempt (see redispatchRetry): racing duplicate creates never share a blob key.
+        return ClaimCheck.offload(dispatchInput, transport.capabilities(), blob,
+                        instanceId + "/" + node.name() + "/" + correlationId)
                 .thenCompose(wireInput -> {
                     InstanceSnapshot snap = new InstanceSnapshot(instanceId, def.ref(), position, taskKey, context,
                             InstanceStatus.WAITING, expectedVersion + 1, retryState, clock.instant(),
