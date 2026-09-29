@@ -50,4 +50,28 @@ final class DynamoDbTestTables {
                 .build());
         ddb.waiter().waitUntilTableExists(r -> r.tableName(waitsTable));
     }
+
+    /**
+     * SDD 2.2, sec. 8c: {@code stint-outbox} (PK {@code eventId}) with the {@code pending-by-age} GSI
+     * (PK {@code shard}, SK {@code createdAt}) the sweep queries — never scanned.
+     */
+    static void createOutbox(DynamoDbClient ddb, String outboxTable) {
+        ddb.createTable(CreateTableRequest.builder()
+                .tableName(outboxTable)
+                .attributeDefinitions(
+                        AttributeDefinition.builder().attributeName("eventId").attributeType(ScalarAttributeType.S).build(),
+                        AttributeDefinition.builder().attributeName("shard").attributeType(ScalarAttributeType.S).build(),
+                        AttributeDefinition.builder().attributeName("createdAt").attributeType(ScalarAttributeType.N).build())
+                .keySchema(KeySchemaElement.builder().attributeName("eventId").keyType(KeyType.HASH).build())
+                .globalSecondaryIndexes(GlobalSecondaryIndex.builder()
+                        .indexName("pending-by-age")
+                        .keySchema(
+                                KeySchemaElement.builder().attributeName("shard").keyType(KeyType.HASH).build(),
+                                KeySchemaElement.builder().attributeName("createdAt").keyType(KeyType.RANGE).build())
+                        .projection(Projection.builder().projectionType(ProjectionType.ALL).build())
+                        .build())
+                .billingMode(BillingMode.PAY_PER_REQUEST)
+                .build());
+        ddb.waiter().waitUntilTableExists(r -> r.tableName(outboxTable));
+    }
 }
