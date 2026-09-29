@@ -124,10 +124,11 @@ class DslLoaderTest {
                   version: '1.0.0'
                 do:
                   - notify:
-                      emit:
-                        event:
-                          with:
-                            type: something.v1
+                      listen:
+                        to:
+                          one:
+                            with:
+                              type: something.v1
                 """;
 
         assertThatThrownBy(() -> new DslLoader().load(yaml(doc), "sample.yaml", LoadOptions.STRICT))
@@ -135,8 +136,8 @@ class DslLoaderTest {
                 .satisfies(e -> {
                     DslValidationException ex = (DslValidationException) e;
                     assertThat(ex.violations()).anySatisfy(v -> {
-                        assertThat(v.pointer()).contains("/do/0/notify/emit");
-                        assertThat(v.message()).contains("emit");
+                        assertThat(v.pointer()).contains("/do/0/notify/listen");
+                        assertThat(v.message()).contains("listen");
                     });
                 });
     }
@@ -154,10 +155,11 @@ class DslLoaderTest {
                       with:
                         task: some-route
                   - notify:
-                      emit:
-                        event:
-                          with:
-                            type: something.v1
+                      listen:
+                        to:
+                          one:
+                            with:
+                              type: something.v1
                 """;
 
         WorkflowDefinition def = new DslLoader().load(yaml(doc), "sample.yaml", LoadOptions.PERMISSIVE);

@@ -22,6 +22,7 @@ import io.stintflow.core.expr.JqExpressionEvaluator;
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DataFlow;
 import io.stintflow.core.model.DoNode;
+import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.FlowDirective;
 import io.stintflow.core.model.RetryPolicy;
 import io.stintflow.core.model.SetNode;
@@ -29,6 +30,7 @@ import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
 import io.stintflow.spi.WorkflowRef;
+import io.stintflow.spi.wire.StintEvents;
 
 /**
  * Compiles a CNCF Serverless Workflow DSL 1.0 YAML/JSON document into a {@link WorkflowDefinition}
@@ -184,14 +186,17 @@ public final class DslLoader {
             if (body.has("try")) {
                 return compileTry(name, body, pointer);
             }
-            for (String unsupportedKey : List.of("emit", "listen", "fork", "wait", "for")) {
+            if (body.has("emit")) {
+                return compileEmit(name, body, pointer);
+            }
+            for (String unsupportedKey : List.of("listen", "fork", "wait", "for")) {
                 if (body.has(unsupportedKey)) {
                     unsupported(pointer + "/" + unsupportedKey,
                             "task construct '" + unsupportedKey + "' is not supported in this phase (Fase 2)");
                     return null;
                 }
             }
-            hardError(pointer, "task has no recognized construct (call/set/switch/try)", null);
+            hardError(pointer, "task has no recognized construct (call/set/switch/try/emit)", null);
             return null;
         }
 
@@ -213,6 +218,45 @@ public final class DslLoader {
             JsonNode remoteInput = with.get("input");
             DataFlow dataFlow = compileDataFlow(body, pointer, remoteInput, pointer + "/with/input");
             return new CallRemoteNode(name, pointer, dataFlow, compileThen(body), routingKey, timeout);
+        }
+
+        /**
+         * SDD 2.2, RF2: {@code emit.event.with} (DSL 1.0 Event Properties). {@code source} and {@code type}
+         * are required ("Required when emitting an event using emit.event.with"); a literal {@code type}
+         * in the engine's reserved namespace fails the load (sec. 8e). {@code id} is optional here — the
+         * spec's own Emit example omits it; the engine then generates a stable one (sec. 8b, a Stint choice).
+         */
+        private TaskNode compileEmit(String name, JsonNode body, String pointer) {
+            String withPointer = pointer + "/emit/event/with";
+            JsonNode with = body.path("emit").path("event").path("with");
+            if (!with.isObject()) {
+                hardError(withPointer, "'emit' requires an 'event.with' object", null);
+                return null;
+            }
+            boolean valid = true;
+            for (String required : List.of("source", "type")) {
+                if (!with.hasNonNull(required)) {
+                    hardError(withPointer + "/" + required,
+                            "'emit.event.with." + required + "' is required when emitting an event", null);
+                    valid = false;
+                }
+            }
+            if (!valid) {
+                return null;
+            }
+            String declaredType = isExpression(with.get("type")) ? null : with.get("type").asText();
+            if (StintEvents.isReservedType(declaredType)) {
+                hardError(withPointer + "/type", "emit type '" + declaredType + "' is reserved for the engine's "
+                        + "internal protocol " + StintEvents.RESERVED_TYPE_PREFIXES, null);
+                return null;
+            }
+            Expr event = compileAndValidate(TemplateCompiler.compileTemplate(with), withPointer);
+            return new EmitNode(name, pointer, compileDataFlow(body, pointer, null, null), compileThen(body), event,
+                    declaredType);
+        }
+
+        private static boolean isExpression(JsonNode node) {
+            return node.isTextual() && node.textValue().trim().startsWith("${");
         }
 
         private TaskNode compileSwitch(String name, JsonNode body, String pointer) {

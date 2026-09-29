@@ -1,8 +1,8 @@
-# CNCF Serverless Workflow definition for the send-report flow (SDD 1.4, CA2/CA3).
-# 'schedule' and the 'emit' task are valid DSL 1.0 constructs this phase does not implement yet
-# (Fase 2) — loading this file strictly (LoadOptions.STRICT) must fail citing both; loading it
-# permissively (LoadOptions.PERMISSIVE) must drop both (with a warning) and still run 'sendEmail'
-# end to end.
+# CNCF Serverless Workflow definition for the send-report flow (SDD 1.4, CA2/CA3; SDD 2.2, CA8).
+# 'schedule' is a valid DSL 1.0 construct not implemented yet (SDD 2.4) — loading this file strictly
+# (LoadOptions.STRICT) must fail citing it; loading it permissively (LoadOptions.PERMISSIVE) drops it
+# (with a warning). The 'emit' task is supported since SDD 2.2: it publishes 'report-sent' on the
+# domain channel after 'sendEmail'.
 document:
   dsl: '1.0.0'
   namespace: reports
@@ -27,5 +27,6 @@ do:
       emit:
         event:
           with:
-            type: report-sent.v1
+            source: https://stintflow.io/reports/send-report
+            type: io.stintflow.reports.report-sent.v1
             data: ${ $context }
