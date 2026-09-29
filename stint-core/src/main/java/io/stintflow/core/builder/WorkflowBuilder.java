@@ -9,6 +9,7 @@ import io.stintflow.core.expr.Expr;
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DataFlow;
 import io.stintflow.core.model.DoNode;
+import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.FlowDirective;
 import io.stintflow.core.model.RetryPolicy;
 import io.stintflow.core.model.SetNode;
@@ -59,6 +60,21 @@ public final class WorkflowBuilder {
 
     public WorkflowBuilder set(String name, Expr set, DataFlow dataFlow, FlowDirective then) {
         tasks.add(new SetNode(name, pointerFor(name), dataFlow, then, set));
+        return this;
+    }
+
+    /**
+     * SDD 2.2: an {@code emit}. {@code eventWith} evaluates (against the node input) to the
+     * {@code emit.event.with} object; {@code declaredType} is its literal {@code type}, if any, so the
+     * registry can reject a reserved one up front ({@code null} when the type is computed).
+     */
+    public WorkflowBuilder emit(String name, String declaredType, Expr eventWith, DataFlow dataFlow) {
+        return emit(name, declaredType, eventWith, dataFlow, FlowDirective.CONTINUE);
+    }
+
+    public WorkflowBuilder emit(String name, String declaredType, Expr eventWith, DataFlow dataFlow,
+            FlowDirective then) {
+        tasks.add(new EmitNode(name, pointerFor(name), dataFlow, then, eventWith, declaredType));
         return this;
     }
 

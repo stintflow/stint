@@ -7,9 +7,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DoNode;
+import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
 import io.stintflow.spi.WorkflowRef;
+import io.stintflow.spi.wire.StintEvents;
 
 /**
  * In-process registry of known workflow definitions, keyed by {@code namespace:name:version}.
@@ -17,6 +19,10 @@ import io.stintflow.spi.WorkflowRef;
  * SDD 1.3, RF3/sec. 8d: validates every {@code timeout.after} against the timer connector's
  * {@link io.stintflow.spi.TimerService#maxDelay()} at registration time — a static property of the
  * definition, so it's checked once here rather than on every dispatch.
+ * <p>
+ * SDD 2.2, sec. 8e: an {@code emit} whose literal {@code type} belongs to the engine's internal protocol
+ * ({@link StintEvents#RESERVED_TYPE_PREFIXES}) is rejected here too — covering definitions built in
+ * Java, not only the ones loaded from YAML.
  */
 public final class WorkflowRegistry {
 
@@ -40,6 +46,7 @@ public final class WorkflowRegistry {
      */
     public void register(WorkflowDefinition def) {
         validateTimeouts(def.root());
+        validateEmitTypes(def.root());
         WorkflowDefinition existing = byRef.putIfAbsent(def.ref().canonical(), def);
         if (existing != null && !existing.equals(def)) {
             throw new IllegalStateException("Workflow " + def.ref().canonical()
@@ -64,6 +71,19 @@ public final class WorkflowRegistry {
         if (node instanceof DoNode doNode) {
             for (TaskNode child : doNode.tasks()) {
                 validateTimeouts(child);
+            }
+        }
+    }
+
+    private void validateEmitTypes(TaskNode node) {
+        if (node instanceof EmitNode emit && StintEvents.isReservedType(emit.declaredType())) {
+            throw new IllegalArgumentException("Emit '" + emit.name() + "' at " + emit.pointer() + " uses type '"
+                    + emit.declaredType() + "', reserved for the engine's internal protocol "
+                    + StintEvents.RESERVED_TYPE_PREFIXES);
+        }
+        if (node instanceof DoNode doNode) {
+            for (TaskNode child : doNode.tasks()) {
+                validateEmitTypes(child);
             }
         }
     }

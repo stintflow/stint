@@ -1,6 +1,9 @@
 package io.stintflow.core.interpreter;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -10,10 +13,12 @@ import io.stintflow.core.expr.ExpressionEvaluator;
 import io.stintflow.core.expr.WorkflowDescriptor;
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DoNode;
+import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
+import io.stintflow.spi.wire.StintEvents;
 
 /**
  * The local interpreter (SDD 1.1, RF6): walks local nodes ({@code set}, {@code switch}, {@code do})
@@ -56,6 +61,13 @@ public final class TreeInterpreter {
 
     /** As {@link #run(WorkflowDefinition, String, JsonNode, JsonNode)}, with {@code $workflow} describing a running instance (SDD 2.1, RF6). */
     public InterpretResult run(WorkflowDefinition def, WorkflowDescriptor wf, String pointer, JsonNode data, JsonNode context) {
+        List<Emitted> emitted = new ArrayList<>();
+        return walk(def, wf, pointer, data, context, emitted).withEmitted(emitted);
+    }
+
+    /** The local walk; every {@code emit} on the way is appended to {@code emitted} (SDD 2.2). */
+    private InterpretResult walk(WorkflowDefinition def, WorkflowDescriptor wf, String pointer, JsonNode data,
+            JsonNode context, List<Emitted> emitted) {
         int steps = 0;
         while (true) {
             if (steps++ >= localNodeLimit) {
@@ -96,6 +108,30 @@ public final class TreeInterpreter {
                 JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, wf);
 
                 Optional<String> nextPointer = def.next(pointer, setNode.then());
+                if (nextPointer.isEmpty()) {
+                    return InterpretResult.complete(pointer, newContext);
+                }
+                pointer = nextPointer.get();
+                data = outputData;
+                context = newContext;
+                continue;
+            }
+
+            if (node instanceof EmitNode emitNode) {
+                JsonNode with = evaluator.eval(emitNode.event(), effectiveInput, new EvalScope(context, wf));
+                String problem = emitProblem(with);
+                if (problem != null) {
+                    return InterpretResult.failed(pointer, context, "emit at " + pointer + ": " + problem);
+                }
+                String emitPointer = pointer;
+                int occurrence = (int) emitted.stream().filter(e -> e.pointer().equals(emitPointer)).count();
+                emitted.add(new Emitted(pointer, occurrence, with));
+
+                // The spec doesn't define an emit's output: its raw output is its input, unchanged.
+                JsonNode outputData = DataFlowSupport.applyExpr(evaluator, node.dataFlow().outputAs(), effectiveInput, context, wf);
+                JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, wf);
+
+                Optional<String> nextPointer = def.next(pointer, emitNode.then());
                 if (nextPointer.isEmpty()) {
                     return InterpretResult.complete(pointer, newContext);
                 }
@@ -186,6 +222,48 @@ public final class TreeInterpreter {
         throw new WorkflowExecutionException(
                 "No 'switch' case matched and no default case (when: null) at " + switchNode.pointer());
     }
+
+    /**
+     * SDD 2.2, RF2/sec. 8e: {@code emit.event.with} must evaluate to an object with a {@code source} and
+     * a {@code type} (DSL 1.0: "Required when emitting an event using emit.event.with"), and the type may
+     * not be one of the internal protocol's — checked here because a computed type is only known now.
+     */
+    private static String emitProblem(JsonNode with) {
+        if (with == null || !with.isObject()) {
+            return "event.with must evaluate to an object";
+        }
+        for (String required : List.of("source", "type")) {
+            JsonNode value = with.get(required);
+            if (value == null || !value.isTextual() || value.asText().isBlank()) {
+                return "event.with." + required + " is required";
+            }
+        }
+        String type = with.get("type").asText();
+        if (StintEvents.isReservedType(type)) {
+            return "type '" + type + "' is reserved for the engine's internal protocol "
+                    + StintEvents.RESERVED_TYPE_PREFIXES;
+        }
+        var fields = with.fields();
+        while (fields.hasNext()) {
+            var field = fields.next();
+            if (EMIT_ATTRIBUTES.contains(field.getKey())) {
+                continue;
+            }
+            // Extension attribute: CloudEvents names are lowercase letters/digits; values are scalars.
+            if (!field.getKey().matches("[a-z0-9]{1,20}")) {
+                return "extension attribute name '" + field.getKey() + "' is not a valid CloudEvents name "
+                        + "(lowercase letters and digits, at most 20)";
+            }
+            JsonNode value = field.getValue();
+            if (!(value.isTextual() || value.isBoolean() || value.canConvertToInt())) {
+                return "extension attribute '" + field.getKey() + "' must be a string, boolean or integer";
+            }
+        }
+        return null;
+    }
+
+    private static final Set<String> EMIT_ATTRIBUTES = Set.of(
+            "id", "source", "type", "time", "subject", "datacontenttype", "dataschema", "data", "specversion");
 
     /** jq truthiness: only {@code false} and {@code null} are falsy — {@code 0} and {@code ""} are truthy. */
     private static boolean isTruthy(JsonNode node) {

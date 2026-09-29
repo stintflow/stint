@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.InstantSource;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -24,6 +25,7 @@ import io.stintflow.core.expr.ExpressionEvaluator;
 import io.stintflow.core.expr.JqExpressionEvaluator;
 import io.stintflow.core.expr.WorkflowDescriptor;
 import io.stintflow.core.interpreter.DataFlowSupport;
+import io.stintflow.core.interpreter.Emitted;
 import io.stintflow.core.interpreter.InterpretResult;
 import io.stintflow.core.interpreter.TreeInterpreter;
 import io.stintflow.core.model.CallRemoteNode;
@@ -32,8 +34,10 @@ import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.ErrorInfo;
+import io.stintflow.spi.EventPublisher;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
+import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.RetryState;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
@@ -91,6 +95,14 @@ public final class WorkflowEngine {
     private final BlobStore blob;
     private final TreeInterpreter interpreter;
     private final InstantSource clock;
+    /** SDD 2.2: the domain channel; {@code null} = this engine can't run {@code emit}. */
+    private final EventPublisher publisher;
+    /** SDD 2.2, sec. 8d: where fact payloads above the publisher's limit go ({@code dataref}); may be {@code null}. */
+    private final BlobStore factBlob;
+    private final OutboxRelay relay;
+
+    /** SDD 2.2, sec. 8c: the outbox shares the activation's transaction (100 items max in DynamoDB). */
+    static final int MAX_FACTS_PER_ACTIVATION = 25;
 
     public WorkflowEngine(WorkflowRegistry registry, TaskTransport transport, StateStore state,
                           TimerService timer, BlobStore blob) {
@@ -106,6 +118,18 @@ public final class WorkflowEngine {
     /** @param clock override point for tests (SDD 1.3, sec. 8f) — no sleeps, advance it and call the timer's tick(). */
     public WorkflowEngine(WorkflowRegistry registry, TaskTransport transport, StateStore state,
                           TimerService timer, BlobStore blob, TreeInterpreter interpreter, InstantSource clock) {
+        this(registry, transport, state, timer, blob, interpreter, clock, null, null);
+    }
+
+    /**
+     * SDD 2.2: an engine that can run {@code emit}. Facts go to {@code publisher} (the domain channel,
+     * never the {@code transport}) through the transactional outbox; {@code factBlob} holds fact payloads
+     * too large for the publisher (sec. 8d) — a store of its own, never the internal claim-check one.
+     * Call {@code outboxRelay().start(...)} in production so facts left behind by a crash get swept.
+     */
+    public WorkflowEngine(WorkflowRegistry registry, TaskTransport transport, StateStore state,
+                          TimerService timer, BlobStore blob, TreeInterpreter interpreter, InstantSource clock,
+                          EventPublisher publisher, BlobStore factBlob) {
         this.registry = registry;
         this.transport = transport;
         this.state = state;
@@ -113,6 +137,9 @@ public final class WorkflowEngine {
         this.blob = blob;
         this.interpreter = interpreter;
         this.clock = clock;
+        this.publisher = publisher;
+        this.factBlob = factBlob;
+        this.relay = publisher == null ? null : new OutboxRelay(state, publisher, clock);
         this.transport.onResult(this::onResult);
         this.timer.onFire(this::onTimerFire);
     }
@@ -172,7 +199,7 @@ public final class WorkflowEngine {
         try {
             result = interpreter.run(def, inst.descriptor(target), WorkflowDefinition.ROOT_POINTER, input, input);
         } catch (RuntimeException e) {
-            result = new InterpretResult.Failed(WorkflowDefinition.ROOT_POINTER, input,
+            result = InterpretResult.failed(WorkflowDefinition.ROOT_POINTER, input,
                     "Failed to start from event " + trigger.getId() + ": " + e.getMessage());
         }
         return commit(inst, def, result, 0, List.of()).thenCompose(outcome -> {
@@ -549,27 +576,102 @@ public final class WorkflowEngine {
 
     // --- persisting an InterpretResult: Suspend / SuspendInTry / Complete / Failed ------------------
 
-    private CompletionStage<SaveOutcome> commit(Instance inst, WorkflowDefinition def, InterpretResult result,
+    private CompletionStage<SaveOutcome> commit(Instance inst, WorkflowDefinition def, InterpretResult interpreted,
             long expectedVersion, List<String> consumeWaitKeys) {
         String instanceId = inst.id();
+        InterpretResult result = checkEmits(interpreted);
+        return prepareFacts(inst, def, result.emitted(), expectedVersion).thenCompose(outbox -> {
+            CompletionStage<SaveOutcome> saved = switch (result) {
+                case InterpretResult.Suspend s -> commitSuspend(inst, def, s.node(), s.pointer(), s.dispatchInput(),
+                        s.context(), expectedVersion, consumeWaitKeys, null, outbox);
+                case InterpretResult.SuspendInTry s -> commitSuspend(inst, def, s.tryNode().body(),
+                        s.tryNode().pointer(), s.dispatchInput(), s.context(), expectedVersion, consumeWaitKeys,
+                        new RetryState(s.tryNode().pointer(), 1, clock.instant(), null, null), outbox);
+                case InterpretResult.Complete c -> commitTerminal(inst, def.ref(), c.pointer(), c.context(),
+                        InstanceStatus.COMPLETED, expectedVersion, consumeWaitKeys,
+                        () -> complete(instanceId, c.context()), outbox);
+                case InterpretResult.Failed f -> commitTerminal(inst, def.ref(), f.pointer(), f.context(),
+                        InstanceStatus.FAILED, expectedVersion, consumeWaitKeys,
+                        () -> completeExceptionally(instanceId, new RuntimeException(f.message())), outbox);
+            };
+            // SDD 2.2, sec. 8a: publish right after the save that recorded the facts. Never fails the
+            // transition — the facts are durable; whatever doesn't go out now is swept later.
+            return outbox.isEmpty() ? saved : saved.thenCompose(outcome -> outcome != SaveOutcome.OK
+                    ? CompletableFuture.completedFuture(outcome)
+                    : relay.publishNow(outbox).thenApply(v -> outcome));
+        });
+    }
+
+    /** SDD 2.2: an activation that emitted but can't record its facts fails instead of silently dropping them. */
+    private InterpretResult checkEmits(InterpretResult result) {
+        List<Emitted> emitted = result.emitted();
+        if (emitted.isEmpty()) {
+            return result;
+        }
+        if (publisher == null) {
+            return failedLike(result, "emit requires an EventPublisher, but no EventPublisher configured on this engine");
+        }
+        if (emitted.size() > MAX_FACTS_PER_ACTIVATION) {
+            return failedLike(result, emitted.size() + " facts emitted in one activation exceed the limit of "
+                    + MAX_FACTS_PER_ACTIVATION);
+        }
+        return result;
+    }
+
+    private static InterpretResult failedLike(InterpretResult result, String message) {
         return switch (result) {
-            case InterpretResult.Suspend s -> commitSuspend(inst, def, s.node(), s.pointer(), s.dispatchInput(),
-                    s.context(), expectedVersion, consumeWaitKeys, null);
-            case InterpretResult.SuspendInTry s -> commitSuspend(inst, def, s.tryNode().body(),
-                    s.tryNode().pointer(), s.dispatchInput(), s.context(), expectedVersion, consumeWaitKeys,
-                    new RetryState(s.tryNode().pointer(), 1, clock.instant(), null, null));
-            case InterpretResult.Complete c -> commitTerminal(inst, def.ref(), c.pointer(), c.context(),
-                    InstanceStatus.COMPLETED, expectedVersion, consumeWaitKeys,
-                    () -> complete(instanceId, c.context()));
-            case InterpretResult.Failed f -> commitTerminal(inst, def.ref(), f.pointer(), f.context(),
-                    InstanceStatus.FAILED, expectedVersion, consumeWaitKeys,
-                    () -> completeExceptionally(instanceId, new RuntimeException(f.message())));
+            case InterpretResult.Suspend s -> InterpretResult.failed(s.pointer(), s.context(), message);
+            case InterpretResult.SuspendInTry s -> InterpretResult.failed(s.tryNode().pointer(), s.context(), message);
+            case InterpretResult.Complete c -> InterpretResult.failed(c.pointer(), c.context(), message);
+            case InterpretResult.Failed f -> InterpretResult.failed(f.pointer(), f.context(), f.message() + "; " + message);
         };
+    }
+
+    /**
+     * SDD 2.2: turns what the activation emitted into outbox entries — stable id (sec. 8b), CloudEvent
+     * built by {@link FactFactory} (sec. 8f) and, when it's too large for the publisher, the data put in
+     * the facts store <em>before</em> the save under a deterministic key and replaced by a {@code dataref}
+     * (sec. 8d). A re-run overwrites the same key; a blob of a run that lost the save is simply orphaned.
+     */
+    private CompletionStage<List<OutboxEntry>> prepareFacts(Instance inst, WorkflowDefinition def,
+            List<Emitted> emitted, long baseVersion) {
+        CompletionStage<List<OutboxEntry>> chain = CompletableFuture.completedFuture(new ArrayList<>());
+        Instant now = clock.instant();
+        for (int i = 0; i < emitted.size(); i++) {
+            Emitted e = emitted.get(i);
+            int seq = i;
+            chain = chain.thenCompose(entries -> {
+                String id = FactFactory.factId(e.with(), inst.id(), baseVersion, e.pointer(), e.occurrence());
+                CloudEvent inline = FactFactory.build(id, e.with(), now);
+                byte[] json = CeWire.toJson(inline);
+                CompletionStage<CloudEvent> fact;
+                if (json.length <= publisher.capabilities().maxPayloadBytes() || !FactFactory.hasData(e.with())) {
+                    fact = CompletableFuture.completedFuture(inline);
+                } else if (factBlob == null) {
+                    fact = CompletableFuture.failedFuture(new IllegalStateException("Fact " + id + " is "
+                            + json.length + " bytes, above the publisher's limit, and no facts store is configured"));
+                } else {
+                    fact = factBlob.put(FactFactory.dataBytes(e.with()), FactFactory.factKey(def.ref(), id))
+                            .thenApply(ref -> FactFactory.buildWithDataref(id, e.with(), now, ref));
+                }
+                return fact.thenApply(ce -> {
+                    entries.add(new OutboxEntry(id, inst.id(), seq,
+                            new String(CeWire.toJson(ce), StandardCharsets.UTF_8), now));
+                    return entries;
+                });
+            });
+        }
+        return chain;
+    }
+
+    /** SDD 2.2: the relay that publishes this engine's facts, or {@code null} if it has no publisher. */
+    public OutboxRelay outboxRelay() {
+        return relay;
     }
 
     private CompletionStage<SaveOutcome> commitSuspend(Instance inst, WorkflowDefinition def, CallRemoteNode node,
             String position, JsonNode dispatchInput, JsonNode context, long expectedVersion,
-            List<String> consumeWaitKeys, RetryState initialRetryState) {
+            List<String> consumeWaitKeys, RetryState initialRetryState, List<OutboxEntry> outbox) {
         String instanceId = inst.id();
         String correlationId = UUID.randomUUID().toString();
         String taskKey = WaitKeys.task(correlationId);
@@ -594,7 +696,7 @@ public final class WorkflowEngine {
                             () -> state.save(snap, expectedVersion,
                                     List.of(new Wait(taskKey, instanceId, position, clock.instant()),
                                             new Wait(timerKey, instanceId, position, clock.instant())),
-                                    consumeWaitKeys),
+                                    consumeWaitKeys, outbox),
                             () -> transport.dispatch(inv));
                 });
     }
@@ -623,10 +725,17 @@ public final class WorkflowEngine {
     private CompletionStage<SaveOutcome> commitTerminal(Instance inst, WorkflowRef ref, String position,
             JsonNode context, InstanceStatus status, long expectedVersion, List<String> consumeWaitKeys,
             Runnable onSuccess) {
+        return commitTerminal(inst, ref, position, context, status, expectedVersion, consumeWaitKeys, onSuccess,
+                List.of());
+    }
+
+    private CompletionStage<SaveOutcome> commitTerminal(Instance inst, WorkflowRef ref, String position,
+            JsonNode context, InstanceStatus status, long expectedVersion, List<String> consumeWaitKeys,
+            Runnable onSuccess, List<OutboxEntry> outbox) {
         String instanceId = inst.id();
         InstanceSnapshot snap = new InstanceSnapshot(instanceId, ref, position, null, context, status,
                 expectedVersion + 1, null, clock.instant(), inst.input(), inst.startedAt());
-        return state.save(snap, expectedVersion, List.of(), consumeWaitKeys)
+        return state.save(snap, expectedVersion, List.of(), consumeWaitKeys, outbox)
                 .thenApply(outcome -> {
                     if (outcome == SaveOutcome.OK) {
                         onSuccess.run();
