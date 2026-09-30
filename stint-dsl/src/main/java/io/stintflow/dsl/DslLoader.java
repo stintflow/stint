@@ -9,7 +9,10 @@ import java.lang.System.Logger.Level;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
@@ -24,6 +27,7 @@ import io.stintflow.core.model.DataFlow;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.FlowDirective;
+import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.RetryPolicy;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
@@ -189,14 +193,17 @@ public final class DslLoader {
             if (body.has("emit")) {
                 return compileEmit(name, body, pointer);
             }
-            for (String unsupportedKey : List.of("listen", "fork", "wait", "for")) {
+            if (body.has("listen")) {
+                return compileListen(name, body, pointer);
+            }
+            for (String unsupportedKey : List.of("fork", "wait", "for")) {
                 if (body.has(unsupportedKey)) {
                     unsupported(pointer + "/" + unsupportedKey,
                             "task construct '" + unsupportedKey + "' is not supported in this phase (Fase 2)");
                     return null;
                 }
             }
-            hardError(pointer, "task has no recognized construct (call/set/switch/try/emit)", null);
+            hardError(pointer, "task has no recognized construct (call/set/switch/try/emit/listen)", null);
             return null;
         }
 
@@ -255,6 +262,123 @@ public final class DslLoader {
                     declaredType);
         }
 
+        /**
+         * SDD 2.3, RF1: {@code listen} (DSL 1.0 Listen). {@code listen.to} is {@code one} (an Event Filter) or
+         * {@code any}/{@code all} (lists of them); {@code listen.read} is {@code data} (default), {@code envelope}
+         * or {@code raw}. Each Event Filter needs a literal {@code with.type}; other {@code with} entries are
+         * matched exactly; {@code correlate} maps a name to {@code from} (a runtime expression over the event)
+         * and {@code expect} (a constant or a runtime expression). What this phase leaves out — {@code until},
+         * {@code foreach}, an empty {@code any}, expressions in {@code with}, a filter without {@code correlate}
+         * or a correlation without {@code expect} — is reported as unsupported (sec. 8f), dropping the task.
+         */
+        private TaskNode compileListen(String name, JsonNode body, String pointer) {
+            String listenPointer = pointer + "/listen";
+            JsonNode listen = body.get("listen");
+            JsonNode to = listen.path("to");
+            if (listen.has("foreach")) {
+                unsupported(listenPointer + "/foreach", "'listen.foreach' is not supported in this phase");
+                return null;
+            }
+            if (to.has("until")) {
+                unsupported(listenPointer + "/to/until", "'listen.to.until' is not supported in this phase");
+                return null;
+            }
+            ListenNode.Strategy strategy;
+            List<JsonNode> filterNodes = new ArrayList<>();
+            String filtersPointer;
+            if (to.has("one")) {
+                strategy = ListenNode.Strategy.ONE;
+                filterNodes.add(to.get("one"));
+                filtersPointer = listenPointer + "/to/one";
+            } else if (to.has("any") || to.has("all")) {
+                strategy = to.has("any") ? ListenNode.Strategy.ANY : ListenNode.Strategy.ALL;
+                String key = to.has("any") ? "any" : "all";
+                filtersPointer = listenPointer + "/to/" + key;
+                if (!to.get(key).isArray() || to.get(key).isEmpty()) {
+                    unsupported(filtersPointer, "'listen.to." + key + "' needs at least one event filter "
+                            + "(listening to every event is not supported in this phase)");
+                    return null;
+                }
+                to.get(key).forEach(filterNodes::add);
+            } else {
+                hardError(listenPointer + "/to", "'listen.to' requires one of 'one', 'any' or 'all'", null);
+                return null;
+            }
+
+            List<ListenNode.Filter> filters = new ArrayList<>();
+            for (int i = 0; i < filterNodes.size(); i++) {
+                String filterPointer = strategy == ListenNode.Strategy.ONE ? filtersPointer : filtersPointer + "/" + i;
+                ListenNode.Filter filter = compileEventFilter(filterNodes.get(i), filterPointer);
+                if (filter == null) {
+                    return null;
+                }
+                filters.add(filter);
+            }
+
+            ListenNode.Read read = ListenNode.Read.DATA;
+            if (listen.has("read")) {
+                switch (listen.get("read").asText()) {
+                    case "data" -> read = ListenNode.Read.DATA;
+                    case "envelope" -> read = ListenNode.Read.ENVELOPE;
+                    case "raw" -> read = ListenNode.Read.RAW;
+                    default -> {
+                        hardError(listenPointer + "/read", "'listen.read' must be one of data, envelope, raw", null);
+                        return null;
+                    }
+                }
+            }
+            return new ListenNode(name, pointer, compileDataFlow(body, pointer, null, null), compileThen(body),
+                    strategy, filters, read, compileTimeout(body, pointer));
+        }
+
+        private ListenNode.Filter compileEventFilter(JsonNode filter, String pointer) {
+            JsonNode with = filter.path("with");
+            if (!with.isObject() || !with.hasNonNull("type")) {
+                hardError(pointer + "/with/type", "an event filter requires 'with.type'", null);
+                return null;
+            }
+            Map<String, String> attributes = new LinkedHashMap<>();
+            for (Iterator<String> it = with.fieldNames(); it.hasNext(); ) {
+                String attribute = it.next();
+                JsonNode value = with.get(attribute);
+                if (!value.isValueNode() || isExpression(value)) {
+                    unsupported(pointer + "/with/" + attribute, "only exact values are supported in an event "
+                            + "filter's 'with' in this phase (no runtime expressions)");
+                    return null;
+                }
+                attributes.put(attribute, value.asText());
+            }
+            String type = attributes.remove("type");
+
+            JsonNode correlate = filter.get("correlate");
+            if (correlate == null || !correlate.isObject() || correlate.isEmpty()) {
+                unsupported(pointer + "/correlate", "a listen event filter without 'correlate' is not supported in "
+                        + "this phase (SDD 2.3, sec. 8a)");
+                return null;
+            }
+            TreeMap<String, ListenNode.Correlation> correlations = new TreeMap<>();
+            for (Iterator<String> it = correlate.fieldNames(); it.hasNext(); ) {
+                String correlationName = it.next();
+                JsonNode correlation = correlate.get(correlationName);
+                String correlationPointer = pointer + "/correlate/" + correlationName;
+                if (!correlation.hasNonNull("from")) {
+                    hardError(correlationPointer + "/from", "a correlation requires 'from'", null);
+                    return null;
+                }
+                if (!correlation.has("expect")) {
+                    unsupported(correlationPointer + "/expect", "a correlation without 'expect' is not supported "
+                            + "in this phase (SDD 2.3, sec. 8a)");
+                    return null;
+                }
+                Expr from = compileAndValidate(TemplateCompiler.compileBareExpression(
+                        correlation.get("from").asText()), correlationPointer + "/from");
+                Expr expect = compileAndValidate(TemplateCompiler.compileTemplate(correlation.get("expect")),
+                        correlationPointer + "/expect");
+                correlations.put(correlationName, new ListenNode.Correlation(from, expect));
+            }
+            return new ListenNode.Filter(type, attributes, correlations);
+        }
+
         private static boolean isExpression(JsonNode node) {
             return node.isTextual() && node.textValue().trim().startsWith("${");
         }
@@ -284,16 +408,20 @@ public final class DslLoader {
             if (tryList == null || !tryList.isArray() || tryList.size() != 1) {
                 hardError(pointer + "/try",
                         "'try' bodies with other than exactly one task are not supported in this phase "
-                                + "(SDD 1.3 scope note: the try body is restricted to a single 'call: remote')",
+                                + "(SDD 1.3 scope note: the try body is restricted to a single 'call: remote' "
+                                + "or, SDD 2.3, a single 'listen')",
                         null);
                 return null;
             }
             List<TaskNode> bodyTasks = compileTaskList(tryList, pointer);
-            if (bodyTasks.size() != 1 || !(bodyTasks.get(0) instanceof CallRemoteNode bodyCall)) {
+            if (bodyTasks.size() != 1
+                    || !(bodyTasks.get(0) instanceof CallRemoteNode || bodyTasks.get(0) instanceof ListenNode)) {
                 hardError(pointer + "/try",
-                        "'try' body must compile to a single 'call: remote' task (SDD 1.3 scope note)", null);
+                        "'try' body must compile to a single 'call: remote' or 'listen' task (SDD 1.3 scope note)",
+                        null);
                 return null;
             }
+            TaskNode bodyCall = bodyTasks.get(0);
 
             JsonNode catchNode = body.get("catch");
             if (catchNode == null) {
