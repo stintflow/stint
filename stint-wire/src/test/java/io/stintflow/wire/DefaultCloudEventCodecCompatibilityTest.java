@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.stintflow.spi.Lineage;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.WorkflowRef;
@@ -76,5 +77,32 @@ class DefaultCloudEventCodecCompatibilityTest {
         assertThat(decoded.definition().namespace()).isEqualTo("reports");
         assertThat(decoded.definition().name()).isEqualTo("build-report");
         assertThat(decoded.definition().version()).isEqualTo("1.0.0");
+    }
+
+    @Test
+    void sdd25_lineage_round_trips_on_invoke_and_result() {
+        DefaultCloudEventCodec codec = new DefaultCloudEventCodec();
+        Lineage lineage = new Lineage("chn-1", "evt-9", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01", "k=v");
+        TaskInvocation inv = new TaskInvocation("inst-1", "/do/0/step", "corr-1",
+                new WorkflowRef("ns", "wf", "1.0.0"), "route-a", Json.obj(), 1, lineage);
+
+        var invoke = codec.toEvent(inv);
+        assertThat(invoke.getExtension(StintEvents.EXT_CHAIN_ID)).isEqualTo("chn-1");
+        assertThat(invoke.getExtension(StintEvents.EXT_TRACEPARENT)).isEqualTo(lineage.traceparent());
+        assertThat(codec.toInvocation(invoke).lineage()).isEqualTo(lineage);
+
+        TaskResult result = TaskResult.completed("corr-1", Json.obj()).withLineage(lineage);
+        assertThat(codec.toResult(codec.toEvent(result, "inst-1")).lineage()).isEqualTo(lineage);
+    }
+
+    @Test
+    void sdd25_an_event_without_lineage_extensions_reads_as_none() {
+        DefaultCloudEventCodec codec = new DefaultCloudEventCodec();
+        TaskInvocation legacy = new TaskInvocation("inst-1", "/do/0/step", "corr-1",
+                new WorkflowRef("ns", "wf", "1.0.0"), "route-a", Json.obj(), 1);
+
+        var event = codec.toEvent(legacy);
+        assertThat(event.getExtension(StintEvents.EXT_CHAIN_ID)).isNull();
+        assertThat(codec.toInvocation(event).lineage()).isEqualTo(Lineage.NONE);
     }
 }
