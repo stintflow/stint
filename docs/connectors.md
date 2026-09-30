@@ -18,7 +18,7 @@ Each **port** (abstraction) is a socket; each **connector** is a plug. The core 
 | Ecosystem | Connector | MVP |
 |---|---|---|
 | Local | in-memory | 🟢 |
-| AWS | DynamoDB (`stint-instances` + `stint-waits` + `stint-outbox`) | 🟢 |
+| AWS | DynamoDB (`stint-instances` + `stint-waits` + `stint-outbox` + `stint-inbox`) | 🟢 |
 | Generic | Postgres · Redis · Mongo | ⚪ |
 | Azure / GCP | Cosmos · Firestore | ⚪ |
 
@@ -68,6 +68,15 @@ after, and deleted once the broker accepted them. Nothing pending is ever expire
   more than 15 minutes is logged at ERROR on every sweep.
 - At most 25 facts per workflow step (DynamoDB transactions hold 100 items).
 
+### Early-event inbox (DynamoDB `stint-inbox`, SDD 2.3)
+A domain event that arrives before the `listen` waiting for it is kept here for a short window and consumed
+when the instance suspends; the save that consumes it deletes it in the same transaction.
+
+- Table `stint.aws.dynamodb.inbox-table` (default `stint-inbox`): PK `waitKey` (S), SK `eventId` (S).
+- `expiresAt` (N, epoch seconds) can be enabled as the table's TTL attribute to clean up; reads ignore
+  expired entries on their own (DynamoDB deletes lazily). Reads are strongly consistent.
+- The window is `ResumeReaction`'s (default 5 min, at most 15 min).
+
 ### Facts store (large payloads → `dataref`)
 When a fact is larger than the channel allows (≈256 KB), its `data` goes to a dedicated bucket and the
 event carries the standard CloudEvents `dataref` extension (`s3://<facts-bucket>/facts/<ns>/<name>/<id>`).
@@ -99,7 +108,8 @@ port and aren't idempotent.
 | Case | What happens | Acked? |
 |---|---|---|
 | Body isn't a CloudEvent (bad JSON, missing `id`/`source`/`type`/`specversion`) | logged at ERROR | no → DLQ |
-| Valid event, no binding matches | logged at INFO, dropped | yes |
+| Valid event, no binding matches and no `listen` waits on its type | logged at INFO, dropped | yes |
+| Valid event for a `listen` shape, no instance waiting yet | kept in the early-event inbox | yes |
 | Binding matches a definition this engine doesn't know (deploy skew) | logged | no → DLQ (redrive back after the deploy) |
 | Transient store/transport/timer failure | logged | no → redelivered |
 | Instance created, then its local part fails (e.g. bad `input.from`) | instance persisted as `FAILED` | yes |

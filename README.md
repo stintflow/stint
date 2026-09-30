@@ -176,12 +176,56 @@ transport, so consumers can't couple to the engine's internal protocol:
 - `io.stintflow.task.*` and `io.stintflow.timer.*` are reserved: rejected when loading, registering or
   running an `emit`.
 
+## Waiting for correlated events with `listen` (SDD 2.3)
+
+A `listen` task (DSL 1.0 *Listen*) suspends the instance until correlated domain events arrive:
+
+```yaml
+- awaitReview:
+    try:
+      - wait:
+          listen:
+            to:
+              all:                     # also: one (a single filter) / any
+                - with: { type: io.stintflow.review.completed.v1 }
+                  correlate:
+                    instance: { from: '${ .data.instanceId }', expect: '${ $workflow.id }' }
+                - with: { type: io.stintflow.billing.approved.v1 }
+                  correlate:
+                    instance: { from: '${ .data.instanceId }', expect: '${ $workflow.id }' }
+            read: data                 # data (default) | envelope | raw
+          timeout: { after: { minutes: 10 } }
+    catch:
+      errors: { with: { type: 'stint://errors/timeout' } }
+```
+
+- **Correlation:** each `expect` is evaluated when the instance suspends and each `from` on the arriving
+  event; the instance waits on the key `event:<type>:<shape>:<hash of the values>`, so several `correlate`
+  entries are an AND. The registry indexes every `listen`'s correlation shape by event type, so an arriving
+  event costs one key lookup per shape. A key belongs to one instance: a second instance waiting on the
+  same key fails with `correlation-conflict`.
+- **Output:** an array of the consumed events, in the order they were consumed; `$workflow` is unchanged.
+  The resume's cause is the event (the timer on a timeout); the instance keeps its own chain.
+- **`all`/`any`:** `all` records each event as it arrives (concurrent arrivals are serialized by the
+  versioned save) and resumes on the last; `any`/`one` resume on the first and end the other waits.
+- **Early events:** an `emit` followed by a `listen` saves the wait with the request, and the request is
+  published only after — even an instant answer finds the wait. Any other event that arrives before its
+  wait is kept in an inbox for `ResumeReaction`'s window (default 5 min, max 15) and consumed when the
+  instance suspends.
+- **Timeout:** `timeout.after` must fit the timer (SQS: 15 min) until SDD 2.4; it raises
+  `stint://errors/timeout`, catchable by `try/catch` (no `retry` around a `listen`).
+- **Not yet:** `until`, `foreach`, `any: []`, expressions/regex in `with`, a filter without `correlate` or a
+  correlation without `expect`, one event resuming several instances.
+
+Wire it next to `StartReaction`: `new DomainEventRouter(List.of(new StartReaction(bindings, engine),
+new ResumeReaction(engine)))`.
+
 ## Honest MVP cuts (deliberate, documented)
 
-1. **DSL Fase 2 constructs**: `schedule`, `listen`, `fork`, `wait`, `for` and call types other
+1. **DSL Fase 2 constructs**: `schedule`, `fork`, `wait`, `for` and call types other
    than the `remote` Stint extension are valid CNCF DSL 1.0 but not implemented yet (event-started
    workflows exist programmatically via `TriggerBindings`; reading `schedule.on` from YAML is SDD 2.4;
-   `emit` is implemented since SDD 2.2) — `stint-dsl` fails
+   `emit` is implemented since SDD 2.2, `listen` — the subset above — since SDD 2.3) — `stint-dsl` fails
    the load citing the construct and its JSON Pointer, unless loaded permissively (see
    `stint-example-send-report`).
 2. **AWS transports**: SQS is the default (native + floci-testable). SNS and EventBridge are included
