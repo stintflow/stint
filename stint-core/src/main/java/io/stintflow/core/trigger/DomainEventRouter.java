@@ -13,7 +13,7 @@ import io.stintflow.spi.DomainEventSource;
 
 /**
  * The single consumer of inbound domain events (SDD 2.1, RF4, sec. 8c): one subscriber per bus, and
- * every {@link DomainEventReaction} (start now; resume in SDD 2.3) runs on each event.
+ * every {@link DomainEventReaction} ({@link StartReaction}, SDD 2.3 {@link ResumeReaction}) runs on each event.
  * <p>
  * Acknowledgement policy (sec. 8d), expressed through the returned stage (see {@link DomainEventSource}):
  * <ul>

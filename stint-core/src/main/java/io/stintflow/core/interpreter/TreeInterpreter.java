@@ -14,6 +14,7 @@ import io.stintflow.core.expr.WorkflowDescriptor;
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.EmitNode;
+import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
@@ -82,7 +83,14 @@ public final class TreeInterpreter {
                 return InterpretResult.suspend(remote, pointer, effectiveInput, context);
             }
 
+            if (node instanceof ListenNode listen) {
+                return InterpretResult.suspendOnListen(listen, null, pointer, effectiveInput, context);
+            }
+
             if (node instanceof TryNode tryNode) {
+                if (tryNode.listen() != null) {
+                    return InterpretResult.suspendOnListen(tryNode.listen(), tryNode, pointer, effectiveInput, context);
+                }
                 return InterpretResult.suspendInTry(tryNode, effectiveInput, context);
             }
 
@@ -161,11 +169,12 @@ public final class TreeInterpreter {
     }
 
     /**
-     * Applies a just-completed {@link CallRemoteNode}'s {@code output.as}/{@code export.as} to its
-     * raw remote result, then continues the walk (or completes) from {@code def.next(pointer, ...)}.
-     * Used by {@code WorkflowEngine} on {@code onResult}, so all data-flow semantics stay in one place.
+     * Applies a just-completed suspending node's ({@link CallRemoteNode}, or SDD 2.3 {@link ListenNode})
+     * {@code output.as}/{@code export.as} to its raw output, then continues the walk (or completes) from
+     * {@code def.next(pointer, ...)}. Used by {@code WorkflowEngine} on resume, so all data-flow semantics
+     * stay in one place.
      */
-    public InterpretResult resume(WorkflowDefinition def, WorkflowDescriptor wf, String pointer, CallRemoteNode node,
+    public InterpretResult resume(WorkflowDefinition def, WorkflowDescriptor wf, String pointer, TaskNode node,
             JsonNode rawOutput, JsonNode context) {
         JsonNode outputData = DataFlowSupport.applyExpr(evaluator, node.dataFlow().outputAs(), rawOutput, context, wf);
         JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, node.dataFlow().exportAs(), outputData, context, wf);
@@ -178,12 +187,12 @@ public final class TreeInterpreter {
     }
 
     /**
-     * SDD 1.3: applies a just-succeeded {@link TryNode} body's {@code output.as}/{@code export.as}
+     * SDD 1.3 (and SDD 2.3 for a {@code listen} body): applies a just-succeeded {@link TryNode} body's {@code output.as}/{@code export.as}
      * and continues via the {@code TryNode}'s own {@code then} (not the body's, which is unused for
      * a try'd call — mirrors {@link #resume}).
      */
     public InterpretResult resumeTry(WorkflowDefinition def, WorkflowDescriptor wf, TryNode tryNode, JsonNode rawOutput, JsonNode context) {
-        CallRemoteNode body = tryNode.body();
+        TaskNode body = tryNode.task();
         JsonNode outputData = DataFlowSupport.applyExpr(evaluator, body.dataFlow().outputAs(), rawOutput, context, wf);
         JsonNode newContext = DataFlowSupport.applyExportAs(evaluator, body.dataFlow().exportAs(), outputData, context, wf);
 

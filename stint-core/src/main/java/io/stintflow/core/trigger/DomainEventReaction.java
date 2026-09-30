@@ -6,7 +6,7 @@ import io.cloudevents.CloudEvent;
 
 /**
  * One thing the engine does with an inbound domain event (SDD 2.1, RF4, sec. 8c): start bound
- * definitions ({@link StartReaction}) now, resume instances waiting in {@code listen} in SDD 2.3.
+ * definitions ({@link StartReaction}) or resume instances waiting in {@code listen} (SDD 2.3, {@link ResumeReaction}).
  * <p>
  * Must be idempotent — the event may be redelivered after a partial failure — and complete only once
  * its effects are durably recorded.
