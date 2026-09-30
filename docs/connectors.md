@@ -139,6 +139,12 @@ Verified end to end on floci by `FlociDomainEventTriggerIT`.
 | AWS Lambda | `RequestHandler` shell → `WorkerRuntime` | ⚪ |
 | Knative | HTTP CloudEvents receiver → `WorkerRuntime` | ⚪ |
 
+### Lineage on the wire (SDD 2.5)
+Every transport carries the optional `chainid`, `causationid`, `traceparent` and `tracestate` extensions
+as-is (they're CloudEvent attributes: SQS/SNS/EventBridge bodies keep them). A custom connector must not
+drop unknown extensions. Timer connectors keep their own format (`{timerId, workflowInstanceId}`): the
+engine takes the chain of a timer-resumed instance from its snapshot.
+
 ## Capability honesty
 Every transport declares an `AdapterCapabilities` so the core adapts instead of assuming uniformity:
 payload > `maxPayloadBytes` → claim-check via `BlobStore`; no `dedupSupported` → core dedups by

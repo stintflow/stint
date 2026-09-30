@@ -36,6 +36,7 @@ stint-wire              the CloudEvents wire contract: Json, CeWire,
 stint-core               the cloud-blind orchestrator: dispatch / suspend / resume
 stint-dsl                YAML/JSON front-end: compiles the CNCF DSL 1.0 into stint-core's tree model
 stint-worker-sdk         uniform TaskHandler programming model (depends on stint-wire, not stint-core)
+stint-otel               OpenTelemetry implementation of the tracing port (the only module using OTel)
 connectors/
   stint-inmemory         single-JVM transport/state/timer/blob/domain-event bus — the local dev+test path
   stint-aws              S3 (blob) · DynamoDB (state) · SQS/SNS/EventBridge (transport) · SQS-delay (timer)
@@ -83,19 +84,45 @@ and that the YAML definition and the equivalent Java model produce identical run
 
 ## Wire contract (the real interop surface)
 
-Workers in any language interoperate by honouring three CloudEvent types and six extensions, all defined
-in `stint-spi`'s `StintEvents` and implemented once in `stint-wire`'s `DefaultCloudEventCodec` — reused by
-the orchestrator, `stint-worker-sdk` and every connector, so they always agree on the exact envelope:
+Workers in any language interoperate by honouring two CloudEvent types and a handful of extensions, all
+defined in `stint-spi`'s `StintEvents` and implemented once in `stint-wire`'s `DefaultCloudEventCodec` —
+reused by the orchestrator, `stint-worker-sdk` and every connector, so they always agree on the exact envelope:
 
 ```
 type: io.stintflow.task.invoke.v1   (engine → worker)
 type: io.stintflow.task.result.v1   (worker → engine)
-type: io.stintflow.timer.fire.v1    (timer → engine)
-extensions: correlationid · workflowinstanceid · taskid · attempt · definition · timerid
+extensions: correlationid · workflowinstanceid · taskid · attempt · definition
+            chainid · causationid · traceparent · tracestate      (SDD 2.5, optional)
 ```
+
+- `correlationid` is the correlation of an **attempt**: one dispatch of one task. It matches a result to
+  its invoke; it is not a business correlation.
+- `chainid` is the business chain: the same value on every event of every workflow along the path (a
+  meeting → its minutes → an ADR). An event without one starts a new chain.
+- `causationid` is the id of the event that directly caused this one (for work resumed by a timer, the
+  timer's id — timer fires travel in the timer connector's own format, not as CloudEvents).
+- `traceparent`/`tracestate` are the CloudEvents Distributed Tracing extension (W3C Trace Context).
+
+All four are optional on read: an event in the older format is accepted.
 
 `definition` carries the workflow's `namespace:name:version` — `TaskContext.definition()` on the worker
 side is the exact version the running instance started with, not necessarily the latest registered one.
+
+## Tracing and structured logs (SDD 2.5)
+
+- **Spans:** every engine activation and every task execution is one short span that ends before the
+  instance suspends — no span stays open across a wait. Engine → worker → engine is parent-child (one
+  trace); a resume after a wait (timer, `listen`) or a start by another workflow's fact is a new trace with
+  a span *link*. Spans carry identifiers only (instance, chain, cause, workflow, task, attempt, correlation),
+  never inputs, outputs or payloads.
+- **OpenTelemetry** lives in `stint-otel` only (`spi`, `wire`, `core` and the worker SDK are OTel-free,
+  enforced by ArchUnit). Pass `new OpenTelemetryExecutionTracer(openTelemetry)` to the `WorkflowEngine`
+  and `WorkerRuntime` constructors; the default is a no-op that forwards the incoming trace context.
+- **Logs:** the engine and the worker put `stint.chainId`, `stint.causationId`, `stint.instanceId`,
+  `stint.workflow`, `stint.taskId`, `stint.correlationId`, `stint.attempt`, `traceId` and `spanId` in the
+  SLF4J MDC. The Quarkus bundles and examples log JSON (`quarkus-logging-json`), which includes the MDC.
+  Outside Quarkus, add any SLF4J 2 binding whose MDC works (Logback, Log4j 2, or `slf4j-jdk14`) —
+  `slf4j-simple`'s MDC is a no-op.
 
 ## Starting workflows from domain events (SDD 2.1)
 
