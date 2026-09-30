@@ -74,4 +74,19 @@ final class DynamoDbTestTables {
                 .build());
         ddb.waiter().waitUntilTableExists(r -> r.tableName(outboxTable));
     }
+
+    /** SDD 2.3, sec. 8c: {@code stint-inbox} (PK {@code waitKey}, SK {@code eventId}) for early events. */
+    static void createInbox(DynamoDbClient ddb, String inboxTable) {
+        ddb.createTable(CreateTableRequest.builder()
+                .tableName(inboxTable)
+                .attributeDefinitions(
+                        AttributeDefinition.builder().attributeName("waitKey").attributeType(ScalarAttributeType.S).build(),
+                        AttributeDefinition.builder().attributeName("eventId").attributeType(ScalarAttributeType.S).build())
+                .keySchema(
+                        KeySchemaElement.builder().attributeName("waitKey").keyType(KeyType.HASH).build(),
+                        KeySchemaElement.builder().attributeName("eventId").keyType(KeyType.RANGE).build())
+                .billingMode(BillingMode.PAY_PER_REQUEST)
+                .build());
+        ddb.waiter().waitUntilTableExists(r -> r.tableName(inboxTable));
+    }
 }
