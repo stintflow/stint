@@ -60,6 +60,16 @@ class ArchitectureTest {
             .that().resideInAnyPackage("io.stintflow.wire..")
             .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.core..");
 
+    /**
+     * SDD 2.5, 8c: tracing is a port (strings + {@code ExecutionTracer}); OpenTelemetry lives only in
+     * {@code stint-otel}. The worker SDK is included so lightweight workers never drag OTel in either.
+     */
+    @ArchTest
+    static final ArchRule spi_wire_core_and_worker_sdk_have_no_opentelemetry = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.worker..")
+            .should().dependOnClassesThat().resideInAnyPackage("io.opentelemetry..");
+
     /** SDD 1.4, RNF2 — migrated here from stint-dsl's own ArchitectureTest. */
     @ArchTest
     static final ArchRule core_never_depends_on_dsl = noClasses()
