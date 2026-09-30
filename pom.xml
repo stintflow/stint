@@ -39,6 +39,7 @@
         <module>stint-core</module>
         <module>stint-dsl</module>
         <module>stint-worker-sdk</module>
+        <module>stint-otel</module>
         <module>connectors/stint-inmemory</module>
         <module>connectors/stint-aws</module>
         <module>bundles/stint-bundle-local</module>
@@ -103,6 +104,11 @@
             <dependency>
                 <groupId>io.github.stintflow</groupId>
                 <artifactId>stint-worker-sdk</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-otel</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
