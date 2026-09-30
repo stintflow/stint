@@ -249,6 +249,9 @@ public final class TreeInterpreter {
             if (EMIT_ATTRIBUTES.contains(field.getKey())) {
                 continue;
             }
+            if (ENGINE_SET_EXTENSIONS.contains(field.getKey())) {
+                return "extension attribute '" + field.getKey() + "' is set by the engine (SDD 2.5 lineage)";
+            }
             // Extension attribute: CloudEvents names are lowercase letters/digits; values are scalars.
             if (!field.getKey().matches("[a-z0-9]{1,20}")) {
                 return "extension attribute name '" + field.getKey() + "' is not a valid CloudEvents name "
@@ -261,6 +264,10 @@ public final class TreeInterpreter {
         }
         return null;
     }
+
+    /** SDD 2.5: chain/cause/trace are the engine's to set on a fact, never the author's. */
+    private static final Set<String> ENGINE_SET_EXTENSIONS = Set.of(
+            StintEvents.EXT_CHAIN_ID, StintEvents.EXT_CAUSATION_ID, StintEvents.EXT_TRACEPARENT, StintEvents.EXT_TRACESTATE);
 
     private static final Set<String> EMIT_ATTRIBUTES = Set.of(
             "id", "source", "type", "time", "subject", "datacontenttype", "dataschema", "data", "specversion");

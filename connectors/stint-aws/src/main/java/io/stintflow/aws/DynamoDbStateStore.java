@@ -19,6 +19,7 @@ import io.stintflow.wire.Json;
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
+import io.stintflow.spi.Lineage;
 import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.RetryState;
 import io.stintflow.spi.SaveOutcome;
@@ -138,6 +139,12 @@ public class DynamoDbStateStore implements StateStore {
         }
         if (snap.startedAt() != null) {
             item.put("startedAt", AttributeValue.fromN(Long.toString(snap.startedAt().toEpochMilli())));
+        }
+        // SDD 2.5: the chain and the suspending activation's trace context (optional attributes).
+        putIfSet(item, "chainId", snap.chainId());
+        if (snap.suspendedAt() != null) {
+            putIfSet(item, "suspendedTraceparent", snap.suspendedAt().traceparent());
+            putIfSet(item, "suspendedTracestate", snap.suspendedAt().tracestate());
         }
 
         Put.Builder builder = Put.builder().tableName(instancesTable).item(item);
@@ -278,6 +285,10 @@ public class DynamoDbStateStore implements StateStore {
         // SDD 2.1, RF6: tolerant read — items written before SDD 2.1 have neither attribute.
         AttributeValue input = item.get("input");
         AttributeValue startedAt = item.get("startedAt");
+        // SDD 2.5, tolerant read: items written before SDD 2.5 have no chain or trace attributes.
+        AttributeValue chainId = item.get("chainId");
+        AttributeValue traceparent = item.get("suspendedTraceparent");
+        AttributeValue tracestate = item.get("suspendedTracestate");
         return new InstanceSnapshot(
                 item.get("instanceId").s(),
                 WorkflowRef.parse(item.get("definition").s()),
@@ -289,7 +300,15 @@ public class DynamoDbStateStore implements StateStore {
                 retryState == null ? null : retryStateFromJson(Json.read(retryState.s().getBytes())),
                 Instant.ofEpochMilli(Long.parseLong(item.get("updatedAt").n())),
                 input == null ? null : Json.read(input.s().getBytes()),
-                startedAt == null ? null : Instant.ofEpochMilli(Long.parseLong(startedAt.n())));
+                startedAt == null ? null : Instant.ofEpochMilli(Long.parseLong(startedAt.n())),
+                chainId == null ? null : chainId.s(),
+                traceparent == null ? null : Lineage.trace(traceparent.s(), tracestate == null ? null : tracestate.s()));
+    }
+
+    private static void putIfSet(Map<String, AttributeValue> item, String name, String value) {
+        if (value != null && !value.isBlank()) {
+            item.put(name, AttributeValue.fromS(value));
+        }
     }
 
     private static ObjectNode retryStateToJson(RetryState state) {

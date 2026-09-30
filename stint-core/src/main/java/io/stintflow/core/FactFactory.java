@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.stintflow.spi.Lineage;
 import io.stintflow.spi.WorkflowRef;
 import io.stintflow.spi.wire.StintEvents;
 import io.stintflow.wire.Json;
@@ -50,9 +51,9 @@ final class FactFactory {
         return UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8)).toString();
     }
 
-    /** The fact with its {@code data} inline. */
-    static CloudEvent build(String id, JsonNode with, Instant now) {
-        CloudEventBuilder builder = attributes(id, with, now);
+    /** The fact with its {@code data} inline, carrying the emitting activation's {@code lineage} (SDD 2.5). */
+    static CloudEvent build(String id, JsonNode with, Instant now, Lineage lineage) {
+        CloudEventBuilder builder = attributes(id, with, now, lineage);
         JsonNode data = with.get("data");
         if (data != null && !data.isNull()) {
             builder.withData(dataBytes(data, contentType(with)));
@@ -61,8 +62,8 @@ final class FactFactory {
     }
 
     /** The same fact with its {@code data} replaced by a {@code dataref} pointer (sec. 8d). */
-    static CloudEvent buildWithDataref(String id, JsonNode with, Instant now, URI dataref) {
-        return attributes(id, with, now).withExtension(DATAREF, dataref.toString()).build();
+    static CloudEvent buildWithDataref(String id, JsonNode with, Instant now, URI dataref, Lineage lineage) {
+        return attributes(id, with, now, lineage).withExtension(DATAREF, dataref.toString()).build();
     }
 
     /** The {@code data} bytes as they'd travel inline — what goes to the facts store when too large. */
@@ -81,7 +82,7 @@ final class FactFactory {
         return "facts/" + ref.namespace() + "/" + ref.name() + "/" + id;
     }
 
-    private static CloudEventBuilder attributes(String id, JsonNode with, Instant now) {
+    private static CloudEventBuilder attributes(String id, JsonNode with, Instant now, Lineage lineage) {
         String type = with.get("type").asText();
         if (StintEvents.isReservedType(type)) {
             // Unreachable by construction (the interpreter fails such an emit); kept as a last guard.
@@ -115,7 +116,19 @@ final class FactFactory {
                 builder.withExtension(field.getKey(), value.intValue());
             }
         }
+        // SDD 2.5 (sec. 8a/8d): chain, cause and the trace context of the emitting activation — set by the
+        // engine only (the interpreter rejects an emit that tries to set them).
+        putIfSet(builder, StintEvents.EXT_CHAIN_ID, lineage.chainId());
+        putIfSet(builder, StintEvents.EXT_CAUSATION_ID, lineage.causationId());
+        putIfSet(builder, StintEvents.EXT_TRACEPARENT, lineage.traceparent());
+        putIfSet(builder, StintEvents.EXT_TRACESTATE, lineage.tracestate());
         return builder;
+    }
+
+    private static void putIfSet(CloudEventBuilder builder, String name, String value) {
+        if (value != null && !value.isBlank()) {
+            builder.withExtension(name, value);
+        }
     }
 
     /** DSL 1.0: "If omitted, it implies the data is a JSON value conforming to the application/json media type." */

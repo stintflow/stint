@@ -7,7 +7,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.InstantSource;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -35,8 +37,11 @@ import io.stintflow.core.model.TryNode;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.EventPublisher;
+import io.stintflow.spi.ExecutionSpan;
+import io.stintflow.spi.ExecutionTracer;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
+import io.stintflow.spi.Lineage;
 import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.RetryState;
 import io.stintflow.spi.SaveOutcome;
@@ -46,11 +51,13 @@ import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskTransport;
 import io.stintflow.spi.TimerRequest;
 import io.stintflow.spi.TimerService;
+import io.stintflow.spi.TraceAttributes;
 import io.stintflow.spi.Wait;
 import io.stintflow.spi.WorkflowRef;
 import io.cloudevents.CloudEvent;
 import io.stintflow.wire.CeWire;
 import io.stintflow.wire.ClaimCheck;
+import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.wire.Json;
 
 /**
@@ -100,6 +107,8 @@ public final class WorkflowEngine {
     /** SDD 2.2, sec. 8d: where fact payloads above the publisher's limit go ({@code dataref}); may be {@code null}. */
     private final BlobStore factBlob;
     private final OutboxRelay relay;
+    /** SDD 2.5: short spans per activation through the SPI port; {@link ExecutionTracer#NOOP} by default. */
+    private final ExecutionTracer tracer;
 
     /** SDD 2.2, sec. 8c: the outbox shares the activation's transaction (100 items max in DynamoDB). */
     static final int MAX_FACTS_PER_ACTIVATION = 25;
@@ -130,6 +139,17 @@ public final class WorkflowEngine {
     public WorkflowEngine(WorkflowRegistry registry, TaskTransport transport, StateStore state,
                           TimerService timer, BlobStore blob, TreeInterpreter interpreter, InstantSource clock,
                           EventPublisher publisher, BlobStore factBlob) {
+        this(registry, transport, state, timer, blob, interpreter, clock, publisher, factBlob, ExecutionTracer.NOOP);
+    }
+
+    /**
+     * SDD 2.5: with a tracer ({@code stint-otel} provides an OpenTelemetry one). Every activation is one short
+     * span that ends before the instance suspends; see {@link #resumeWithRetry} for when it is a child of the
+     * event that caused it and when it only links to it.
+     */
+    public WorkflowEngine(WorkflowRegistry registry, TaskTransport transport, StateStore state,
+                          TimerService timer, BlobStore blob, TreeInterpreter interpreter, InstantSource clock,
+                          EventPublisher publisher, BlobStore factBlob, ExecutionTracer tracer) {
         this.registry = registry;
         this.transport = transport;
         this.state = state;
@@ -140,6 +160,7 @@ public final class WorkflowEngine {
         this.publisher = publisher;
         this.factBlob = factBlob;
         this.relay = publisher == null ? null : new OutboxRelay(state, publisher, clock);
+        this.tracer = tracer;
         this.transport.onResult(this::onResult);
         this.timer.onFire(this::onTimerFire);
     }
@@ -148,14 +169,25 @@ public final class WorkflowEngine {
     public String start(WorkflowRef ref, JsonNode input) {
         WorkflowDefinition def = registry.find(ref)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown workflow: " + ref.canonical()));
-        Instance inst = new Instance(UUID.randomUUID().toString(), input, clock.instant());
-        String instanceId = inst.id();
-        // $context starts equal to the workflow's raw input (RF5/SDD 1.1 sec. 8c): there is no prior
-        // export.as yet, so the instance's accumulated context and its initial data coincide.
-        InterpretResult result = interpreter.run(def, inst.descriptor(ref), WorkflowDefinition.ROOT_POINTER, input, input);
-        // A freshly minted UUID has no concurrent writer, so a CONFLICT here is a genuine bug, not a
-        // race to retry — no retry loop needed for the very first save.
-        commit(inst, def, result, 0, List.of())
+        String instanceId = UUID.randomUUID().toString();
+        // SDD 2.5, sec. 8a rule 4: a programmatic start begins a new chain; nothing caused it.
+        String chainId = newChainId(instanceId);
+        ExecutionSpan span = startActivation(instanceId, chainId, null, ref, null, List.of());
+        Instance inst = new Instance(instanceId, input, clock.instant(), chainId,
+                new Lineage(chainId, null, null, null).withTrace(span.context()));
+        CompletionStage<SaveOutcome> committed;
+        try (LogContext log = logContext(inst, ref)) {
+            // $context starts equal to the workflow's raw input (RF5/SDD 1.1 sec. 8c): there is no prior
+            // export.as yet, so the instance's accumulated context and its initial data coincide.
+            InterpretResult result = interpreter.run(def, inst.descriptor(ref), WorkflowDefinition.ROOT_POINTER, input, input);
+            // A freshly minted UUID has no concurrent writer, so a CONFLICT here is a genuine bug, not a
+            // race to retry — no retry loop needed for the very first save.
+            committed = commit(inst, def, result, 0, List.of());
+        } catch (RuntimeException e) {
+            endSpan(span, e);
+            throw e;
+        }
+        committed.whenComplete((outcome, ex) -> endSpan(span, ex))
                 .thenAccept(outcome -> {
                     if (outcome != SaveOutcome.OK) {
                         completeExceptionally(instanceId,
@@ -194,15 +226,28 @@ public final class WorkflowEngine {
         }
         String instanceId = triggeredInstanceId(target, trigger);
         JsonNode input = Json.MAPPER.createArrayNode().add(Json.read(CeWire.toJson(trigger)));
-        Instance inst = new Instance(instanceId, input, clock.instant());
-        InterpretResult result;
-        try {
-            result = interpreter.run(def, inst.descriptor(target), WorkflowDefinition.ROOT_POINTER, input, input);
+        // SDD 2.5, sec. 8a: inherit the trigger's chain, or start a deterministic new one (legacy/external/cron);
+        // the trigger is the cause. Sec. 8b: another workflow's event starts a new trace, linked to it.
+        Lineage triggerLineage = DefaultCloudEventCodec.lineage(trigger);
+        String chainId = triggerLineage.chainId() != null ? triggerLineage.chainId() : chainIdOf(trigger);
+        ExecutionSpan span = startActivation(instanceId, chainId, trigger.getId(), target, null,
+                triggerLineage.hasTrace() ? List.of(triggerLineage) : List.of());
+        Instance inst = new Instance(instanceId, input, clock.instant(), chainId,
+                new Lineage(chainId, trigger.getId(), null, null).withTrace(span.context()));
+        CompletionStage<SaveOutcome> committed;
+        try (LogContext log = logContext(inst, target)) {
+            InterpretResult result;
+            try {
+                result = interpreter.run(def, inst.descriptor(target), WorkflowDefinition.ROOT_POINTER, input, input);
+            } catch (RuntimeException e) {
+                result = InterpretResult.failed(WorkflowDefinition.ROOT_POINTER, input,
+                        "Failed to start from event " + trigger.getId() + ": " + e.getMessage());
+            }
+            committed = commit(inst, def, result, 0, List.of());
         } catch (RuntimeException e) {
-            result = InterpretResult.failed(WorkflowDefinition.ROOT_POINTER, input,
-                    "Failed to start from event " + trigger.getId() + ": " + e.getMessage());
+            committed = CompletableFuture.failedFuture(e);
         }
-        return commit(inst, def, result, 0, List.of()).thenCompose(outcome -> {
+        return committed.whenComplete((outcome, ex) -> endSpan(span, ex)).thenCompose(outcome -> {
             if (outcome == SaveOutcome.OK) {
                 return CompletableFuture.completedFuture(instanceId);
             }
@@ -225,6 +270,46 @@ public final class WorkflowEngine {
     public static String triggeredInstanceId(WorkflowRef target, CloudEvent trigger) {
         String name = target.canonical() + '\n' + trigger.getSource() + '\n' + trigger.getId();
         return "evt-" + UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** SDD 2.5, sec. 8a rule 2: an event without a chain starts one, the same for every redelivery/fan-out target. */
+    static String chainIdOf(CloudEvent trigger) {
+        String name = "chain|" + trigger.getSource() + '|' + trigger.getId();
+        return "chn-" + UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** SDD 2.5, sec. 8a rule 4 (and the fallback for snapshots written before SDD 2.5). */
+    static String newChainId(String instanceId) {
+        String name = "chain|" + instanceId;
+        return "chn-" + UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private ExecutionSpan startActivation(String instanceId, String chainId, String causationId, WorkflowRef ref,
+            Lineage parent, List<Lineage> links) {
+        return tracer.start("stint.activation", identifiers(instanceId, chainId, causationId, ref), parent, links);
+    }
+
+    /** SDD 2.5, decision 7: identifiers only — never input, output or payloads. */
+    private static Map<String, String> identifiers(String instanceId, String chainId, String causationId, WorkflowRef ref) {
+        Map<String, String> ids = new HashMap<>();
+        ids.put(TraceAttributes.INSTANCE_ID, instanceId);
+        ids.put(TraceAttributes.CHAIN_ID, chainId);
+        if (causationId != null) {
+            ids.put(TraceAttributes.CAUSATION_ID, causationId);
+        }
+        ids.put(TraceAttributes.WORKFLOW, ref.canonical());
+        return ids;
+    }
+
+    private static LogContext logContext(Instance inst, WorkflowRef ref) {
+        return LogContext.open(identifiers(inst.id(), inst.chainId(), inst.activation().causationId(), ref), inst.trace());
+    }
+
+    private static void endSpan(ExecutionSpan span, Throwable failure) {
+        if (failure != null) {
+            span.recordFailure(failure);
+        }
+        span.close();
     }
 
     /** Convenience for tests/sync callers: start and await completion with the default timeout. */
@@ -319,7 +404,34 @@ public final class WorkflowEngine {
                 // wait is still unconsumed, and the save() below is still version+wait conditional, so
                 // atomicity doesn't depend on this extra check.
                 InstanceSnapshot snap = optSnap.get();
-                return advance(snap, event, waitKey)
+                // SDD 2.5: the activation's lineage — the instance's own chain, the event as its cause, and
+                // (sec. 8b) a child span of the worker's span for a prompt result, or a link to the span that
+                // suspended when resuming after a wait (timer, or a result that carries no trace).
+                String chainId = snap.chainId() != null ? snap.chainId() : newChainId(instanceId);
+                Lineage suspended = snap.suspendedAt();
+                Lineage parent = null;
+                List<Lineage> links = suspended != null && suspended.hasTrace() ? List.of(suspended) : List.of();
+                String causationId;
+                if (event instanceof ResumeEvent.TaskCompleted tc) {
+                    causationId = tc.result().correlationId();
+                    if (tc.result().lineage().hasTrace()) {
+                        parent = tc.result().lineage();
+                        links = List.of();
+                    }
+                } else {
+                    causationId = ((ResumeEvent.TimerElapsed) event).timerId(); // decision 6: a timer fire, not a wire event
+                }
+                ExecutionSpan span = startActivation(instanceId, chainId, causationId, snap.definition(), parent, links);
+                Lineage activation = new Lineage(chainId, causationId, null, null).withTrace(span.context());
+                CompletionStage<SaveOutcome> advanced;
+                try (LogContext log = LogContext.open(identifiers(instanceId, chainId, causationId, snap.definition()),
+                        activation)) {
+                    advanced = advance(snap, event, waitKey, activation);
+                } catch (RuntimeException e) {
+                    advanced = CompletableFuture.failedFuture(e);
+                }
+                return advanced
+                        .whenComplete((outcome, ex) -> endSpan(span, ex))
                         .thenCompose(outcome -> afterAttempt(waitKey, event, attempt, outcome))
                         .exceptionally(ex -> {
                             failExistingInstance(instanceId, ex);
@@ -352,7 +464,7 @@ public final class WorkflowEngine {
                 InstanceSnapshot snap = optSnap.get();
                 InstanceSnapshot failedSnap = new InstanceSnapshot(snap.instanceId(), snap.definition(),
                         snap.position(), null, snap.context(), InstanceStatus.FAILED, snap.version() + 1, null,
-                        clock.instant(), snap.input(), snap.startedAt());
+                        clock.instant(), snap.input(), snap.startedAt(), snap.chainId(), snap.suspendedAt());
                 return state.save(failedSnap, snap.version(), List.of(), List.of(waitKey))
                         .thenAccept(outcome -> completeExceptionally(snap.instanceId(), new RuntimeException(
                                 "State store write conflict persisted after " + MAX_RETRY_ATTEMPTS
@@ -362,9 +474,10 @@ public final class WorkflowEngine {
     }
 
     /** Applies a task result or timer fire to the snapshot it was found waiting on; returns the save outcome. */
-    private CompletionStage<SaveOutcome> advance(InstanceSnapshot snap, ResumeEvent event, String waitKey) {
+    private CompletionStage<SaveOutcome> advance(InstanceSnapshot snap, ResumeEvent event, String waitKey,
+            Lineage activation) {
         WorkflowDefinition def = registry.find(snap.definition()).orElseThrow();
-        Instance inst = Instance.of(snap);
+        Instance inst = Instance.of(snap, activation);
         String instanceId = inst.id();
         WorkflowDescriptor wf = inst.descriptor(snap.definition());
         TaskNode node = def.at(snap.position());
@@ -469,7 +582,7 @@ public final class WorkflowEngine {
         RetryState newRetryState = new RetryState(tryNode.pointer(), attempt, firstAttemptAt, error, null);
         InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(), retryKey,
                 snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState, clock.instant(),
-                inst.input(), inst.startedAt());
+                inst.input(), inst.startedAt(), inst.chainId(), inst.trace());
 
         return armThenSave(new TimerRequest(retryKey, instanceId, null, clock.instant().plus(delay)),
                 () -> state.save(next, snap.version(),
@@ -500,10 +613,10 @@ public final class WorkflowEngine {
                             prior != null ? prior.lastError() : null, correlationId);
                     InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(),
                             taskKey, snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState,
-                            clock.instant(), inst.input(), inst.startedAt());
+                            clock.instant(), inst.input(), inst.startedAt(), inst.chainId(), inst.trace());
                     Duration timeout = effectiveTimeout(body);
                     TaskInvocation inv = new TaskInvocation(instanceId, snap.position(), correlationId,
-                            snap.definition(), body.routingKey(), wireInput, nextAttempt);
+                            snap.definition(), body.routingKey(), wireInput, nextAttempt, inst.activation());
 
                     return armThenSave(new TimerRequest(timerKey, instanceId, correlationId, clock.instant().plus(timeout)),
                             () -> state.save(next, snap.version(),
@@ -642,7 +755,7 @@ public final class WorkflowEngine {
             int seq = i;
             chain = chain.thenCompose(entries -> {
                 String id = FactFactory.factId(e.with(), inst.id(), baseVersion, e.pointer(), e.occurrence());
-                CloudEvent inline = FactFactory.build(id, e.with(), now);
+                CloudEvent inline = FactFactory.build(id, e.with(), now, inst.activation());
                 byte[] json = CeWire.toJson(inline);
                 CompletionStage<CloudEvent> fact;
                 if (json.length <= publisher.capabilities().maxPayloadBytes() || !FactFactory.hasData(e.with())) {
@@ -652,7 +765,7 @@ public final class WorkflowEngine {
                             + json.length + " bytes, above the publisher's limit, and no facts store is configured"));
                 } else {
                     fact = factBlob.put(FactFactory.dataBytes(e.with()), FactFactory.factKey(def.ref(), id))
-                            .thenApply(ref -> FactFactory.buildWithDataref(id, e.with(), now, ref));
+                            .thenApply(ref -> FactFactory.buildWithDataref(id, e.with(), now, ref, inst.activation()));
                 }
                 return fact.thenApply(ce -> {
                     entries.add(new OutboxEntry(id, inst.id(), seq,
@@ -686,11 +799,11 @@ public final class WorkflowEngine {
                 .thenCompose(wireInput -> {
                     InstanceSnapshot snap = new InstanceSnapshot(instanceId, def.ref(), position, taskKey, context,
                             InstanceStatus.WAITING, expectedVersion + 1, retryState, clock.instant(),
-                            inst.input(), inst.startedAt());
+                            inst.input(), inst.startedAt(), inst.chainId(), inst.trace());
                     Duration timeout = effectiveTimeout(node);
                     int attempt = retryState != null ? retryState.attempt() : 1;
                     TaskInvocation inv = new TaskInvocation(instanceId, position, correlationId, def.ref(),
-                            node.routingKey(), wireInput, attempt);
+                            node.routingKey(), wireInput, attempt, inst.activation());
 
                     return armThenSave(new TimerRequest(timerKey, instanceId, correlationId, clock.instant().plus(timeout)),
                             () -> state.save(snap, expectedVersion,
@@ -734,7 +847,7 @@ public final class WorkflowEngine {
             Runnable onSuccess, List<OutboxEntry> outbox) {
         String instanceId = inst.id();
         InstanceSnapshot snap = new InstanceSnapshot(instanceId, ref, position, null, context, status,
-                expectedVersion + 1, null, clock.instant(), inst.input(), inst.startedAt());
+                expectedVersion + 1, null, clock.instant(), inst.input(), inst.startedAt(), inst.chainId(), inst.trace());
         return state.save(snap, expectedVersion, List.of(), consumeWaitKeys, outbox)
                 .thenApply(outcome -> {
                     if (outcome == SaveOutcome.OK) {
@@ -763,7 +876,7 @@ public final class WorkflowEngine {
         state.load(instanceId).thenAccept(opt -> opt.ifPresent(snap -> {
             InstanceSnapshot failedSnap = new InstanceSnapshot(instanceId, snap.definition(), snap.position(),
                     null, snap.context(), InstanceStatus.FAILED, snap.version() + 1, null, clock.instant(),
-                    snap.input(), snap.startedAt());
+                    snap.input(), snap.startedAt(), snap.chainId(), snap.suspendedAt());
             List<String> consume = snap.waitingKey() == null ? List.of() : List.of(snap.waitingKey());
             state.save(failedSnap, snap.version(), List.of(), consume);
         }));
@@ -775,10 +888,16 @@ public final class WorkflowEngine {
      * input and start time the DSL 1.0 {@code $workflow} descriptor exposes. Carried unchanged into
      * every snapshot so a resume on another engine sees the same {@code $workflow}.
      */
-    private record Instance(String id, JsonNode input, Instant startedAt) {
+    private record Instance(String id, JsonNode input, Instant startedAt, String chainId, Lineage activation) {
 
-        static Instance of(InstanceSnapshot snap) {
-            return new Instance(snap.instanceId(), snap.input(), snap.startedAt());
+        /** SDD 2.5: {@code activation} = chain, cause and trace context of the activation now running. */
+        static Instance of(InstanceSnapshot snap, Lineage activation) {
+            return new Instance(snap.instanceId(), snap.input(), snap.startedAt(), activation.chainId(), activation);
+        }
+
+        /** What the snapshot keeps for the next activation to link to (SDD 2.5, 8b). */
+        Lineage trace() {
+            return Lineage.trace(activation.traceparent(), activation.tracestate());
         }
 
         WorkflowDescriptor descriptor(WorkflowRef ref) {

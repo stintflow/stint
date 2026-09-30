@@ -23,6 +23,12 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-wire</artifactId>
         </dependency>
+        <!-- SDD 2.5 (decision 3): MDC for structured logs. API only — the binding is the application's
+             (Quarkus wires it to JBoss LogManager); no Quarkus dependency here. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
         <dependency>
             <groupId>net.thisptr</groupId>
             <artifactId>jackson-jq</artifactId>

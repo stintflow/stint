@@ -23,7 +23,10 @@ import com.fasterxml.jackson.databind.JsonNode;
  *                    event-started instance, the array of triggering events), or {@code null} for
  *                    snapshots written before SDD 2.1
  * @param startedAt   when the instance was created (DSL 1.0 {@code $workflow.startedAt}), or {@code null}
- *                    for snapshots written before SDD 2.1
+ *                    for snapshots written before SDD 2.1 * @param chainId     root of the business chain this instance belongs to (SDD 2.5) — fixed at creation;
+ *                    {@code null} for snapshots written before SDD 2.5
+ * @param suspendedAt trace context ({@code traceparent}/{@code tracestate}) of the activation that wrote
+ *                    this snapshot — what the next activation links to after a wait (SDD 2.5, 8b)
  */
 public record InstanceSnapshot(
         String instanceId,
@@ -36,7 +39,17 @@ public record InstanceSnapshot(
         RetryState retryState,
         Instant updatedAt,
         JsonNode input,
-        Instant startedAt) {
+        Instant startedAt,
+        String chainId,
+        Lineage suspendedAt) {
+
+    /** The pre-SDD-2.5 shape: no chain, no trace context. */
+    public InstanceSnapshot(String instanceId, WorkflowRef definition, String position, String waitingKey,
+                            JsonNode context, InstanceStatus status, long version, RetryState retryState,
+                            Instant updatedAt, JsonNode input, Instant startedAt) {
+        this(instanceId, definition, position, waitingKey, context, status, version, retryState, updatedAt, input,
+                startedAt, null, null);
+    }
 
     public enum InstanceStatus {RUNNING, WAITING, COMPLETED, FAILED, ABORTED}
 }
