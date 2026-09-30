@@ -23,10 +23,14 @@ import com.fasterxml.jackson.databind.JsonNode;
  *                    event-started instance, the array of triggering events), or {@code null} for
  *                    snapshots written before SDD 2.1
  * @param startedAt   when the instance was created (DSL 1.0 {@code $workflow.startedAt}), or {@code null}
- *                    for snapshots written before SDD 2.1 * @param chainId     root of the business chain this instance belongs to (SDD 2.5) — fixed at creation;
+ *                    for snapshots written before SDD 2.1
+ * @param chainId     root of the business chain this instance belongs to (SDD 2.5) — fixed at creation;
  *                    {@code null} for snapshots written before SDD 2.5
  * @param suspendedAt trace context ({@code traceparent}/{@code tracestate}) of the activation that wrote
  *                    this snapshot — what the next activation links to after a wait (SDD 2.5, 8b)
+ * @param listenState the engine's opaque {@code listen} bookkeeping (SDD 2.3, sec. 8b/8c): the active wait's
+ *                    keys and the events it already consumed, plus the ids of recently consumed events;
+ *                    {@code null} when the instance never listened
  */
 public record InstanceSnapshot(
         String instanceId,
@@ -41,14 +45,23 @@ public record InstanceSnapshot(
         JsonNode input,
         Instant startedAt,
         String chainId,
-        Lineage suspendedAt) {
+        Lineage suspendedAt,
+        JsonNode listenState) {
+
+    /** The pre-SDD-2.3 shape: no {@code listen} bookkeeping. */
+    public InstanceSnapshot(String instanceId, WorkflowRef definition, String position, String waitingKey,
+                            JsonNode context, InstanceStatus status, long version, RetryState retryState,
+                            Instant updatedAt, JsonNode input, Instant startedAt, String chainId, Lineage suspendedAt) {
+        this(instanceId, definition, position, waitingKey, context, status, version, retryState, updatedAt, input,
+                startedAt, chainId, suspendedAt, null);
+    }
 
     /** The pre-SDD-2.5 shape: no chain, no trace context. */
     public InstanceSnapshot(String instanceId, WorkflowRef definition, String position, String waitingKey,
                             JsonNode context, InstanceStatus status, long version, RetryState retryState,
                             Instant updatedAt, JsonNode input, Instant startedAt) {
         this(instanceId, definition, position, waitingKey, context, status, version, retryState, updatedAt, input,
-                startedAt, null, null);
+                startedAt, null, null, null);
     }
 
     public enum InstanceStatus {RUNNING, WAITING, COMPLETED, FAILED, ABORTED}
