@@ -31,6 +31,20 @@
             <artifactId>stint-core</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- SDD 2.5 tests: a real WorkerRuntime (results carry lineage) and an SLF4J binding whose MDC works
+             (slf4j-simple has a no-op MDC; the JUL binding uses BasicMDCAdapter). -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-sdk</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-jdk14</artifactId>
+            <version>2.0.17</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

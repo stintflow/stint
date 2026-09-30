@@ -3,6 +3,7 @@ package io.stintflow.inmemory;
 import static io.stintflow.inmemory.EmitPublishTest.order;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
@@ -16,6 +17,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
+import io.cloudevents.CloudEvent;
 import io.stintflow.core.WorkflowDefinition;
 import io.stintflow.core.WorkflowEngine;
 import io.stintflow.core.builder.WorkflowBuilder;
@@ -32,6 +34,8 @@ import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.Wait;
 import io.stintflow.spi.WorkflowRef;
+import io.stintflow.spi.wire.StintEvents;
+import io.stintflow.wire.CeWire;
 import io.stintflow.wire.Json;
 
 /**
@@ -105,6 +109,14 @@ class OutboxRelayTest {
         transportB.deliverResult(result).toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         assertThat(publisherB.published()).singleElement().satisfies(e -> assertThat(e.getId()).isEqualTo(lost.eventId()));
+        // SDD 2.5, CA6 (RNF2, decision 5): the re-run yields the same chain and cause too. The trace context may
+        // legitimately differ between the two attempts, so it is deliberately not compared.
+        CloudEvent lostFact = CeWire.fromJson(lost.event().getBytes(StandardCharsets.UTF_8));
+        CloudEvent publishedFact = publisherB.published().get(0);
+        assertThat(publishedFact.getExtension(StintEvents.EXT_CHAIN_ID)).isNotNull()
+                .isEqualTo(lostFact.getExtension(StintEvents.EXT_CHAIN_ID));
+        assertThat(publishedFact.getExtension(StintEvents.EXT_CAUSATION_ID)).isNotNull()
+                .isEqualTo(lostFact.getExtension(StintEvents.EXT_CAUSATION_ID));
         assertThat(state.load(instanceId).toCompletableFuture().get(5, TimeUnit.SECONDS).orElseThrow().status())
                 .isEqualTo(InstanceStatus.COMPLETED);
         assertThat(state.pendingOutbox(Instant.MAX.minusSeconds(1), 10).toCompletableFuture().get()).isEmpty(); // CA6
