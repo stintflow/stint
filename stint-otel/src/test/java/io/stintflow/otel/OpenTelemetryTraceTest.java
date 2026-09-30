@@ -9,6 +9,8 @@ import java.time.Instant;
 import java.time.InstantSource;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -29,10 +31,12 @@ import io.opentelemetry.sdk.trace.export.SpanExporter;
 import io.stintflow.core.WorkflowEngine;
 import io.stintflow.core.WorkflowRegistry;
 import io.stintflow.core.builder.WorkflowBuilder;
+import io.stintflow.core.expr.Expr;
 import io.stintflow.core.expr.JqExpressionEvaluator;
 import io.stintflow.core.interpreter.TreeInterpreter;
 import io.stintflow.core.model.DataFlow;
 import io.stintflow.core.model.FlowDirective;
+import io.stintflow.core.model.ListenNode;
 import io.stintflow.inmemory.FilesystemBlobStore;
 import io.stintflow.inmemory.InMemoryStateStore;
 import io.stintflow.inmemory.InMemoryTaskTransport;
@@ -56,6 +60,8 @@ import io.stintflow.worker.WorkerRuntime;
  *       the task), all short spans, one {@code traceId};</li>
  *   <li>CA4 — after a wait (timer) the resume is a new trace with a <em>link</em> to the span that suspended,
  *       never a child; a start by another workflow's event is likewise a new trace linked to that event;</li>
+ *   <li>SDD 2.3, RF6 — a resume by a {@code listen}ed event is a new trace linked to the event and to the
+ *       span that suspended;</li>
  *   <li>CA8 — every recorded attribute is an identifier from {@link TraceAttributes#ALLOWED}.</li>
  * </ul>
  */
@@ -144,6 +150,38 @@ class OpenTelemetryTraceTest {
             assertThat(linked.getTraceId()).isEqualTo(upstreamTrace);
             assertThat(linked.getSpanId()).isEqualTo(upstreamSpan);
         });
+    }
+
+    @Test
+    void sdd23_a_resume_by_a_listened_event_links_to_the_event_and_to_the_suspension() throws Exception {
+        Spans spans = new Spans();
+        String reviewed = "io.acme.review.completed.v1";
+        WorkflowRegistry registry = registryWith(WorkflowBuilder.create()
+                .listen("awaitReview", ListenNode.Strategy.ONE, List.of(new ListenNode.Filter(reviewed, Map.of(),
+                        new TreeMap<>(Map.of("instance", new ListenNode.Correlation(Expr.jq(".data.instanceId"),
+                                Expr.jq("$workflow.id")))))), null, null, DataFlow.NONE)
+                .build(REF));
+        WorkflowEngine engine = new WorkflowEngine(registry, new SilentTransport(), new InMemoryStateStore(),
+                new InMemoryTimerService(InstantSource.system()),
+                new FilesystemBlobStore(Files.createTempDirectory("stint-otel-listen")),
+                new TreeInterpreter(new JqExpressionEvaluator()), InstantSource.system(), null, null, spans.tracer());
+        String instanceId = engine.start(REF, Json.obj());
+        SpanData suspending = spans.await(1).get(0);
+        String upstreamTrace = "4bf92f3577b34da6a3ce929d0e0e4736";
+        String upstreamSpan = "00f067aa0ba902b7";
+        var data = Json.obj().put("instanceId", instanceId);
+        CloudEvent event = CloudEventBuilder.v1().withId("rev-1").withSource(URI.create("https://acme.example/review"))
+                .withType(reviewed).withDataContentType("application/json").withData(Json.bytes(data))
+                .withExtension(StintEvents.EXT_TRACEPARENT, "00-" + upstreamTrace + "-" + upstreamSpan + "-01").build();
+
+        engine.onDomainEvent(event, Duration.ofMinutes(5)).toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        SpanData resumed = spans.await(2).get(1);
+        assertThat(resumed.getParentSpanContext().isValid()).isFalse(); // a new trace, not a child of the event
+        assertThat(resumed.getLinks()).extracting(l -> l.getSpanContext().getSpanId())
+                .containsExactlyInAnyOrder(suspending.getSpanId(), upstreamSpan);
+        assertThat(resumed.getAttributes().get(AttributeKey.stringKey(TraceAttributes.CAUSATION_ID))).isEqualTo("rev-1");
+        assertIdentifiersOnly(spans.await(2));
     }
 
     private static void assertIdentifiersOnly(Collection<SpanData> spans) {
