@@ -188,6 +188,18 @@ class FlociEmitIT {
                 CloudEvent announce = facts.stream().filter(e -> e.getType().equals(INVOICED)).findFirst().orElseThrow();
                 assertThat(announce.getId()).isEqualTo(announceId); // the same id as the failed attempt
 
+                // SDD 2.5: the lineage survives EventBridge (default and domain buses), SQS and DynamoDB — the invoke,
+                // both facts and the persisted snapshot share one chain; the facts' cause is the result that
+                // resumed the instance (= the invoke's correlation id).
+                String chainId = invocation.lineage().chainId();
+                assertThat(chainId).isNotBlank();
+                assertThat(facts).allSatisfy(e -> {
+                    assertThat(e.getExtension(StintEvents.EXT_CHAIN_ID)).isEqualTo(chainId);
+                    assertThat(e.getExtension(StintEvents.EXT_CAUSATION_ID)).isEqualTo(invocation.correlationId());
+                });
+                assertThat(state.load(instanceId).toCompletableFuture().get(10, TimeUnit.SECONDS).orElseThrow().chainId())
+                        .isEqualTo(chainId);
+
                 // CA4: the large fact carries a dataref into the facts bucket, readable after completion.
                 CloudEvent report = facts.stream().filter(e -> e.getType().equals(REPORTED)).findFirst().orElseThrow();
                 assertThat(report.getData()).isNull();
