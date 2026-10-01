@@ -48,11 +48,17 @@ public final class StintEvents {
     public static final String CONTENT_TYPE_JSON = "application/json";
 
     /**
-     * SDD 2.2, RNF1/sec. 8e: type prefixes of the internal protocol. A domain fact ({@code emit}) may
+     * SDD 2.2, RNF1/sec. 8e (SDD 2.4 adds {@code io.stintflow.schedule.}): type prefixes of the internal protocol. A domain fact ({@code emit}) may
      * never use them — the domain channel must not carry, or be mistaken for, engine traffic.
      */
     public static final List<String> RESERVED_TYPE_PREFIXES =
-            List.of("io.stintflow.task.", "io.stintflow.timer.");
+            List.of("io.stintflow.task.", "io.stintflow.timer.", "io.stintflow.schedule.");
+
+    /**
+     * SDD 2.4, sec. 8e (Stint extension): the synthetic event a schedule occurrence starts an instance with.
+     * Internal to the start — never published on a bus.
+     */
+    public static final String TYPE_SCHEDULE_FIRED = "io.stintflow.schedule.fired.v1";
 
     /** Whether {@code type} belongs to the internal protocol ({@link #RESERVED_TYPE_PREFIXES}). */
     public static boolean isReservedType(String type) {
