@@ -8,6 +8,7 @@ import java.util.Optional;
 
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.FlowDirective;
+import io.stintflow.core.model.Schedule;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.spi.WorkflowRef;
 
@@ -18,10 +19,17 @@ import io.stintflow.spi.WorkflowRef;
  * <p>
  * Produced today by the programmatic builder ({@code WorkflowBuilder}); a YAML/JSON front-end
  * (SDD 1.4) is a swappable, later increment that compiles to this same tree.
+ * <p>
+ * SDD 2.4: {@code schedule} is the definition's DSL 1.0 {@code schedule}, or {@code null}.
  */
-public record WorkflowDefinition(WorkflowRef ref, DoNode root) {
+public record WorkflowDefinition(WorkflowRef ref, DoNode root, Schedule schedule) {
 
     static final String ROOT_POINTER = "";
+
+    /** A definition without a {@code schedule}. */
+    public WorkflowDefinition(WorkflowRef ref, DoNode root) {
+        this(ref, root, null);
+    }
 
     public WorkflowDefinition {
         if (!ROOT_POINTER.equals(root.pointer())) {
