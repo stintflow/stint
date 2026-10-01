@@ -1,8 +1,7 @@
 # CNCF Serverless Workflow definition for the send-report flow (SDD 1.4, CA2/CA3; SDD 2.2, CA8).
-# 'schedule' is a valid DSL 1.0 construct not implemented yet (SDD 2.4) — loading this file strictly
-# (LoadOptions.STRICT) must fail citing it; loading it permissively (LoadOptions.PERMISSIVE) drops it
-# (with a warning). The 'emit' task is supported since SDD 2.2: it publishes 'report-sent' on the
-# domain channel after 'sendEmail'.
+# 'schedule' is supported since SDD 2.4 (a five-field cron, UTC unless document.metadata sets the Stint
+# extension 'stint.schedule.timezone'). The 'emit' task is supported since SDD 2.2: it publishes
+# 'report-sent' on the domain channel after 'sendEmail'.
 document:
   dsl: '1.0.0'
   namespace: reports

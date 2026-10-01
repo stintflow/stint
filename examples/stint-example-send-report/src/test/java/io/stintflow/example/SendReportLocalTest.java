@@ -33,8 +33,8 @@ import io.stintflow.worker.TaskHandlerRegistry;
 import io.stintflow.worker.WorkerRuntime;
 
 /**
- * SDD 1.4, CA2: {@code send-report.yaml} loaded permissively (RF3's escape hatch drops the
- * unsupported {@code schedule}, with a warning) runs end to end with {@link SendEmailHandler} and a
+ * SDD 1.4, CA2: {@code send-report.yaml} (loaded permissively — since SDD 2.4 nothing in it is dropped)
+ * runs end to end with {@link SendEmailHandler} and a
  * fake {@link MailGateway}. SDD 2.2, CA8: its {@code emit} now runs too — the {@code report-sent} fact
  * is published on the domain channel.
  */

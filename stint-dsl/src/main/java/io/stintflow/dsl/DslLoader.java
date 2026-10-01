@@ -6,7 +6,9 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.time.DateTimeException;
 import java.time.Duration;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -29,10 +31,13 @@ import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.FlowDirective;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.RetryPolicy;
+import io.stintflow.core.model.Schedule;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
+import io.stintflow.core.trigger.EventFilter;
+import io.stintflow.spi.CronExpression;
 import io.stintflow.spi.WorkflowRef;
 import io.stintflow.spi.wire.StintEvents;
 
@@ -140,9 +145,7 @@ public final class DslLoader {
             String version = requireText(document, "version", "/document/version");
             WorkflowRef ref = new WorkflowRef(namespace, name, version);
 
-            if (root.has("schedule")) {
-                unsupported("/schedule", "top-level 'schedule' is not supported in this phase (Fase 2)");
-            }
+            Schedule schedule = root.has("schedule") ? compileSchedule(root.get("schedule"), document) : null;
 
             JsonNode doArray = root.get("do");
             List<TaskNode> tasks = doArray != null && doArray.isArray()
@@ -152,7 +155,103 @@ public final class DslLoader {
             failIfAnyHardErrors();
 
             DoNode rootNode = new DoNode("root", "", DataFlow.NONE, FlowDirective.END, tasks);
-            return new WorkflowDefinition(ref, rootNode);
+            return new WorkflowDefinition(ref, rootNode, schedule);
+        }
+
+        /**
+         * SDD 2.4, RF1: DSL 1.0 {@code schedule} — "Configures the schedule of a workflow". {@code cron} is a
+         * five-field expression in the portable subset of {@link CronExpression} (sec. 8b); {@code every} must
+         * have a cron equivalent; {@code on} takes {@code one} or {@code any} of exact-match event filters,
+         * started through the SDD 2.1 bindings. {@code after} and {@code on} with {@code all}, {@code until} or
+         * {@code correlate} are reported as unsupported. The time zone comes from the Stint extension
+         * {@code document.metadata["stint.schedule.timezone"]} (IANA id; default UTC, sec. 8c).
+         */
+        private Schedule compileSchedule(JsonNode schedule, JsonNode document) {
+            if (schedule.has("after")) {
+                unsupported("/schedule/after", "'schedule.after' is not supported in this phase");
+                return null;
+            }
+            ZoneId zone = ZoneId.of("UTC");
+            JsonNode tz = document.path("metadata").get(Schedule.TIMEZONE_METADATA);
+            if (tz != null) {
+                try {
+                    zone = ZoneId.of(tz.asText());
+                } catch (DateTimeException e) {
+                    hardError("/document/metadata/" + Schedule.TIMEZONE_METADATA,
+                            "unknown time zone '" + tz.asText() + "' (use an IANA id such as America/Sao_Paulo)", null);
+                    return null;
+                }
+            }
+            CronExpression cron = null;
+            try {
+                if (schedule.has("cron")) {
+                    cron = CronExpression.parse(schedule.get("cron").asText());
+                } else if (schedule.has("every")) {
+                    cron = CronExpression.every(compileDurationSpec(schedule.get("every")));
+                }
+            } catch (IllegalArgumentException | DateTimeException e) {
+                hardError(schedule.has("cron") ? "/schedule/cron" : "/schedule/every", e.getMessage(), null);
+                return null;
+            }
+            List<EventFilter> on = new ArrayList<>();
+            if (schedule.has("on")) {
+                JsonNode to = schedule.get("on");
+                if (to.has("all") || to.has("until")) {
+                    unsupported("/schedule/on", "'schedule.on' with 'all' or 'until' is not supported in this phase");
+                    return null;
+                }
+                List<JsonNode> filters = new ArrayList<>();
+                String filtersPointer;
+                if (to.has("one")) {
+                    filters.add(to.get("one"));
+                    filtersPointer = "/schedule/on/one";
+                } else if (to.has("any") && to.get("any").isArray() && !to.get("any").isEmpty()) {
+                    to.get("any").forEach(filters::add);
+                    filtersPointer = "/schedule/on/any";
+                } else {
+                    unsupported("/schedule/on", "'schedule.on' needs 'one' or a non-empty 'any' in this phase");
+                    return null;
+                }
+                for (int i = 0; i < filters.size(); i++) {
+                    String pointer = to.has("one") ? filtersPointer : filtersPointer + "/" + i;
+                    EventFilter filter = compileStartFilter(filters.get(i), pointer);
+                    if (filter == null) {
+                        return null;
+                    }
+                    on.add(filter);
+                }
+            }
+            if (cron == null && on.isEmpty()) {
+                hardError("/schedule", "'schedule' needs 'cron', 'every' or 'on'", null);
+                return null;
+            }
+            return new Schedule(cron, zone, on);
+        }
+
+        /** An exact-match filter that starts a definition (SDD 2.1 {@link EventFilter}); no {@code correlate}. */
+        private EventFilter compileStartFilter(JsonNode filter, String pointer) {
+            if (filter.has("correlate")) {
+                unsupported(pointer + "/correlate", "'correlate' when starting a workflow is not supported in this phase");
+                return null;
+            }
+            JsonNode with = filter.path("with");
+            if (!with.isObject() || !with.hasNonNull("type")) {
+                hardError(pointer + "/with/type", "an event filter requires 'with.type'", null);
+                return null;
+            }
+            Map<String, String> attributes = new LinkedHashMap<>();
+            for (Iterator<String> it = with.fieldNames(); it.hasNext(); ) {
+                String attribute = it.next();
+                JsonNode value = with.get(attribute);
+                if (!value.isValueNode() || isExpression(value)) {
+                    unsupported(pointer + "/with/" + attribute, "only exact values are supported in an event "
+                            + "filter's 'with' in this phase (no runtime expressions)");
+                    return null;
+                }
+                attributes.put(attribute, value.asText());
+            }
+            String type = attributes.remove("type");
+            return new EventFilter(type, attributes);
         }
 
         /** Compiles a {@code do}/{@code try}-style list of single-key task maps into pointered nodes. */
