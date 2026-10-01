@@ -220,20 +220,42 @@ A `listen` task (DSL 1.0 *Listen*) suspends the instance until correlated domain
 Wire it next to `StartReaction`: `new DomainEventRouter(List.of(new StartReaction(bindings, engine),
 new ResumeReaction(engine)))`.
 
+## Schedules and long timers (SDD 2.4)
+
+```yaml
+document:
+  metadata:
+    stint.schedule.timezone: America/Sao_Paulo   # Stint extension; UTC by default
+schedule:
+  cron: '0 7 * * 1-5'          # or every: { minutes: 15 }, or on: { one: { with: { type: ... } } }
+```
+
+- `schedule.cron`/`every` become one EventBridge Scheduler schedule per definition (in-memory: `tick()` on a
+  controllable clock). Every replica reconciles them create-only at startup; `prune()` is an explicit deploy
+  step.
+- An occurrence starts the definition through the idempotent start of SDD 2.1, with a synthetic
+  `io.stintflow.schedule.fired.v1` event whose id is `<schedule>@<scheduled instant>`. A duplicated delivery
+  creates nothing, and each run starts a new chain.
+- `schedule.on` (`one`/`any`, exact `with`) binds through `TriggerBindings.bindDeclaredSchedules()`.
+- Timers beyond SQS's 15 minutes (a 48 h `listen`, a long retry) go through `DelayRoutingTimerService` to
+  Scheduler one-time schedules. These are deleted after firing and deliver the same timer JSON to the same
+  queue.
+- **Not yet:** `schedule.after`, `schedule.on` with `all`/`until`/`correlate`, input for scheduled runs, catching
+  up missed occurrences.
+
 ## Honest MVP cuts (deliberate, documented)
 
-1. **DSL Fase 2 constructs**: `schedule`, `fork`, `wait`, `for` and call types other
-   than the `remote` Stint extension are valid CNCF DSL 1.0 but not implemented yet (event-started
-   workflows exist programmatically via `TriggerBindings`; reading `schedule.on` from YAML is SDD 2.4;
-   `emit` is implemented since SDD 2.2, `listen` — the subset above — since SDD 2.3) — `stint-dsl` fails
+1. **DSL Fase 2 constructs**: `fork`, `wait`, `for` and call types other than the `remote` Stint
+   extension are valid CNCF DSL 1.0 but not implemented yet (`emit` is implemented since SDD 2.2,
+   `listen` — the subset above — since SDD 2.3, `schedule` — cron/every/on — since SDD 2.4) — `stint-dsl` fails
    the load citing the construct and its JSON Pointer, unless loaded permissively (see
    `stint-example-send-report`).
 2. **AWS transports**: SQS is the default (native + floci-testable). SNS and EventBridge are included
    as `@Alternative` connectors (opt-in). EventBridge uses the raw AWS SDK → **native caveat**: it
    needs reflection registration for native image; the SQS/S3/DynamoDB path is fully native via
    Quarkus extensions.
-3. **EventBridge Scheduler timer** (delays > 15 min) and the **Lambda/Knative worker bindings** are
-   mapped in `docs/connectors.md` but not yet coded.
+3. The **Lambda/Knative worker bindings** are mapped in `docs/connectors.md` but not yet coded (the
+   EventBridge Scheduler timer exists since SDD 2.4).
 4. **`WorkflowEngine.awaitCompletion`** polls the `StateStore` — fine for tests and one-off synchronous
    calls, not designed for high-volume production use. It also can't report *why* an instance failed,
    only that it did: `InstanceSnapshot` doesn't persist a failure reason, only the terminal status.

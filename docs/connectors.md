@@ -27,7 +27,47 @@ Each **port** (abstraction) is a socket; each **connector** is a plug. The core 
 |---|---|---|
 | Local | in-memory | 🟢 |
 | AWS | SQS DelaySeconds (≤ 15 min) | 🟢 |
-| AWS | EventBridge Scheduler (long delays) | ⚪ |
+| AWS | EventBridge Scheduler one-time schedules (long delays, SDD 2.4) | 🟢 |
+
+Compose them with `DelayRoutingTimerService(sqsTimers, schedulerTimers, clock)` (in `stint-core`): up to
+15 min goes to SQS, longer to the Scheduler; its `maxDelay()` is the Scheduler's (`stint.aws.scheduler.timer-max-delay`,
+default 365 days), so register definitions against it. A long timer is an `at(...)` schedule in UTC, **rounded up
+to the minute** (never early; fires within ~1 min after `fireAt`), `ActionAfterCompletion=DELETE`, in the group
+`stint.aws.scheduler.timer-group` (default `stint-timers`). Its target is the **same timer queue**
+(`stint.aws.scheduler.timer-target-arn` = the ARN of `stint.aws.sqs.timer-queue-url`) with the **same JSON**
+`{timerId, workflowInstanceId}`, so `SqsDelayTimerService`'s poller fires both. `EventBridgeSchedulerTimerService`
+is injectable by its own type only (`@Typed`): `TimerService` injection points keep resolving to SQS.
+
+## ScheduleService — recurring schedules (`schedule.cron` / `every`, SDD 2.4)
+| Ecosystem | Connector | MVP |
+|---|---|---|
+| Local | in-memory (controllable clock, `tick()`) | 🟢 |
+| AWS | EventBridge Scheduler (`cron(...)` + `ScheduleExpressionTimezone`) | 🟢 |
+
+- **Reconcile at startup on every replica:** `new ScheduleReconciler(registry, schedules).reconcile()`. It is
+  create-only and idempotent: an existing name is a no-op, so concurrent replicas converge. Nothing is ever
+  removed automatically.
+- **Prune explicitly** as a deploy/CLI step, with the deployed version's definitions:
+  `reconciler.prune()` deletes the schedules in the group that no registered definition wants.
+- **One group per application:** `stint.aws.scheduler.group` (default `stint-schedules`). Schedule names are
+  content-addressed (`stint-` + 40 hex of definition | cron | zone), so changing a cron creates a new schedule
+  and leaves the old one for `prune()`.
+- **Target:** the schedule queue `stint.aws.sqs.schedule-queue-url`, whose ARN goes in
+  `stint.aws.scheduler.schedule-target-arn`. The role in `stint.aws.scheduler.role-arn` must allow
+  `sqs:SendMessage` on both queues. Wire `schedules.onFire(new ScheduledStart(registry, engine))`.
+- **Each occurrence** starts the definition through the SDD 2.1 idempotent start, with a synthetic CloudEvent:
+  `type io.stintflow.schedule.fired.v1`, `id <schedule>@<scheduled instant>`. A duplicated delivery is therefore
+  a no-op, and every occurrence starts a new chain.
+  - AWS substitutes `<aws.scheduler.scheduled-time>` in the input.
+  - floci doesn't; the engine then takes the last occurrence at or before the message's `SentTimestamp`.
+- **Cron:** five POSIX fields, translated to AWS's six (`0 7 * * 1-5` → `cron(0 7 ? * 2-6 *)`). The loader rejects
+  what has no equivalent: day-of-month and day-of-week both restricted, steps on the day of the week, wrapping
+  ranges, macros, `? L W #`. `every` must divide an hour or a day.
+- **Time zone:** UTC unless `document.metadata["stint.schedule.timezone"]` (Stint extension, IANA id) says
+  otherwise. Daylight saving follows `java.time`: a skipped time fires at the shifted instant, a repeated one
+  fires once. AWS documents DST adjustment but not the repeated hour, so verify that case on AWS if it matters.
+- **Native:** the Scheduler client is the raw SDK v2 (no Quarkus extension), with the same reflection caveat as
+  EventBridge.
 | Generic | DB-poller · Redis timer wheel · Quartz | ⚪ |
 
 ## BlobStore — claim-check / large payload offload
