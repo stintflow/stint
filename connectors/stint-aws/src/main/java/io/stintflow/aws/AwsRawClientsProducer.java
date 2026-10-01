@@ -10,9 +10,10 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.eventbridge.EventBridgeClient;
+import software.amazon.awssdk.services.scheduler.SchedulerClient;
 
 /**
- * CDI producers for AWS clients that have no Quarkus extension (currently EventBridge).
+ * CDI producers for AWS clients that have no Quarkus extension (EventBridge; EventBridge Scheduler, SDD 2.4).
  * <p>
  * The {@code stint.aws.endpoint-override} property points these at floci ({@code http://localhost:4566}).
  */
@@ -35,6 +36,20 @@ public class AwsRawClientsProducer {
     @ApplicationScoped
     public EventBridgeClient eventBridgeClient() {
         var builder = EventBridgeClient.builder()
+                .region(Region.of(region))
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create(accessKey, secretKey)));
+        if (!endpointOverride.isBlank()) {
+            builder.endpointOverride(URI.create(endpointOverride));
+        }
+        return builder.build();
+    }
+
+    /** SDD 2.4: EventBridge Scheduler (schedules and long timers). */
+    @Produces
+    @ApplicationScoped
+    public SchedulerClient schedulerClient() {
+        var builder = SchedulerClient.builder()
                 .region(Region.of(region))
                 .credentialsProvider(StaticCredentialsProvider.create(
                         AwsBasicCredentials.create(accessKey, secretKey)));

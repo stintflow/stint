@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
 import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 
 /**
@@ -69,6 +70,8 @@ final class SqsPollLoop {
                         .queueUrl(queueUrl.get())
                         .maxNumberOfMessages(10)
                         .waitTimeSeconds(5)
+                        // SDD 2.4: the schedule poller derives an occurrence from SentTimestamp (sec. 8e).
+                        .messageSystemAttributeNames(MessageSystemAttributeName.SENT_TIMESTAMP)
                         .build());
                 for (Message m : resp.messages()) {
                     handleOne(m);
