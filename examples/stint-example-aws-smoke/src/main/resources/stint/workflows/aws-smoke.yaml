@@ -1,0 +1,31 @@
+# SDD 2.7: the smallest workflow that touches every AWS connector of the bundle.
+# - schedule.cron  -> an EventBridge Scheduler schedule (reconciled at startup)
+# - call: remote   -> SQS task transport, worker in-process; its 20-minute timeout is beyond SQS's 15 min, so it
+#                     is armed as an EventBridge Scheduler one-time schedule (and cancelled when the result arrives)
+# - emit           -> the EventBridge domain bus, through the DynamoDB outbox
+document:
+  dsl: '1.0.0'
+  namespace: smoke
+  name: aws-smoke
+  version: '1.0.0'
+schedule:
+  cron: '0 9 * * MON'
+do:
+  - echo:
+      call: remote
+      with:
+        task: echo
+        input:
+          name: ${ .name }
+      timeout:
+        after:
+          minutes: 20
+      export:
+        as: '${ . }'
+  - announce:
+      emit:
+        event:
+          with:
+            source: https://stintflow.io/smoke
+            type: io.stintflow.smoke.done.v1
+            data: ${ $context }

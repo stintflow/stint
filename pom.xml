@@ -47,6 +47,7 @@
         <module>examples/stint-example-build-report</module>
         <module>examples/stint-example-send-report</module>
         <module>examples/stint-example-archive-report</module>
+        <module>examples/stint-example-aws-smoke</module>
         <module>stint-it</module>
         <module>stint-architecture-tests</module>
     </modules>

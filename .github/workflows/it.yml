@@ -25,4 +25,5 @@ jobs:
           cache: maven
 
       - name: Integration tests
-        run: mvn -B -ntp -pl stint-it -am verify
+        # SDD 2.7: the AWS smoke app (JVM jar) runs end to end against floci too.
+        run: mvn -B -ntp -pl stint-it,examples/stint-example-aws-smoke -am verify
