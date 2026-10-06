@@ -285,9 +285,9 @@ and the publication, the outbox sweep of another engine still delivers the fact.
    the load citing the construct and its JSON Pointer, unless loaded permissively (see
    `stint-example-send-report`).
 2. **AWS transports**: SQS is the default (native + floci-testable). SNS and EventBridge are included
-   as `@Alternative` connectors (opt-in). EventBridge uses the raw AWS SDK → **native caveat**: it
-   needs reflection registration for native image; the SQS/S3/DynamoDB path is fully native via
-   Quarkus extensions.
+   as `@Alternative` connectors (opt-in). Every AWS client — S3, DynamoDB, SQS, SNS, EventBridge and
+   EventBridge Scheduler — comes from its Quarkus extension (SDD 2.7). The `stint-example-aws-smoke` app runs
+   them end to end over floci, as a JVM jar in `it.yml` and as a native image in the on-demand `native.yml`.
 3. The **Lambda/Knative worker bindings** are mapped in `docs/connectors.md` but not yet coded (the
    EventBridge Scheduler timer exists since SDD 2.4).
 4. **`WorkflowEngine.awaitCompletion`** polls the `StateStore` — fine for tests and one-off synchronous
@@ -297,6 +297,7 @@ and the publication, the outbox sweep of another engine still delivers the fact.
 ## floci
 
 [floci](https://github.com/floci-io/floci) is a lightweight local AWS emulator (≈90 MB, ~24 ms start)
-exposing AWS-shaped services on `http://localhost:4566`. Connectors point at it via
-`stint.aws.endpoint-override` (raw clients) and the standard `quarkus.<svc>.endpoint-override` (Quarkus
-extensions). It replaces LocalStack for CI and local dev.
+exposing AWS-shaped services on `http://localhost:4566`. Connectors point at it via the standard
+`quarkus.<svc>.endpoint-override` of each Quarkus extension (`sqs`, `dynamodb`, `s3`, `sns`, `eventbridge`,
+`eventbridge-scheduler` — not `scheduler`, which is Quarkus's own scheduling extension). It replaces
+LocalStack for CI and local dev.

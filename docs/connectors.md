@@ -9,7 +9,7 @@ Each **port** (abstraction) is a socket; each **connector** is a plug. The core 
 | Local | in-memory (same JVM) | 🟢 |
 | AWS | SQS (default) | 🟢 |
 | AWS | SNS (fan-out, `@Alternative`) | 🟢 |
-| AWS | EventBridge (`@Alternative`, raw SDK) | 🟢 |
+| AWS | EventBridge (`@Alternative`, `quarkus-amazon-eventbridge`) | 🟢 |
 | Generic | Kafka · NATS · RabbitMQ | ⚪ |
 | K8s | Knative Eventing | ⚪ |
 | Azure / GCP | Service Bus · Pub/Sub | ⚪ |
@@ -59,15 +59,24 @@ is injectable by its own type only (`@Typed`): `TimerService` injection points k
   `type io.stintflow.schedule.fired.v1`, `id <schedule>@<scheduled instant>`. A duplicated delivery is therefore
   a no-op, and every occurrence starts a new chain.
   - AWS substitutes `<aws.scheduler.scheduled-time>` in the input.
-  - floci doesn't; the engine then takes the last occurrence at or before the message's `SentTimestamp`.
+  - A delivery without it is a misconfigured `Input`: it is not acked and ends up in the DLQ (SDD 2.7).
+  - Only for emulators that don't substitute it (floci), set `stint.aws.scheduler.sent-timestamp-fallback=true`.
+    The engine then takes the last occurrence at or before the message's `SentTimestamp`, and rejects a delivery
+    half a period or more after it.
 - **Cron:** five POSIX fields, translated to AWS's six (`0 7 * * 1-5` → `cron(0 7 ? * 2-6 *)`). The loader rejects
   what has no equivalent: day-of-month and day-of-week both restricted, steps on the day of the week, wrapping
   ranges, macros, `? L W #`. `every` must divide an hour or a day.
 - **Time zone:** UTC unless `document.metadata["stint.schedule.timezone"]` (Stint extension, IANA id) says
   otherwise. Daylight saving follows `java.time`: a skipped time fires at the shifted instant, a repeated one
   fires once. AWS documents DST adjustment but not the repeated hour, so verify that case on AWS if it matters.
-- **Native:** the Scheduler client is the raw SDK v2 (no Quarkus extension), with the same reflection caveat as
-  EventBridge.
+- **Clients (SDD 2.7):** `quarkus-amazon-eventbridge` and `quarkus-amazon-scheduler` produce the clients, configured
+  through `quarkus.eventbridge.*` and `quarkus.eventbridge-scheduler.*` (endpoint override, region, credentials,
+  `sync-client.type=url`). Mind the prefix: `quarkus.scheduler.*` belongs to Quarkus's own scheduler and is
+  ignored here. A client whose configuration is ignored falls back to dev services, or to the default AWS
+  credentials chain.
+- **Native:** proven by `stint-example-aws-smoke`. Run
+  `mvn -Pnative verify -Dquarkus.native.container-build=true -pl examples/stint-example-aws-smoke -am`; it needs
+  Docker, no local GraalVM.
 | Generic | DB-poller · Redis timer wheel · Quartz | ⚪ |
 
 ## BlobStore — claim-check / large payload offload
