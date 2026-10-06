@@ -38,6 +38,7 @@ import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
 import io.stintflow.core.trigger.EventFilter;
 import io.stintflow.spi.CronExpression;
+import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.WorkflowRef;
 import io.stintflow.spi.wire.StintEvents;
 
@@ -569,7 +570,13 @@ public final class DslLoader {
                     jq.append(" and ");
                 }
                 first = false;
-                jq.append('(').append('.').append(field).append(" == ").append(TemplateCompiler.compileTemplate(with.get(field))).append(')');
+                JsonNode value = with.get(field);
+                if ("type".equals(field) && value.isTextual() && !isExpression(value)) {
+                    // SDD 2.8: stint://errors/* is an alias of the DSL 1.0 standard type the engine raises.
+                    value = com.fasterxml.jackson.databind.node.TextNode.valueOf(
+                            ErrorInfo.normalize(java.net.URI.create(value.textValue())).toString());
+                }
+                jq.append('(').append('.').append(field).append(" == ").append(TemplateCompiler.compileTemplate(value)).append(')');
             }
             if (jq.isEmpty()) {
                 return null;

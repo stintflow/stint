@@ -40,7 +40,7 @@ class ListenTimeoutTest {
     private static final DataFlow EXPORT_OUTPUT = new DataFlow(null, null, Expr.jq("."));
     /** Catches only timeouts; the compensation's result flows on as the data. */
     private static final TryNode.Catch ON_TIMEOUT = new TryNode.Catch(
-            Expr.jq(".type == \"stint://errors/timeout\""), null, null, null,
+            Expr.jq(".type == \"https://serverlessworkflow.io/spec/1.0.0/errors/timeout\""), null, null, null,
             Expr.jq("{timedOut: true}"), FlowDirective.CONTINUE);
 
     private static WorkflowDefinition awaitOrEscalate() {

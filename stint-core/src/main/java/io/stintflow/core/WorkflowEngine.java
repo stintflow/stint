@@ -545,8 +545,11 @@ public final class WorkflowEngine {
             });
         }
 
-        ErrorInfo error = event instanceof ResumeEvent.TaskCompleted tc ? tc.result().error()
-                : ErrorInfo.timeout("Task at " + snap.position() + " did not respond within its timeout");
+        // SDD 2.8: the standard type, its status, and the failing component's pointer as instance.
+        ErrorInfo error = (event instanceof ResumeEvent.TaskCompleted tc && tc.result().error() != null
+                ? tc.result().error()
+                : ErrorInfo.timeout("Task at " + snap.position() + " did not respond within its timeout"))
+                .raisedAt(snap.position());
 
         if (node instanceof TryNode tryNode) {
             return handleTryFailure(inst, def, tryNode, snap, error, consumeKeys);
@@ -683,7 +686,8 @@ public final class WorkflowEngine {
 
     private static JsonNode errorToJsonForEval(ErrorInfo error) {
         var node = Json.obj();
-        node.put("type", error.type() == null ? null : error.type().toString());
+        // SDD 2.8: normalized, so a catch on a legacy stint://errors/* type and one on the standard type both match.
+        node.put("type", error.type() == null ? null : ErrorInfo.normalize(error.type()).toString());
         if (error.status() != null) {
             node.put("status", error.status());
         }
@@ -1006,7 +1010,7 @@ public final class WorkflowEngine {
 
         if (!(event instanceof ResumeEvent.EventArrived arrived)) {
             ErrorInfo error = ErrorInfo.timeout("listen at " + snap.position()
-                    + " did not receive the events it waits for within its timeout");
+                    + " did not receive the events it waits for within its timeout").raisedAt(snap.position());
             if (tryNode != null) {
                 return handleTryFailure(inst, def, tryNode, snap, error, consumeAll);
             }
