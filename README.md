@@ -212,7 +212,7 @@ A `listen` task (DSL 1.0 *Listen*) suspends the instance until correlated domain
             read: data                 # data (default) | envelope | raw
           timeout: { after: { minutes: 10 } }
     catch:
-      errors: { with: { type: 'stint://errors/timeout' } }
+      errors: { with: { type: 'https://serverlessworkflow.io/spec/1.0.0/errors/timeout' } }
 ```
 
 - **Correlation:** each `expect` is evaluated when the instance suspends and each `from` on the arriving
@@ -229,7 +229,8 @@ A `listen` task (DSL 1.0 *Listen*) suspends the instance until correlated domain
   wait is kept in an inbox for `ResumeReaction`'s window (default 5 min, max 15) and consumed when the
   instance suspends.
 - **Timeout:** `timeout.after` must fit the timer (SQS: 15 min) until SDD 2.4; it raises
-  `stint://errors/timeout`, catchable by `try/catch` (no `retry` around a `listen`).
+  the DSL 1.0 standard `https://serverlessworkflow.io/spec/1.0.0/errors/timeout` (status 408), catchable by
+  `try/catch` (no `retry` around a `listen`).
 - **Not yet:** `until`, `foreach`, `any: []`, expressions/regex in `with`, a filter without `correlate` or a
   correlation without `expect`, one event resuming several instances.
 
@@ -276,6 +277,17 @@ and the publication, the outbox sweep of another engine still delivers the fact.
 - **Locally:** `SendReportMilestoneLocalTest`, with a controllable clock and in-memory everything.
 - **On floci:** `FlociSendReportMilestoneIT`, with real SQS, EventBridge, EventBridge Scheduler, DynamoDB and
   S3, and real SMTP captured by Mailpit. Timers stay in-memory there, as in every IT.
+
+## Errors (SDD 2.8)
+
+Errors raised by Stint follow DSL 1.0:
+- a **standard type** (`https://serverlessworkflow.io/spec/1.0.0/errors/<timeout|runtime|communication|…>`);
+- its **status** (timeout 408, runtime 500, …);
+- the failing component's JSON Pointer as **instance**.
+
+Workers get the same from `stint-worker-sdk`; a worker's own `status`/`instance` is kept. The `stint://errors/*`
+types of earlier versions are still accepted as **aliases**: on the wire, from older workers, and in `catch`
+filters written in YAML. That compatibility is temporary.
 
 ## Honest MVP cuts (deliberate, documented)
 
