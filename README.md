@@ -46,7 +46,8 @@ bundles/
   stint-bundle-aws       core + AWS
 examples/
   stint-example-build-report   "query → stage S3 pointer → format", loaded from build-report.yaml
-  stint-example-send-report    schedule + emit + call:remote — strict-vs-permissive loading; emits report-sent
+  stint-example-send-report    schedule.cron + emit + call:remote — publishes report-sent (SDD 2.6 milestone)
+  stint-example-archive-report schedule.on report-sent → archive record; independent of send-report (SDD 2.6)
 stint-architecture-tests   the single consolidated ArchUnit suite for the whole reactor (test-only)
 stint-it                 floci (local AWS emulator) integration tests
 ```
@@ -107,6 +108,21 @@ All four are optional on read: an event in the older format is accepted.
 
 `definition` carries the workflow's `namespace:name:version` — `TaskContext.definition()` on the worker
 side is the exact version the running instance started with, not necessarily the latest registered one.
+
+### Event types at a glance
+
+| Type | Channel | Who emits it | Notes |
+|---|---|---|---|
+| `io.stintflow.task.invoke.v1` / `io.stintflow.task.result.v1` | task transport | engine / worker | internal protocol |
+| timer fire `{timerId, workflowInstanceId}` | timer queue | SQS delay or EventBridge Scheduler | **not** a CloudEvent (SDD 1.3/2.4) |
+| `io.stintflow.schedule.fired.v1` | none (in-process) | the schedule consumer | synthetic start event of a cron occurrence; id `<schedule>@<scheduled instant>` (SDD 2.4) |
+| any other type, e.g. `io.stintflow.reports.report-sent.v1` | domain channel (EventBridge domain bus / SNS) | an `emit` task | a **domain fact**; workflows react through `schedule.on` or `listen` |
+
+The prefixes `io.stintflow.task.`, `io.stintflow.timer.` and `io.stintflow.schedule.` are reserved: an `emit`
+using them is rejected. Domain facts carry the same lineage extensions (`chainid`, `causationid`,
+`traceparent`, `tracestate`) plus `dataref` when their data went to the facts store. A `listen` correlates on
+values it extracts from the fact (`correlate.from`) — no Stint-specific correlation extension is needed on the
+fact itself.
 
 ## Tracing and structured logs (SDD 2.5)
 
@@ -242,6 +258,24 @@ schedule:
   queue.
 - **Not yet:** `schedule.after`, `schedule.on` with `all`/`until`/`correlate`, input for scheduled runs, catching
   up missed occurrences.
+
+## Milestone: send-report → report-sent → archive-report (SDD 2.6)
+
+Two workflows that only know each other through a fact:
+
+- `examples/stint-example-send-report` — `send-report.yaml` runs on `schedule.cron: '0 9 * * MON'` (UTC).
+  Its `prepare` task falls back to default recipients on a cron run, which has no input of its own. It mails
+  through `MailGateway` and emits `io.stintflow.reports.report-sent.v1`.
+- `examples/stint-example-archive-report` — `archive-report.yaml` starts on `schedule.on` for that type and
+  stores an archive record (with the chain id) in the `BlobStore`. Its build bans any dependency on
+  send-report, and a test fails if its sources mention it.
+
+The archive instance runs on the chain of the report that caused it. If an engine dies between the checkpoint
+and the publication, the outbox sweep of another engine still delivers the fact.
+
+- **Locally:** `SendReportMilestoneLocalTest`, with a controllable clock and in-memory everything.
+- **On floci:** `FlociSendReportMilestoneIT`, with real SQS, EventBridge, EventBridge Scheduler, DynamoDB and
+  S3, and real SMTP captured by Mailpit. Timers stay in-memory there, as in every IT.
 
 ## Honest MVP cuts (deliberate, documented)
 
