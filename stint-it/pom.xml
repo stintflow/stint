@@ -37,6 +37,16 @@
             <artifactId>stint-example-build-report</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-example-send-report</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-example-archive-report</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <!-- AWS SDK clients to provision resources on floci (versions via amazon-services BOM) -->
         <dependency>
