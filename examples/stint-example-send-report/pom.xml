@@ -13,8 +13,8 @@
 
     <artifactId>stint-example-send-report</artifactId>
     <name>Stint :: Examples :: Send Report</name>
-    <description>SDD 1.4, CA2/CA3: a YAML-only workflow (schedule + emit + call: remote) proving
-        RF3's strict-vs-permissive load behaviour for constructs not yet implemented.</description>
+    <description>SDD 1.4/2.6: a YAML-only workflow (schedule.cron + emit + call: remote) that mails a report
+        and publishes the report-sent domain fact.</description>
 
     <dependencies>
         <dependency>

@@ -1,7 +1,7 @@
 # CNCF Serverless Workflow definition for the send-report flow (SDD 1.4, CA2/CA3; SDD 2.2, CA8).
 # 'schedule' is supported since SDD 2.4 (a five-field cron, UTC unless document.metadata sets the Stint
 # extension 'stint.schedule.timezone'). The 'emit' task is supported since SDD 2.2: it publishes
-# 'report-sent' on the domain channel after 'sendEmail'.
+# 'report-sent' on the domain channel after 'sendEmail'; any workflow may react to that fact (SDD 2.6).
 document:
   dsl: '1.0.0'
   namespace: reports
@@ -10,6 +10,13 @@ document:
 schedule:
   cron: '0 9 * * MON'
 do:
+  # SDD 2.6, sec. 8f: a cron run has no input of its own (it starts with [the synthetic schedule event]),
+  # so the report falls back to defaults declared here; a programmatic start passes its own object.
+  - prepare:
+      set: '${ if ($workflow.input | type) == "object" then $workflow.input else {recipient: "reports@stintflow.io", subject: "Weekly report", body: "Scheduled run"} end }'
+      export:
+        as: '${ . }'
+
   - sendEmail:
       call: remote
       with:
