@@ -63,6 +63,18 @@ class WorkerRuntimeTest {
     }
 
     @Test
+    void sdd28_ca4_a_generic_handler_failure_is_a_dsl_standard_runtime_error_with_status_500() throws Exception {
+        TaskHandlerRegistry handlers = new TaskHandlerRegistry()
+                .register("boom", ctx -> {
+                    throw new IllegalStateException("synchronous boom");
+                });
+        TaskResult result = invoke(new WorkerRuntime(handlers, NO_BLOB), "boom", Json.obj());
+
+        assertThat(result.error().type()).hasToString("https://serverlessworkflow.io/spec/1.0.0/errors/runtime");
+        assertThat(result.error().status()).isEqualTo(500);
+    }
+
+    @Test
     void handler_failing_its_returned_stage_becomes_a_failed_result() throws Exception {
         TaskHandlerRegistry handlers = new TaskHandlerRegistry()
                 .register("async-boom", ctx -> CompletableFuture.failedFuture(new RuntimeException("async boom")));
