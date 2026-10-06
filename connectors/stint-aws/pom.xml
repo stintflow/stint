@@ -55,19 +55,16 @@
             <artifactId>url-connection-client</artifactId>
         </dependency>
 
-        <!-- EventBridge has no Quarkus extension yet: raw SDK v2 client.
-             NATIVE CAVEAT: needs reflection registration for native image (documented in README). -->
+        <!-- SDD 2.7: EventBridge (SDD 2.2) and EventBridge Scheduler (SDD 2.4) through their Quarkiverse extensions,
+             like S3/DynamoDB/SQS/SNS above: the extensions produce the clients and register what the native image
+             needs. (SDD 2.2/2.4 assumed no extension existed; the 3.33.2 platform BOM has both.) -->
         <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>eventbridge</artifactId>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-eventbridge</artifactId>
         </dependency>
-
-        <!-- SDD 2.4: EventBridge Scheduler (cron schedules and timers beyond SQS's 15 min). No Quarkus
-             extension either: raw SDK v2 client, version from the same platform BOM.
-             NATIVE CAVEAT: same as eventbridge above (reflection registration for native image). -->
         <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>scheduler</artifactId>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-scheduler</artifactId>
         </dependency>
         <!-- tests (SDD 2.4) -->
         <dependency>

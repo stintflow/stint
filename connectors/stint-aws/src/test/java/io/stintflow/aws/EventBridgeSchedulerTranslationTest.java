@@ -1,6 +1,7 @@
 package io.stintflow.aws;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.util.Map;
@@ -45,7 +46,7 @@ class EventBridgeSchedulerTranslationTest {
                 .attributes(Map.of(MessageSystemAttributeName.SENT_TIMESTAMP, "1791194405123"))
                 .build();
 
-        ScheduleFire fire = EventBridgeSchedulerService.toFire(message);
+        ScheduleFire fire = EventBridgeSchedulerService.toFire(message, false);
 
         assertThat(fire.scheduleName()).isEqualTo("stint-abc");
         assertThat(fire.definition()).isEqualTo(new WorkflowRef("reports", "send-report", "1.0.0"));
@@ -54,14 +55,28 @@ class EventBridgeSchedulerTranslationTest {
     }
 
     @Test
-    void a_delivery_with_the_placeholder_left_as_is_has_no_scheduled_time() {
+    void ca4_without_the_fallback_a_delivery_with_the_placeholder_left_as_is_is_rejected() {
         Message message = Message.builder()
                 .body("{\"schedule\":\"stint-abc\",\"definition\":\"reports:send-report:1.0.0\","
                         + "\"scheduledTime\":\"" + EventBridgeSchedulerService.SCHEDULED_TIME_PLACEHOLDER + "\"}")
                 .attributes(Map.of(MessageSystemAttributeName.SENT_TIMESTAMP, "1791194405123"))
                 .build();
 
-        ScheduleFire fire = EventBridgeSchedulerService.toFire(message);
+        // SDD 2.7, sec. 8c: on AWS this means a misconfigured Input; the poller doesn't ack it.
+        assertThatThrownBy(() -> EventBridgeSchedulerService.toFire(message, false))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("sent-timestamp-fallback");
+    }
+
+    @Test
+    void with_the_fallback_a_delivery_with_the_placeholder_left_as_is_has_no_scheduled_time() {
+        Message message = Message.builder()
+                .body("{\"schedule\":\"stint-abc\",\"definition\":\"reports:send-report:1.0.0\","
+                        + "\"scheduledTime\":\"" + EventBridgeSchedulerService.SCHEDULED_TIME_PLACEHOLDER + "\"}")
+                .attributes(Map.of(MessageSystemAttributeName.SENT_TIMESTAMP, "1791194405123"))
+                .build();
+
+        ScheduleFire fire = EventBridgeSchedulerService.toFire(message, true);
 
         assertThat(fire.scheduledTime()).isNull(); // the engine derives it from observedAt
         assertThat(fire.observedAt()).isEqualTo(Instant.ofEpochMilli(1791194405123L));

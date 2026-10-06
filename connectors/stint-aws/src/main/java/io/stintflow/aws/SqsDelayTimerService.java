@@ -36,7 +36,8 @@ import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
  * Honest limitations: SQS cannot cancel an in-flight delayed message, so {@link #cancel(String)} is a
  * no-op — the orchestrator ignores a fire whose wait was already consumed (SDD 1.3, sec. 8a). Delays
  * beyond {@link #maxDelay()} are rejected by the engine before scheduling (sec. 8d), never truncated;
- * an EventBridge Scheduler connector for those is on the roadmap (SDD 2.4).
+ * longer ones go to {@link EventBridgeSchedulerTimerService} (SDD 2.4), whose one-time schedules deliver the
+ * same JSON to this queue, so this poller fires both.
  */
 @ApplicationScoped
 public class SqsDelayTimerService implements TimerService {
@@ -52,6 +53,15 @@ public class SqsDelayTimerService implements TimerService {
 
     private volatile boolean running;
     private ExecutorService poller;
+
+    public SqsDelayTimerService() {
+    }
+
+    /** Test/manual wiring outside CDI (SDD 2.7, like the other connectors). */
+    public SqsDelayTimerService(SqsClient sqs, String timerQueueUrl) {
+        this.sqs = sqs;
+        this.timerQueueUrl = timerQueueUrl;
+    }
 
     @Override
     public CompletionStage<String> schedule(TimerRequest req) {
