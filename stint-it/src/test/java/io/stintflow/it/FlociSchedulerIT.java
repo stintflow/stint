@@ -114,8 +114,9 @@ class FlociSchedulerIT {
                 WorkflowEngine engine = new WorkflowEngine(registry, new InMemoryTaskTransport(), state,
                         new InMemoryTimerService(InstantSource.system()),
                         new FilesystemBlobStore(Files.createTempDirectory("stint-sdd24-it")));
+                // floci doesn't substitute <aws.scheduler.scheduled-time>: the fallback is enabled explicitly (SDD 2.7).
                 EventBridgeSchedulerService replicaA = new EventBridgeSchedulerService(scheduler, sqs,
-                        "stint-schedules", ROLE, queueArn(sqs, scheduleQueue), scheduleQueue);
+                        "stint-schedules", ROLE, queueArn(sqs, scheduleQueue), scheduleQueue, true);
                 EventBridgeSchedulerService replicaB = new EventBridgeSchedulerService(scheduler, sqs,
                         "stint-schedules", ROLE, queueArn(sqs, scheduleQueue), scheduleQueue);
                 new ScheduleReconciler(registry, replicaA).reconcile().toCompletableFuture().get(30, TimeUnit.SECONDS);

@@ -34,9 +34,12 @@ import io.cloudevents.CloudEvent;
 import io.stintflow.aws.DynamoDbStateStore;
 import io.stintflow.aws.EventBridgeEventPublisher;
 import io.stintflow.aws.EventBridgeSchedulerService;
+import io.stintflow.aws.EventBridgeSchedulerTimerService;
 import io.stintflow.aws.S3BlobStore;
 import io.stintflow.aws.SqsDomainEventSource;
+import io.stintflow.aws.SqsDelayTimerService;
 import io.stintflow.aws.SqsTaskTransport;
+import io.stintflow.core.DelayRoutingTimerService;
 import io.stintflow.core.WorkflowDefinition;
 import io.stintflow.core.WorkflowEngine;
 import io.stintflow.core.WorkflowRegistry;
@@ -55,7 +58,6 @@ import io.stintflow.example.archive.ArchiveRecordHandler;
 import io.stintflow.example.archive.ArchiveReport;
 import io.stintflow.inmemory.InMemoryEventPublisher;
 import io.stintflow.inmemory.InMemoryTaskTransport;
-import io.stintflow.inmemory.InMemoryTimerService;
 import io.stintflow.spi.AdapterCapabilities;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.EventPublisher;
@@ -87,14 +89,14 @@ import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
  *       schedule queue</td></tr>
  *   <tr><td>EventBridge</td><td>real — domain bus {@code stint-domain}, rule on the report-sent type, SQS target</td></tr>
  *   <tr><td>EventBridge Scheduler</td><td>real — the schedule is reconciled and fires for real. Its scheduled
- *       instant comes from the SDD 2.4 {@code SentTimestamp} fallback: floci doesn't substitute
- *       {@code <aws.scheduler.scheduled-time>}</td></tr>
+ *       instant comes from the SDD 2.4 {@code SentTimestamp} fallback, enabled explicitly here (SDD 2.7, off by
+ *       default): floci doesn't substitute {@code <aws.scheduler.scheduled-time>}</td></tr>
  *   <tr><td>DynamoDB</td><td>real — state, waits and outbox of both workflows (separate tables per workflow)</td></tr>
  *   <tr><td>S3</td><td>real — archive records ({@link S3BlobStore}) and claim-check store</td></tr>
  *   <tr><td>SNS</td><td>not used (the alternative publisher is proven in {@code FlociEmitIT})</td></tr>
  *   <tr><td>e-mail</td><td>real SMTP to a Mailpit container, through the test-only {@link SmtpMailGateway}</td></tr>
- *   <tr><td>TimerService</td><td><strong>in-memory (simulated)</strong>, as in every IT; the real timer path is in
- *       {@code FlociSchedulerIT}</td></tr>
+ *   <tr><td>TimerService</td><td>real (SDD 2.7) — {@code DelayRoutingTimerService}: SQS {@code DelaySeconds} up to
+ *       15 min, EventBridge Scheduler one-time schedules beyond, one timer queue per engine</td></tr>
  *   <tr><td>outbox sweep clock</td><td>controllable, only in the crash scenario, to pass the 30 s grace without
  *       sleeping</td></tr>
  * </table>
@@ -170,7 +172,7 @@ class FlociSendReportMilestoneIT {
                 archiveRegistry.register(loadYaml("stint/workflows/archive-report.yaml", text -> text));
                 WorkflowEngine archive = new WorkflowEngine(archiveRegistry,
                         new SqsTaskTransport(sqs, archiveInvoke, archiveResult), archiveState,
-                        new InMemoryTimerService(InstantSource.system()), blobs);
+                        realTimers(sqs, scheduler, queue(sqs, "archive-timers"), InstantSource.system()), blobs);
                 TriggerBindings bindings = new TriggerBindings(archiveRegistry);
                 bindings.bindDeclaredSchedules();
                 new DomainEventRouter(List.of(new StartReaction(bindings, archive)))
@@ -192,11 +194,11 @@ class FlociSendReportMilestoneIT {
                     return accelerated;
                 }));
                 WorkflowEngine send = new WorkflowEngine(sendRegistry, new SqsTaskTransport(sqs, sendInvoke, sendResult),
-                        sendState, new InMemoryTimerService(InstantSource.system()), blobs,
+                        sendState, realTimers(sqs, scheduler, queue(sqs, "send-timers"), InstantSource.system()), blobs,
                         new TreeInterpreter(new JqExpressionEvaluator()), InstantSource.system(), domainBus, null);
                 SqsWorkerRunner sendWorker = new SqsWorkerRunner(sqs, sendInvoke, sendResult, mailWorker(smtp, blobs));
                 EventBridgeSchedulerService schedules = new EventBridgeSchedulerService(scheduler, sqs, "stint-schedules",
-                        ROLE, queueArn(sqs, scheduleQueue), scheduleQueue);
+                        ROLE, queueArn(sqs, scheduleQueue), scheduleQueue, true); // floci: fallback enabled explicitly
                 new ScheduleReconciler(sendRegistry, schedules).reconcile().toCompletableFuture().get(30, TimeUnit.SECONDS);
                 String scheduleName = sendRegistry.scheduleSpecs().get(0).name();
 
@@ -243,8 +245,9 @@ class FlociSendReportMilestoneIT {
 
                     // 4) Sec. 8e: an engine dies between the checkpoint and the publication.
                     WorkflowEngine dying = new WorkflowEngine(sendRegistry, new SqsTaskTransport(sqs, chaosInvoke, chaosResult),
-                            sendState, new InMemoryTimerService(InstantSource.system()), blobs,
-                            new TreeInterpreter(new JqExpressionEvaluator()), InstantSource.system(), new NeverPublishes(), null);
+                            sendState, realTimers(sqs, scheduler, queue(sqs, "chaos-timers"), InstantSource.system()),
+                            blobs, new TreeInterpreter(new JqExpressionEvaluator()), InstantSource.system(),
+                            new NeverPublishes(), null);
                     try (SqsWorkerRunner chaosWorker = new SqsWorkerRunner(sqs, chaosInvoke, chaosResult, mailWorker(smtp, blobs))) {
                         String chaosId = dying.start(SendReport.REF,
                                 Json.obj().put("recipient", "chaos@acme.example").put("subject", "Chaos").put("body", "!"));
@@ -256,7 +259,8 @@ class FlociSendReportMilestoneIT {
 
                         InstantSource pastGrace = () -> Instant.now().plusSeconds(31);
                         WorkflowEngine survivor = new WorkflowEngine(sendRegistry, new InMemoryTaskTransport(), sendState,
-                                new InMemoryTimerService(pastGrace), blobs, new TreeInterpreter(new JqExpressionEvaluator()),
+                                realTimers(sqs, scheduler, queue(sqs, "survivor-timers"), pastGrace), blobs,
+                                new TreeInterpreter(new JqExpressionEvaluator()),
                                 pastGrace, domainBus, null);
                         assertThat(survivor.outboxRelay().sweep().toCompletableFuture().get(30, TimeUnit.SECONDS))
                                 .isGreaterThanOrEqualTo(1);
@@ -270,6 +274,14 @@ class FlociSendReportMilestoneIT {
                 }
             }
         }
+    }
+
+    /** SDD 2.7: real timers — SQS up to 15 min, EventBridge Scheduler beyond — on the engine's own timer queue. */
+    static DelayRoutingTimerService realTimers(SqsClient sqs, SchedulerClient scheduler, String timerQueue,
+            InstantSource clock) {
+        return new DelayRoutingTimerService(new SqsDelayTimerService(sqs, timerQueue),
+                new EventBridgeSchedulerTimerService(scheduler, "stint-timers", ROLE, queueArn(sqs, timerQueue),
+                        Duration.ofDays(365)), clock);
     }
 
     private static WorkerRuntime mailWorker(SmtpMailGateway smtp, BlobStore blobs) {
