@@ -167,6 +167,19 @@ class ScheduledStartTest {
     }
 
     @Test
+    void ca4_sdd27_a_delivery_half_a_period_or_more_after_the_occurrence_is_rejected_not_guessed() throws Exception {
+        Fixture f = new Fixture(recordsItsTrigger()); // daily at 07:00: half a period is 12 h
+        Instant occurrence = Instant.parse("2026-01-01T07:00:00Z");
+        ScheduledStart handler = new ScheduledStart(f.registry, f.engine);
+
+        assertThatThrownBy(() -> handler.handle(new ScheduleFire(f.spec.name(), DAILY, null,
+                        occurrence.plus(Duration.ofHours(13)))).toCompletableFuture().get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasMessageContaining("too far from the last occurrence");
+        assertThat(f.state.creates.get()).isZero();
+    }
+
+    @Test
     void an_occurrence_of_a_schedule_no_definition_wants_here_is_not_acknowledged() throws Exception {
         Fixture f = new Fixture(recordsItsTrigger());
         ScheduledStart handler = new ScheduledStart(f.registry, f.engine);
