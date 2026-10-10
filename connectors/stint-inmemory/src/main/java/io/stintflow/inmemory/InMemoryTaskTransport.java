@@ -11,6 +11,7 @@ import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.spi.AdapterCapabilities;
 import io.stintflow.spi.AdapterCapabilities.DeliveryGuarantee;
 import io.stintflow.spi.ErrorInfo;
+import io.stintflow.spi.Lineage;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskResultHandler;
@@ -54,7 +55,10 @@ public final class InMemoryTaskTransport implements TaskTransport {
                         // otherwise the instance would wait forever for something that will never arrive.
                         Throwable cause = ex instanceof java.util.concurrent.CompletionException && ex.getCause() != null
                                 ? ex.getCause() : ex;
-                        resultHandler.handle(TaskResult.failed(invocation.correlationId(), ErrorInfo.of(cause)));
+                        // SDD 2.5, RF11: a locally fabricated result keeps the invocation's chain; its cause is the invoke.
+                        resultHandler.handle(TaskResult.failed(invocation.correlationId(), ErrorInfo.of(cause))
+                                .withLineage(new Lineage(invocation.lineage().chainId(), invocation.correlationId(),
+                                        invocation.lineage().traceparent(), invocation.lineage().tracestate())));
                         return null;
                     });
         }, pool);

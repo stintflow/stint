@@ -43,6 +43,18 @@ public class EventBridgeTaskTransport extends AbstractSqsResultTransport {
     @ConfigProperty(name = "stint.aws.sqs.result-queue-url", defaultValue = "")
     String resultQueueUrl;
 
+    public EventBridgeTaskTransport() {
+    }
+
+    /** Test/manual wiring outside CDI. */
+    public EventBridgeTaskTransport(EventBridgeClient eventBridge, SqsClient sqs, String eventBusName,
+                                    String resultQueueUrl) {
+        this.eventBridge = eventBridge;
+        this.sqs = sqs;
+        this.eventBusName = eventBusName;
+        this.resultQueueUrl = resultQueueUrl;
+    }
+
     @Override
     public CompletionStage<Void> dispatch(TaskInvocation invocation) {
         return CompletableFuture.runAsync(() -> {

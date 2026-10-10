@@ -2,6 +2,7 @@ package io.stintflow.aws;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,8 +17,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.wire.Json;
 import io.stintflow.spi.ErrorInfo;
+import io.stintflow.spi.InboxEntry;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
+import io.stintflow.spi.Lineage;
+import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.RetryState;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
@@ -31,6 +35,8 @@ import software.amazon.awssdk.services.dynamodb.model.Delete;
 import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.Put;
+import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
+import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
@@ -45,6 +51,18 @@ import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledExcepti
  * conditional {@code Put} per {@code addWaits} ({@code attribute_not_exists}) and a conditional
  * {@code Delete} per {@code consumeWaitKeys} ({@code attribute_exists}). Any condition failing
  * cancels the whole transaction — confirmed against floci (SDD 1.2 sec. 8c).
+ * <p>
+ * SDD 2.2, sec. 8c: the outbox is a third table, {@code stint-outbox} (PK {@code eventId}), written by
+ * a conditional {@code Put} in the same transaction. Published facts are deleted, so the table — and
+ * its GSI {@code pending-by-age} (PK {@code shard}, SK {@code createdAt}) — only ever hold pending
+ * facts: {@link #pendingOutbox} is one {@code Query} per shard, never a scan. No TTL: expiring a pending
+ * item would lose an unpublished fact.
+ * <p>
+ * SDD 2.3, sec. 8c: the early-event inbox is a fourth table, {@code stint-inbox} (PK {@code waitKey}, SK
+ * {@code eventId}, numeric {@code expiresAt} in epoch seconds usable as the table's native TTL attribute).
+ * Reads are strongly consistent and ignore expired entries — the native TTL deletes lazily and only cleans
+ * up. A save deletes the entries it consumed in its transaction. The instance item keeps the engine's
+ * {@code listen} bookkeeping as the optional {@code listenState} attribute (JSON).
  */
 @ApplicationScoped
 public class DynamoDbStateStore implements StateStore {
@@ -58,19 +76,53 @@ public class DynamoDbStateStore implements StateStore {
     @ConfigProperty(name = "stint.aws.dynamodb.waits-table", defaultValue = "stint-waits")
     String waitsTable;
 
+    @ConfigProperty(name = "stint.aws.dynamodb.outbox-table", defaultValue = "stint-outbox")
+    String outboxTable;
+
+    @ConfigProperty(name = "stint.aws.dynamodb.outbox-shards", defaultValue = "4")
+    int outboxShards;
+
+    @ConfigProperty(name = "stint.aws.dynamodb.inbox-table", defaultValue = "stint-inbox")
+    String inboxTable;
+
+    static final String OUTBOX_INDEX = "pending-by-age";
+
     public DynamoDbStateStore() {
     }
 
     /** Test/manual wiring outside CDI. */
     public DynamoDbStateStore(DynamoDbClient ddb, String instancesTable, String waitsTable) {
+        this(ddb, instancesTable, waitsTable, "stint-outbox", 4);
+    }
+
+    /** Test/manual wiring outside CDI, with the SDD 2.2 outbox table. */
+    public DynamoDbStateStore(DynamoDbClient ddb, String instancesTable, String waitsTable, String outboxTable,
+                              int outboxShards) {
+        this(ddb, instancesTable, waitsTable, outboxTable, outboxShards, "stint-inbox");
+    }
+
+    /** Test/manual wiring outside CDI, with the SDD 2.3 inbox table. */
+    public DynamoDbStateStore(DynamoDbClient ddb, String instancesTable, String waitsTable, String outboxTable,
+                              int outboxShards, String inboxTable) {
         this.ddb = ddb;
         this.instancesTable = instancesTable;
         this.waitsTable = waitsTable;
+        this.outboxTable = outboxTable;
+        this.outboxShards = outboxShards;
+        this.inboxTable = inboxTable;
     }
 
     @Override
     public CompletionStage<SaveOutcome> save(InstanceSnapshot snapshot, long expectedVersion,
-                                              List<Wait> addWaits, List<String> consumeWaitKeys) {
+                                              List<Wait> addWaits, List<String> consumeWaitKeys,
+                                              List<OutboxEntry> addOutbox) {
+        return save(snapshot, expectedVersion, addWaits, consumeWaitKeys, addOutbox, List.of());
+    }
+
+    @Override
+    public CompletionStage<SaveOutcome> save(InstanceSnapshot snapshot, long expectedVersion,
+                                              List<Wait> addWaits, List<String> consumeWaitKeys,
+                                              List<OutboxEntry> addOutbox, List<InboxEntry.Key> removeInbox) {
         return CompletableFuture.supplyAsync(() -> {
             List<TransactWriteItem> items = new ArrayList<>();
             items.add(TransactWriteItem.builder().put(instancePut(snapshot, expectedVersion)).build());
@@ -79,6 +131,13 @@ public class DynamoDbStateStore implements StateStore {
             }
             for (String key : consumeWaitKeys) {
                 items.add(TransactWriteItem.builder().delete(waitDelete(key)).build());
+            }
+            for (OutboxEntry entry : addOutbox) {
+                items.add(TransactWriteItem.builder().put(outboxPut(entry)).build());
+            }
+            for (InboxEntry.Key key : removeInbox) {
+                items.add(TransactWriteItem.builder().delete(Delete.builder().tableName(inboxTable)
+                        .key(inboxKey(key)).build()).build());
             }
             try {
                 ddb.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(items).build());
@@ -104,6 +163,21 @@ public class DynamoDbStateStore implements StateStore {
             item.put("retryState", AttributeValue.fromS(retryStateToJson(snap.retryState()).toString()));
         }
         item.put("updatedAt", AttributeValue.fromN(Long.toString(snap.updatedAt().toEpochMilli())));
+        if (snap.input() != null) {
+            item.put("input", AttributeValue.fromS(snap.input().toString()));
+        }
+        if (snap.startedAt() != null) {
+            item.put("startedAt", AttributeValue.fromN(Long.toString(snap.startedAt().toEpochMilli())));
+        }
+        // SDD 2.5: the chain and the suspending activation's trace context (optional attributes).
+        putIfSet(item, "chainId", snap.chainId());
+        if (snap.suspendedAt() != null) {
+            putIfSet(item, "suspendedTraceparent", snap.suspendedAt().traceparent());
+            putIfSet(item, "suspendedTracestate", snap.suspendedAt().tracestate());
+        }
+        if (snap.listenState() != null) {
+            item.put("listenState", AttributeValue.fromS(snap.listenState().toString()));
+        }
 
         Put.Builder builder = Put.builder().tableName(instancesTable).item(item);
         if (expectedVersion == 0) {
@@ -125,6 +199,104 @@ public class DynamoDbStateStore implements StateStore {
         return Put.builder().tableName(waitsTable).item(item)
                 .conditionExpression("attribute_not_exists(waitKey)")
                 .build();
+    }
+
+    private Put outboxPut(OutboxEntry entry) {
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("eventId", AttributeValue.fromS(entry.eventId()));
+        item.put("instanceId", AttributeValue.fromS(entry.instanceId()));
+        item.put("seq", AttributeValue.fromN(Integer.toString(entry.seq())));
+        item.put("event", AttributeValue.fromS(entry.event()));
+        item.put("createdAt", AttributeValue.fromN(Long.toString(entry.createdAt().toEpochMilli())));
+        item.put("shard", AttributeValue.fromS(shardOf(entry.eventId())));
+        return Put.builder().tableName(outboxTable).item(item)
+                .conditionExpression("attribute_not_exists(eventId)")
+                .build();
+    }
+
+    private String shardOf(String eventId) {
+        return Integer.toString(Math.floorMod(eventId.hashCode(), outboxShards));
+    }
+
+    @Override
+    public CompletionStage<List<OutboxEntry>> pendingOutbox(Instant createdAtOrBefore, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<OutboxEntry> pending = new ArrayList<>();
+            for (int shard = 0; shard < outboxShards; shard++) {
+                var response = ddb.query(QueryRequest.builder()
+                        .tableName(outboxTable)
+                        .indexName(OUTBOX_INDEX)
+                        .keyConditionExpression("#shard = :shard AND createdAt <= :cutoff")
+                        .expressionAttributeNames(Map.of("#shard", "shard"))
+                        .expressionAttributeValues(Map.of(
+                                ":shard", AttributeValue.fromS(Integer.toString(shard)),
+                                ":cutoff", AttributeValue.fromN(Long.toString(createdAtOrBefore.toEpochMilli()))))
+                        .limit(limit)
+                        .build());
+                for (Map<String, AttributeValue> item : response.items()) {
+                    pending.add(new OutboxEntry(
+                            item.get("eventId").s(),
+                            item.get("instanceId").s(),
+                            Integer.parseInt(item.get("seq").n()),
+                            item.get("event").s(),
+                            Instant.ofEpochMilli(Long.parseLong(item.get("createdAt").n()))));
+                }
+            }
+            return pending.stream()
+                    .sorted(Comparator.comparing(OutboxEntry::createdAt).thenComparingInt(OutboxEntry::seq)
+                            .thenComparing(OutboxEntry::eventId))
+                    .limit(limit)
+                    .toList();
+        });
+    }
+
+    @Override
+    public CompletionStage<Void> removeOutbox(String eventId) {
+        return CompletableFuture.supplyAsync(() -> {
+            ddb.deleteItem(DeleteItemRequest.builder()
+                    .tableName(outboxTable)
+                    .key(Map.of("eventId", AttributeValue.fromS(eventId)))
+                    .build());
+            return null;
+        });
+    }
+
+    @Override
+    public CompletionStage<Void> putInbox(InboxEntry entry) {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, AttributeValue> item = new HashMap<>(inboxKey(entry.key()));
+            item.put("event", AttributeValue.fromS(entry.event()));
+            item.put("expiresAt", AttributeValue.fromN(Long.toString(entry.expiresAt().getEpochSecond())));
+            item.put("expiresAtMillis", AttributeValue.fromN(Long.toString(entry.expiresAt().toEpochMilli())));
+            ddb.putItem(PutItemRequest.builder().tableName(inboxTable).item(item).build());
+            return null;
+        });
+    }
+
+    @Override
+    public CompletionStage<List<InboxEntry>> findInbox(String waitKey) {
+        return CompletableFuture.supplyAsync(() -> ddb.query(QueryRequest.builder()
+                        .tableName(inboxTable)
+                        .keyConditionExpression("waitKey = :key")
+                        .expressionAttributeValues(Map.of(":key", AttributeValue.fromS(waitKey)))
+                        .consistentRead(true)
+                        .build())
+                .items().stream()
+                .map(item -> new InboxEntry(item.get("waitKey").s(), item.get("eventId").s(), item.get("event").s(),
+                        Instant.ofEpochMilli(Long.parseLong(item.get("expiresAtMillis").n()))))
+                .toList());
+    }
+
+    @Override
+    public CompletionStage<Void> removeInbox(InboxEntry.Key key) {
+        return CompletableFuture.supplyAsync(() -> {
+            ddb.deleteItem(DeleteItemRequest.builder().tableName(inboxTable).key(inboxKey(key)).build());
+            return null;
+        });
+    }
+
+    private static Map<String, AttributeValue> inboxKey(InboxEntry.Key key) {
+        return Map.of("waitKey", AttributeValue.fromS(key.waitKey()), "eventId", AttributeValue.fromS(key.eventId()));
     }
 
     private Delete waitDelete(String waitKey) {
@@ -180,6 +352,15 @@ public class DynamoDbStateStore implements StateStore {
     private static InstanceSnapshot toSnapshot(Map<String, AttributeValue> item) {
         AttributeValue waitingKey = item.get("waitingKey");
         AttributeValue retryState = item.get("retryState");
+        // SDD 2.1, RF6: tolerant read — items written before SDD 2.1 have neither attribute.
+        AttributeValue input = item.get("input");
+        AttributeValue startedAt = item.get("startedAt");
+        // SDD 2.5, tolerant read: items written before SDD 2.5 have no chain or trace attributes.
+        AttributeValue chainId = item.get("chainId");
+        AttributeValue traceparent = item.get("suspendedTraceparent");
+        AttributeValue tracestate = item.get("suspendedTracestate");
+        // SDD 2.3, tolerant read: items written before SDD 2.3 have no listen bookkeeping.
+        AttributeValue listenState = item.get("listenState");
         return new InstanceSnapshot(
                 item.get("instanceId").s(),
                 WorkflowRef.parse(item.get("definition").s()),
@@ -189,7 +370,18 @@ public class DynamoDbStateStore implements StateStore {
                 InstanceStatus.valueOf(item.get("status").s()),
                 Long.parseLong(item.get("version").n()),
                 retryState == null ? null : retryStateFromJson(Json.read(retryState.s().getBytes())),
-                Instant.ofEpochMilli(Long.parseLong(item.get("updatedAt").n())));
+                Instant.ofEpochMilli(Long.parseLong(item.get("updatedAt").n())),
+                input == null ? null : Json.read(input.s().getBytes()),
+                startedAt == null ? null : Instant.ofEpochMilli(Long.parseLong(startedAt.n())),
+                chainId == null ? null : chainId.s(),
+                traceparent == null ? null : Lineage.trace(traceparent.s(), tracestate == null ? null : tracestate.s()),
+                listenState == null ? null : Json.read(listenState.s().getBytes()));
+    }
+
+    private static void putIfSet(Map<String, AttributeValue> item, String name, String value) {
+        if (value != null && !value.isBlank()) {
+            item.put(name, AttributeValue.fromS(value));
+        }
     }
 
     private static ObjectNode retryStateToJson(RetryState state) {

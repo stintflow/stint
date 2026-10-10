@@ -1,5 +1,6 @@
 package io.stintflow.core.expr;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -22,7 +23,8 @@ import net.thisptr.jackson.jq.exception.JsonQueryException;
  * Default {@link ExpressionEvaluator}: jq (RF5), the DSL 1.0's standard expression language.
  * <p>
  * Exposes {@code .} as the current data, {@code $context} as {@link EvalScope#context()} and
- * {@code $workflow} as the ref (namespace/name/version). Compiled queries are cached by source
+ * {@code $workflow} as the {@link WorkflowDescriptor} ({@code id}, {@code input}, {@code startedAt},
+ * plus namespace/name/version). Compiled queries are cached by source
  * string since {@link Expr.Jq} instances are typically re-evaluated many times (once per node
  * visit across many instances).
  */
@@ -82,11 +84,33 @@ public final class JqExpressionEvaluator implements ExpressionEvaluator {
         }
     }
 
-    private static JsonNode workflowNode(WorkflowRef ref) {
+    private static JsonNode workflowNode(WorkflowDescriptor workflow) {
         ObjectNode node = Json.obj();
-        node.put("namespace", ref.namespace());
-        node.put("name", ref.name());
-        node.put("version", ref.version());
+        if (workflow.id() != null) {
+            node.put("id", workflow.id());
+        }
+        if (workflow.input() != null) {
+            node.set("input", workflow.input());
+        }
+        if (workflow.startedAt() != null) {
+            node.set("startedAt", dateTimeDescriptor(workflow.startedAt()));
+        }
+        WorkflowRef ref = workflow.ref();
+        if (ref != null) {
+            node.put("namespace", ref.namespace());
+            node.put("name", ref.name());
+            node.put("version", ref.version());
+        }
+        return node;
+    }
+
+    /** DSL 1.0 {@code dsl.md}, DateTime Descriptor: {@code iso8601} plus {@code epoch.seconds}/{@code epoch.milliseconds}. */
+    private static JsonNode dateTimeDescriptor(Instant instant) {
+        ObjectNode node = Json.obj();
+        node.put("iso8601", instant.toString());
+        ObjectNode epoch = node.putObject("epoch");
+        epoch.put("seconds", instant.getEpochSecond());
+        epoch.put("milliseconds", instant.toEpochMilli());
         return node;
     }
 }

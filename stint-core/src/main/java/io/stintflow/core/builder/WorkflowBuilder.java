@@ -9,7 +9,9 @@ import io.stintflow.core.expr.Expr;
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DataFlow;
 import io.stintflow.core.model.DoNode;
+import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.FlowDirective;
+import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.RetryPolicy;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
@@ -62,6 +64,21 @@ public final class WorkflowBuilder {
         return this;
     }
 
+    /**
+     * SDD 2.2: an {@code emit}. {@code eventWith} evaluates (against the node input) to the
+     * {@code emit.event.with} object; {@code declaredType} is its literal {@code type}, if any, so the
+     * registry can reject a reserved one up front ({@code null} when the type is computed).
+     */
+    public WorkflowBuilder emit(String name, String declaredType, Expr eventWith, DataFlow dataFlow) {
+        return emit(name, declaredType, eventWith, dataFlow, FlowDirective.CONTINUE);
+    }
+
+    public WorkflowBuilder emit(String name, String declaredType, Expr eventWith, DataFlow dataFlow,
+            FlowDirective then) {
+        tasks.add(new EmitNode(name, pointerFor(name), dataFlow, then, eventWith, declaredType));
+        return this;
+    }
+
     public WorkflowBuilder switchOn(String name, DataFlow dataFlow, List<SwitchNode.Case> cases) {
         // then() is unused on SwitchNode itself — control always transfers via the matched case.
         tasks.add(new SwitchNode(name, pointerFor(name), dataFlow, FlowDirective.CONTINUE, cases));
@@ -81,6 +98,28 @@ public final class WorkflowBuilder {
         String tryPointer = pointerFor(name);
         CallRemoteNode body = new CallRemoteNode(bodyName, tryPointer + "/try", bodyFlow, FlowDirective.CONTINUE,
                 routingKey, timeout);
+        tasks.add(new TryNode(name, tryPointer, dataFlow, then, body, catchClause));
+        return this;
+    }
+
+    /**
+     * SDD 2.3: a {@code listen} — waits for {@code filters} according to {@code strategy}, reading each
+     * consumed event as {@code read}; {@code timeout} is its {@code timeout.after} ({@code null} = none).
+     */
+    public WorkflowBuilder listen(String name, ListenNode.Strategy strategy, List<ListenNode.Filter> filters,
+            ListenNode.Read read, Duration timeout, DataFlow dataFlow) {
+        tasks.add(new ListenNode(name, pointerFor(name), dataFlow, FlowDirective.CONTINUE, strategy, filters, read,
+                timeout));
+        return this;
+    }
+
+    /** SDD 2.3: {@code try}/{@code catch} around a single {@code listen} — e.g. to handle its timeout. */
+    public WorkflowBuilder tryListen(String name, DataFlow dataFlow, String bodyName, ListenNode.Strategy strategy,
+            List<ListenNode.Filter> filters, ListenNode.Read read, Duration timeout, DataFlow bodyFlow,
+            TryNode.Catch catchClause, FlowDirective then) {
+        String tryPointer = pointerFor(name);
+        ListenNode body = new ListenNode(bodyName, tryPointer + "/try", bodyFlow, FlowDirective.CONTINUE, strategy,
+                filters, read, timeout);
         tasks.add(new TryNode(name, tryPointer, dataFlow, then, body, catchClause));
         return this;
     }

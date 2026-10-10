@@ -10,14 +10,29 @@ import com.fasterxml.jackson.databind.JsonNode;
  * @param status        COMPLETED or FAILED
  * @param output        the task output when {@code status == COMPLETED} (may be a claim-check pointer)
  * @param error         failure detail when {@code status == FAILED}, otherwise {@code null}
+ * @param lineage       chain, cause (the invoke's id) and the worker's trace context (SDD 2.5)
  */
 public record TaskResult(
         String correlationId,
         Status status,
         JsonNode output,
-        ErrorInfo error) {
+        ErrorInfo error,
+        Lineage lineage) {
 
     public enum Status {COMPLETED, FAILED}
+
+    public TaskResult {
+        lineage = lineage == null ? Lineage.NONE : lineage;
+    }
+
+    /** A result with no lineage (the pre-SDD-2.5 shape). */
+    public TaskResult(String correlationId, Status status, JsonNode output, ErrorInfo error) {
+        this(correlationId, status, output, error, Lineage.NONE);
+    }
+
+    public TaskResult withLineage(Lineage lineage) {
+        return new TaskResult(correlationId, status, output, error, lineage);
+    }
 
     public static TaskResult completed(String correlationId, JsonNode output) {
         return new TaskResult(correlationId, Status.COMPLETED, output, null);

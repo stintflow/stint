@@ -9,9 +9,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.spi.ErrorInfo;
+import io.stintflow.spi.Lineage;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
-import io.stintflow.spi.TimerFire;
 import io.stintflow.spi.WorkflowRef;
 import io.stintflow.spi.wire.StintEvents;
 import io.stintflow.spi.wire.CloudEventCodec;
@@ -29,12 +29,11 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
 
     private static final URI SOURCE_ENGINE = URI.create("stint://engine");
     private static final URI SOURCE_WORKER = URI.create("stint://worker");
-    private static final URI SOURCE_TIMER = URI.create("stint://timer");
     private static final String LEGACY_TYPE_PREFIX = "urn:legacy:";
 
     @Override
     public CloudEvent toEvent(TaskInvocation inv) {
-        return CloudEventBuilder.v1()
+        CloudEventBuilder builder = CloudEventBuilder.v1()
                 .withId(inv.correlationId())
                 .withSource(SOURCE_ENGINE)
                 .withType(StintEvents.TYPE_TASK_INVOKE)
@@ -45,8 +44,8 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 .withExtension(StintEvents.EXT_WORKFLOW_INSTANCE_ID, inv.workflowInstanceId())
                 .withExtension(StintEvents.EXT_TASK_ID, inv.taskId())
                 .withExtension(StintEvents.EXT_ATTEMPT, String.valueOf(inv.attempt()))
-                .withExtension(StintEvents.EXT_DEFINITION, inv.definition().canonical())
-                .build();
+                .withExtension(StintEvents.EXT_DEFINITION, inv.definition().canonical());
+        return withLineage(builder, inv.lineage()).build();
     }
 
     @Override
@@ -59,26 +58,15 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
         if (result.error() != null) {
             data.set("error", errorToJson(result.error()));
         }
-        return CloudEventBuilder.v1()
+        CloudEventBuilder builder = CloudEventBuilder.v1()
                 .withId(result.correlationId())
                 .withSource(SOURCE_WORKER)
                 .withType(StintEvents.TYPE_TASK_RESULT)
                 .withDataContentType(StintEvents.CONTENT_TYPE_JSON)
                 .withData(Json.bytes(data))
                 .withExtension(StintEvents.EXT_CORRELATION_ID, result.correlationId())
-                .withExtension(StintEvents.EXT_WORKFLOW_INSTANCE_ID, workflowInstanceId)
-                .build();
-    }
-
-    @Override
-    public CloudEvent toEvent(TimerFire fire) {
-        return CloudEventBuilder.v1()
-                .withId(fire.timerId())
-                .withSource(SOURCE_TIMER)
-                .withType(StintEvents.TYPE_TIMER_FIRE)
-                .withExtension(StintEvents.EXT_TIMER_ID, fire.timerId())
-                .withExtension(StintEvents.EXT_WORKFLOW_INSTANCE_ID, fire.workflowInstanceId())
-                .build();
+                .withExtension(StintEvents.EXT_WORKFLOW_INSTANCE_ID, workflowInstanceId);
+        return withLineage(builder, result.lineage()).build();
     }
 
     @Override
@@ -91,7 +79,8 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 WorkflowRef.parse(ext(event, StintEvents.EXT_DEFINITION)),
                 event.getSubject(),
                 input,
-                Integer.parseInt(ext(event, StintEvents.EXT_ATTEMPT)));
+                Integer.parseInt(ext(event, StintEvents.EXT_ATTEMPT)),
+                lineage(event));
     }
 
     @Override
@@ -100,14 +89,38 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
         String correlationId = ext(event, StintEvents.EXT_CORRELATION_ID);
         TaskResult.Status status = TaskResult.Status.valueOf(data.get("status").asText());
         if (status == TaskResult.Status.FAILED) {
-            return TaskResult.failed(correlationId, errorFromJson(data.get("error")));
+            return TaskResult.failed(correlationId, errorFromJson(data.get("error"))).withLineage(lineage(event));
         }
-        return TaskResult.completed(correlationId, data.get("output"));
+        return TaskResult.completed(correlationId, data.get("output")).withLineage(lineage(event));
     }
 
-    @Override
-    public TimerFire toTimerFire(CloudEvent event) {
-        return new TimerFire(ext(event, StintEvents.EXT_TIMER_ID), ext(event, StintEvents.EXT_WORKFLOW_INSTANCE_ID));
+    /** SDD 2.5: writes only the lineage extensions that are set. */
+    private static CloudEventBuilder withLineage(CloudEventBuilder builder, Lineage lineage) {
+        putIfSet(builder, StintEvents.EXT_CHAIN_ID, lineage.chainId());
+        putIfSet(builder, StintEvents.EXT_CAUSATION_ID, lineage.causationId());
+        putIfSet(builder, StintEvents.EXT_TRACEPARENT, lineage.traceparent());
+        putIfSet(builder, StintEvents.EXT_TRACESTATE, lineage.tracestate());
+        return builder;
+    }
+
+    private static void putIfSet(CloudEventBuilder builder, String name, String value) {
+        if (value != null && !value.isBlank()) {
+            builder.withExtension(name, value);
+        }
+    }
+
+    /**
+     * SDD 2.5, tolerant read: any of the four extensions may be missing (an event in the pre-2.5 format
+     * has none of them) — missing reads as {@code null}, never as an error.
+     */
+    public static Lineage lineage(CloudEvent event) {
+        return new Lineage(optionalExt(event, StintEvents.EXT_CHAIN_ID), optionalExt(event, StintEvents.EXT_CAUSATION_ID),
+                optionalExt(event, StintEvents.EXT_TRACEPARENT), optionalExt(event, StintEvents.EXT_TRACESTATE));
+    }
+
+    private static String optionalExt(CloudEvent event, String name) {
+        Object value = event.getExtension(name);
+        return value == null ? null : value.toString();
     }
 
     private static ObjectNode errorToJson(ErrorInfo error) {
