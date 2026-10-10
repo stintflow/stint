@@ -1,0 +1,31 @@
+# CNCF Serverless Workflow definition for the send-report flow (SDD 1.4, CA2/CA3).
+# 'schedule' and the 'emit' task are valid DSL 1.0 constructs this phase does not implement yet
+# (Fase 2) — loading this file strictly (LoadOptions.STRICT) must fail citing both; loading it
+# permissively (LoadOptions.PERMISSIVE) must drop both (with a warning) and still run 'sendEmail'
+# end to end.
+document:
+  dsl: '1.0.0'
+  namespace: reports
+  name: send-report
+  version: '1.0.0'
+schedule:
+  cron: '0 9 * * MON'
+do:
+  - sendEmail:
+      call: remote
+      with:
+        task: send-email      # routing key -> CloudEvent subject -> selects the worker
+        input:
+          to: ${ $context.recipient }
+          subject: ${ $context.subject }
+          body: ${ $context.body }
+      export:
+        as: '${ $context + {messageId} }'
+      # output: { messageId: "..." } merged into $context
+
+  - reportSent:
+      emit:
+        event:
+          with:
+            type: report-sent.v1
+            data: ${ $context }

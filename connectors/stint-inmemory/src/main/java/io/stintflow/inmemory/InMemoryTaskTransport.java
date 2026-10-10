@@ -7,10 +7,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
 
-import io.stintflow.core.DefaultCloudEventCodec;
+import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.spi.AdapterCapabilities;
 import io.stintflow.spi.AdapterCapabilities.DeliveryGuarantee;
+import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.TaskInvocation;
+import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskResultHandler;
 import io.stintflow.spi.TaskTransport;
 import io.stintflow.spi.wire.CloudEventCodec;
@@ -45,8 +47,16 @@ public final class InMemoryTaskTransport implements TaskTransport {
     public CompletionStage<Void> dispatch(TaskInvocation invocation) {
         CloudEvent invokeEvent = codec.toEvent(invocation);
         return CompletableFuture.runAsync(() -> {
-            worker.apply(invokeEvent).thenAccept(resultEvent ->
-                    resultHandler.handle(codec.toResult(resultEvent)));
+            worker.apply(invokeEvent)
+                    .thenAccept(resultEvent -> resultHandler.handle(codec.toResult(resultEvent)))
+                    .exceptionally(ex -> {
+                        // SDD 1.3, RF9: a worker function that throws/fails must still produce a result —
+                        // otherwise the instance would wait forever for something that will never arrive.
+                        Throwable cause = ex instanceof java.util.concurrent.CompletionException && ex.getCause() != null
+                                ? ex.getCause() : ex;
+                        resultHandler.handle(TaskResult.failed(invocation.correlationId(), ErrorInfo.of(cause)));
+                        return null;
+                    });
         }, pool);
     }
 

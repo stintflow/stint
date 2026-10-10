@@ -2,6 +2,7 @@ package io.stintflow.spi.wire;
 
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
+import io.stintflow.spi.TimerFire;
 import io.cloudevents.CloudEvent;
 
 /**
@@ -14,7 +15,12 @@ public interface CloudEventCodec {
 
     CloudEvent toEvent(TaskResult result, String workflowInstanceId);
 
+    /** SDD 1.3: encodes a {@code io.stintflow.timer.fire.v1} event. */
+    CloudEvent toEvent(TimerFire fire);
+
     TaskInvocation toInvocation(CloudEvent event);
 
     TaskResult toResult(CloudEvent event);
+
+    TimerFire toTimerFire(CloudEvent event);
 }

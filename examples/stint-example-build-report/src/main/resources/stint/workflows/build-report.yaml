@@ -1,0 +1,29 @@
+# CNCF Serverless Workflow definition for the build-report flow (SDD 1.4: this YAML is now the
+# contract of truth — DslLoader compiles it directly; BuildReport.java's Java model is kept only as
+# CA1's golden-test oracle, to prove the two representations produce the same runtime behaviour).
+document:
+  dsl: '1.0.0'
+  namespace: reports
+  name: build-report
+  version: '1.0.0'
+do:
+  - extractData:
+      call: remote
+      with:
+        task: query-and-stage      # routing key -> CloudEvent subject -> selects the worker
+        input:
+          query: ${ $context.reportQuery }
+      export:
+        as: '${ $context + {pointer, rows} }'
+      # output: { pointer: "s3://...", rows: N } merged into $context
+
+  - formatFile:
+      call: remote
+      with:
+        task: format-file
+        input:
+          source: ${ $context.pointer }
+          format: ${ $context.outputFormat }
+      export:
+        as: '${ $context + {file} }'
+      # output: { file: "s3://.../final.xlsx" } merged into $context

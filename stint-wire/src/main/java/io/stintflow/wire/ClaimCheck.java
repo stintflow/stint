@@ -1,4 +1,4 @@
-package io.stintflow.core;
+package io.stintflow.wire;
 
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;

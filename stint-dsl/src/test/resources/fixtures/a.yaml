@@ -1,0 +1,10 @@
+document:
+  dsl: '1.0.0'
+  namespace: test
+  name: fixture-a
+  version: '1.0.0'
+do:
+  - onlyStep:
+      call: remote
+      with:
+        task: route-a

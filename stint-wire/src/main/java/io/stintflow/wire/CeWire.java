@@ -1,4 +1,4 @@
-package io.stintflow.core;
+package io.stintflow.wire;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
