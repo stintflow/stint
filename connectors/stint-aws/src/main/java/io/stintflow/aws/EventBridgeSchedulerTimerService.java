@@ -38,13 +38,15 @@ import software.amazon.awssdk.services.scheduler.model.Target;
  *   <li>{@code ActionAfterCompletion=DELETE}, so a fired schedule doesn't use up the quota.</li>
  * </ul>
  * Its target is <strong>the timer queue</strong> of {@link SqsDelayTimerService}, and its {@code Input} is
- * <strong>the same JSON</strong>, {@code {timerId, workflowInstanceId}} — not a CloudEvent (SDD 1.3). That
+ * <strong>the same JSON</strong>, {@code {timerId, workflowInstanceId, armedAt}} — not a CloudEvent (SDD 1.3;
+ * {@code armedAt} since SDD 2.9). That
  * queue's poller fires it, so {@link #onFire} has nothing to do here.
  * <p>
  * CDI: injectable by its own type only, so {@code TimerService} injection points keep resolving to
  * {@link SqsDelayTimerService}; wire the composite by hand.
  * <p>
- * Precision: between {@code fireAt} and about a minute later. {@link #cancel} deletes the schedule,
+ * Precision (reviewed in SDD 2.9, RF1): between {@code fireAt} and about a minute later — never before, so a
+ * long timer cannot fire ahead of the save of its wait; the early-fire rule of SDD 2.9 covers it anyway. {@link #cancel} deletes the schedule,
  * best-effort; a late fire finds no wait and is a no-op (SDD 1.3).
  */
 @ApplicationScoped
@@ -90,6 +92,7 @@ public class EventBridgeSchedulerTimerService implements TimerService {
             ObjectNode body = Json.obj();
             body.put("timerId", req.timerId());
             body.put("workflowInstanceId", req.workflowInstanceId());
+            body.put("armedAt", java.time.Instant.now().toString()); // SDD 2.9, sec. 8c: same JSON as the SQS timers
             try {
                 scheduler.createSchedule(r -> r.name(scheduleName(req.timerId())).groupName(group)
                         .scheduleExpression("at(" + AT.format(roundUpToMinute(req.fireAt())) + ")")
