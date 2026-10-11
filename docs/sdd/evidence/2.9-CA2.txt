@@ -1,0 +1,12 @@
+SDD 2.9, CA2: SqsDelayTimerService rounds the delay up to whole seconds.
+Stint phase-2/federated-orchestration; SDD 2.9 commits 8a47d03..185c16b (local, not pushed).
+
+Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.030 s -- in io.stintflow.aws.SqsDelayTimerServiceTest
+  - delay_rounds_up_to_whole_seconds
+  - a_fire_at_or_before_now_has_no_delay_and_beyond_the_sqs_max_is_refused
+  - the_timer_json_reads_with_and_without_armed_at
+  - early_fires_come_back_after_2_4_8_then_16_seconds
+
+delay_rounds_up_to_whole_seconds: 1 ms -> 1, 999 ms -> 1, 1 s -> 1, 1.001 s -> 2, 900 s -> 900.
+Also: fireAt at or before now -> 0; beyond 900 s -> refused; early-fire backoff 2/4/8/16 s; the timer JSON
+read with and without armedAt (sec. 8c).

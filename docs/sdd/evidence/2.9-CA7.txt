@@ -1,0 +1,44 @@
+SDD 2.9, CA7: mvn verify green, the floci ITs green, ArchUnit with more than zero classes per rule.
+Stint phase-2/federated-orchestration; SDD 2.9 commits 8a47d03..185c16b (local, not pushed).
+
+1) mvn clean install (all modules, unit tests + ITs up to the AWS smoke, which hung in its dev services step):
+Stint :: Parent .................................... SUCCESS [  0.149 s]
+Stint :: SPI ....................................... SUCCESS [  3.182 s]
+Stint :: Wire ...................................... SUCCESS [  1.270 s]
+Stint :: Core ...................................... SUCCESS [  2.719 s]
+Stint :: DSL ....................................... SUCCESS [  2.272 s]
+Stint :: Worker SDK ................................ SUCCESS [  1.238 s]
+Stint :: Connectors :: In-Memory ................... SUCCESS [  3.077 s]
+Stint :: OpenTelemetry ............................. SUCCESS [  1.625 s]
+Stint :: Connectors :: AWS ......................... SUCCESS [  2.387 s]
+Stint :: Bundles :: Local .......................... SUCCESS [  0.332 s]
+Stint :: Bundles :: AWS ............................ SUCCESS [  0.423 s]
+Stint :: Examples :: Build Report .................. SUCCESS [ 11.267 s]
+Stint :: Examples :: Send Report ................... SUCCESS [  1.851 s]
+Stint :: Examples :: Archive Report ................ SUCCESS [  1.679 s]
+Stint :: Examples :: AWS Smoke ..................... FAILURE [21:26 min]
+
+2) mvn verify -pl stint-it,stint-architecture-tests (every IT on floci, incl. the new FlociEarlyFireIT):
+Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.585 s -- in io.stintflow.it.EarlyTimerFireTest
+Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.261 s -- in io.stintflow.it.SendReportMilestoneLocalTest
+Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.056 s -- in io.stintflow.it.StandardErrorTypesTest
+Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.106 s -- in io.stintflow.it.TryInputTest
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.732 s -- in io.stintflow.it.DynamoDbStateStoreConflictIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.149 s -- in io.stintflow.it.FlociBuildReportIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.902 s -- in io.stintflow.it.FlociDomainEventTriggerIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.255 s -- in io.stintflow.it.FlociEarlyFireIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.042 s -- in io.stintflow.it.FlociEmitIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.771 s -- in io.stintflow.it.FlociListenIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 30.53 s -- in io.stintflow.it.FlociSchedulerIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 61.38 s -- in io.stintflow.it.FlociSendReportMilestoneIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 120.6 s -- in io.stintflow.it.FlociTimerIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.680 s -- in io.stintflow.it.SqsResultDeliveryIT
+Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.834 s -- in io.stintflow.architecture.ArchitectureTest
+BUILD SUCCESS
+
+3) mvn verify -pl examples/stint-example-aws-smoke, after turning off the SNS dev service (sec. 8g):
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.980 s -- in io.stintflow.example.smoke.AwsSmokeIT
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+
+ArchUnit: ArchitectureTest (7 rules) is unchanged; its rules fail when they analyze no classes (SDD 2.x).

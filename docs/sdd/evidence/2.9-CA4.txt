@@ -1,0 +1,12 @@
+SDD 2.9, CA4: a fire for a finished instance is still a no-op, acknowledged and logged as obsolete; a fire past
+the window (or without armedAt) is acknowledged with a WARN.
+Stint phase-2/federated-orchestration; SDD 2.9 commits 8a47d03..185c16b (local, not pushed).
+
+Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.585 s -- in io.stintflow.it.EarlyTimerFireTest
+  - a_fire_without_its_wait_past_the_window_or_without_armed_at_is_acked_with_a_warning
+  - fire_for_a_completed_instance_is_logged_obsolete_and_acked
+
+Asserted log lines (logger io.stintflow.core.WorkflowEngine):
+  INFO  Timer fire without its wait: decision=obsolete timerId=<id> ... instanceStatus=COMPLETED
+  WARN  Timer fire without its wait: decision=obsolete-after-window ... armedAt=<30 s ago> age=PT30S instanceStatus=WAITING
+  WARN  Timer fire without its wait: decision=obsolete-after-window ... armedAt=null age=null instanceStatus=WAITING

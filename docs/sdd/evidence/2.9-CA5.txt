@@ -1,0 +1,24 @@
+SDD 2.9, CA5: a call: remote inside try receives its declared with.input; with.input applies after input.from;
+every retry dispatches the first attempt's input; a STRICT load fails on any declared key the compiler would
+ignore, naming the key and its path.
+Stint phase-2/federated-orchestration; SDD 2.9 commits 8a47d03..185c16b (local, not pushed).
+
+Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.106 s -- in io.stintflow.it.TryInputTest
+  - every_retry_dispatches_the_same_input_as_the_first_attempt
+  - with_input_is_evaluated_over_the_result_of_input_from
+  - a_remote_call_inside_try_receives_its_declared_with_input
+Discrimination: against the pre-RF4 production code (stashed) the three fail: "Tests run: 3, Failures: 3".
+
+Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.074 s -- in io.stintflow.dsl.DslLoaderUnusedFieldsTest
+  - permissive_loads_the_same_definition_with_a_warning
+  - retry_jitter_and_a_custom_error_name_fail_strict_instead_of_a_warning
+  - an_unknown_key_of_a_remote_call_fails_strict_naming_the_key_and_its_path
+  - dsl_properties_this_version_does_not_implement_fail_strict
+  - two_constructs_in_one_task_fail_strict
+  - a_misspelled_duration_unit_fails_strict_instead_of_becoming_zero
+  - the_informative_dsl_keys_are_accepted
+  - the_then_of_a_try_body_fails_strict_because_only_the_try_then_applies
+
+Approved change of an existing assertion: DslLoaderTest.compiles_call_remote_with_with_input_reading_context_
+and_export_merging_output now reads with.input from CallRemoteNode.withInput (was DataFlow.inputFrom).
+Every YAML of Stint, its examples and the sandbox (S.1-S.3) still loads in STRICT (builds below and CA6).

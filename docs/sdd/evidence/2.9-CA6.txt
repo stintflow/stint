@@ -1,0 +1,34 @@
+SDD 2.9, CA6: cross-validation in stint-consumer-sandbox. With Stint 185c16b installed locally, the sandbox's
+S.2 CA3 (FlociBillingIT.ca3_a_transient_503_succeeds_on_the_third_attempt: fail503- order, two 503s, retry with
+exponential backoff from 'delay: {seconds: 1}') run 20 times in a row. Only the pinned SHA (README) and the test
+delay (issue-invoice.yaml, 2 s -> 1 s) were changed in the sandbox, uncommitted, and reverted afterwards.
+Command, per run: mvn verify -Pfloci -pl sandbox-billing -Dtest='FlociBillingIT#ca3*' (floci on localhost:4566).
+Before the fix (S.2, 8i) this test stopped once in its second full run with the 1 s delay.
+
+run 1 12:07:17Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-3f024369-2211-3611-9714-7601aa8dff09 attempt 2 evt-3f024369-2211-3611-9714-7601aa8dff09 
+run 2 12:09:18Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-b73cc608-27f5-31e5-a463-c461802e3503 attempt 2 evt-b73cc608-27f5-31e5-a463-c461802e3503 
+run 3 12:11:20Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-46389ebc-4f4a-3f5d-8bfb-3cd14507c8d1 attempt 2 evt-46389ebc-4f4a-3f5d-8bfb-3cd14507c8d1 
+run 4 12:13:21Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-f16cb61b-01a3-3f5e-bd92-1599bf4fdb38 attempt 2 evt-f16cb61b-01a3-3f5e-bd92-1599bf4fdb38 
+run 5 12:15:23Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-8c1b53da-d388-37d7-a5b0-8520990bf2c6 attempt 2 evt-8c1b53da-d388-37d7-a5b0-8520990bf2c6 
+run 6 12:17:25Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-704872ed-eb70-3cc5-9a2a-99380128f2b2 attempt 2 evt-704872ed-eb70-3cc5-9a2a-99380128f2b2 
+run 7 12:19:29Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-e162817a-4782-3d48-af9c-9ae16b17e2b0 attempt 2 evt-e162817a-4782-3d48-af9c-9ae16b17e2b0 
+run 8 12:21:29Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-84d92dda-ebb6-330e-836d-413a6668c3ae attempt 2 evt-84d92dda-ebb6-330e-836d-413a6668c3ae 
+run 9 12:23:30Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-96cbeb02-3e8e-3aef-a741-e0e370d9787e attempt 2 evt-96cbeb02-3e8e-3aef-a741-e0e370d9787e 
+run 10 12:25:33Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-e1985126-0342-3e00-accc-c26ef1372052 attempt 2 evt-e1985126-0342-3e00-accc-c26ef1372052 
+run 11 12:27:34Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-08e134d6-ec80-3375-8dac-dab6369394b9 attempt 2 evt-08e134d6-ec80-3375-8dac-dab6369394b9 
+run 12 12:29:37Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-cc6c29bf-effc-3de6-80c3-145ee9707c23 attempt 2 evt-cc6c29bf-effc-3de6-80c3-145ee9707c23 
+run 13 12:31:40Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-b0fb4e56-55f0-3fba-a775-9ae6476e821f attempt 2 evt-b0fb4e56-55f0-3fba-a775-9ae6476e821f 
+run 14 12:33:41Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-2bb792da-24c1-3324-add1-8ae97e046d89 attempt 2 evt-2bb792da-24c1-3324-add1-8ae97e046d89 
+run 15 12:35:44Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-ff67de3f-4022-3473-aa6f-d5736b3e5b2e attempt 2 evt-ff67de3f-4022-3473-aa6f-d5736b3e5b2e 
+run 16 12:37:44Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-aa91c4da-7679-33eb-98ea-343ecf8cf822 attempt 2 evt-aa91c4da-7679-33eb-98ea-343ecf8cf822 
+run 17 12:39:46Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-b0cdab95-0922-35a1-9468-2b99ab14fc8d attempt 2 evt-b0cdab95-0922-35a1-9468-2b99ab14fc8d 
+run 18 12:41:49Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-56cb4d63-9882-3a5b-ad4f-47b543bc15d5 attempt 2 evt-56cb4d63-9882-3a5b-ad4f-47b543bc15d5 
+run 19 12:43:49Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-17f9cf3b-fdbd-3e92-8bea-664e737d31cc attempt 2 evt-17f9cf3b-fdbd-3e92-8bea-664e737d31cc 
+run 20 12:45:51Z: Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 | attempt 1 evt-1632e258-28d2-350d-9c60-e53a041cdd3e attempt 2 evt-1632e258-28d2-350d-9c60-e53a041cdd3e 
+
+Result: 20 of 20 runs passed; each instance failed attempts 1 and 2 and completed on attempt 3 (renderAttempt=3).
+Unmatched timer fires logged by the engine over the 20 runs: 0 early, 0 obsolete-after-window, 760 obsolete.
+The 760 are 760 distinct timers, each acked once (none repeats across runs): task-timeout timers in the old format
+(armedAt=null) of instances that earlier sandbox runs (on the d455dc0 jar, S.2/S.3) had already COMPLETED, delivered
+now and classified as obsolete with INFO, as CA4 specifies. No retry timer fired ahead of its wait in any run.
+billing-timers-dlq afterwards: 0.
