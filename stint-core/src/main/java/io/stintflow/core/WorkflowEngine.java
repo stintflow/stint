@@ -677,7 +677,8 @@ public final class WorkflowEngine {
         String instanceId = inst.id();
         String retryId = UUID.randomUUID().toString();
         String retryKey = WaitKeys.retry(retryId);
-        RetryState newRetryState = new RetryState(tryNode.pointer(), attempt, firstAttemptAt, error, null);
+        RetryState newRetryState = new RetryState(tryNode.pointer(), attempt, firstAttemptAt, error, null,
+                snap.retryState() != null ? snap.retryState().dispatchInput() : null);
         InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(), retryKey,
                 snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState, clock.instant(),
                 inst.input(), inst.startedAt(), inst.chainId(), inst.trace(), inst.listenState());
@@ -699,16 +700,26 @@ public final class WorkflowEngine {
         String timerKey = WaitKeys.timer(correlationId);
         CallRemoteNode body = tryNode.body();
 
-        JsonNode effectiveInput = DataFlowSupport.applyExpr(interpreter.evaluator(), tryNode.dataFlow().inputFrom(),
-                snap.context(), snap.context(), inst.descriptor(def.ref()));
-
-        // Keyed per attempt: with deterministic event-started ids (SDD 2.1, 8a) two racing duplicates must
-        // never overwrite each other's claim-checked payload.
-        return ClaimCheck.offload(effectiveInput, transport.capabilities(), blob,
-                        instanceId + "/" + body.name() + "/" + correlationId)
+        // SDD 2.9, RF4: a retry dispatches again exactly what attempt 1 dispatched (recorded in its wire form, so a
+        // claim-checked payload is reused as is). Snapshots from before SDD 2.9 have no record: recompute it, from
+        // $context as before, but through the body's input.from and with.input.
+        JsonNode recorded = prior != null ? prior.dispatchInput() : null;
+        CompletionStage<JsonNode> wire;
+        if (recorded != null) {
+            wire = CompletableFuture.completedFuture(recorded);
+        } else {
+            WorkflowDescriptor wf = inst.descriptor(def.ref());
+            JsonNode tryInput = DataFlowSupport.applyExpr(interpreter.evaluator(), tryNode.dataFlow().inputFrom(),
+                    snap.context(), snap.context(), wf);
+            // Keyed per attempt: with deterministic event-started ids (SDD 2.1, 8a) two racing duplicates must
+            // never overwrite each other's claim-checked payload.
+            wire = ClaimCheck.offload(interpreter.tryBodyArgument(tryNode, tryInput, snap.context(), wf),
+                    transport.capabilities(), blob, instanceId + "/" + body.name() + "/" + correlationId);
+        }
+        return wire
                 .thenCompose(wireInput -> {
                     RetryState newRetryState = new RetryState(tryNode.pointer(), nextAttempt, firstAttemptAt,
-                            prior != null ? prior.lastError() : null, correlationId);
+                            prior != null ? prior.lastError() : null, correlationId, wireInput);
                     InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(),
                             taskKey, snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState,
                             clock.instant(), inst.input(), inst.startedAt(), inst.chainId(), inst.trace(),
@@ -892,14 +903,16 @@ public final class WorkflowEngine {
         String correlationId = UUID.randomUUID().toString();
         String taskKey = WaitKeys.task(correlationId);
         String timerKey = WaitKeys.timer(correlationId);
-        RetryState retryState = initialRetryState == null ? null
-                : new RetryState(initialRetryState.tryNodePointer(), initialRetryState.attempt(),
-                        initialRetryState.firstAttemptAt(), initialRetryState.lastError(), correlationId);
-
         // Keyed per attempt (see redispatchRetry): racing duplicate creates never share a blob key.
         return ClaimCheck.offload(dispatchInput, transport.capabilities(), blob,
                         instanceId + "/" + node.name() + "/" + correlationId)
                 .thenCompose(wireInput -> {
+                    // SDD 2.9, RF4: inside a try, attempt 1 records what it dispatched; retries send it again.
+                    RetryState retryState = initialRetryState == null ? null
+                            : new RetryState(initialRetryState.tryNodePointer(), initialRetryState.attempt(),
+                                    initialRetryState.firstAttemptAt(), initialRetryState.lastError(), correlationId,
+                                    initialRetryState.dispatchInput() != null ? initialRetryState.dispatchInput()
+                                            : wireInput);
                     InstanceSnapshot snap = new InstanceSnapshot(instanceId, def.ref(), position, taskKey, context,
                             InstanceStatus.WAITING, expectedVersion + 1, retryState, clock.instant(),
                             inst.input(), inst.startedAt(), inst.chainId(), inst.trace(), inst.listenState());

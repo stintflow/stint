@@ -395,6 +395,9 @@ public class DynamoDbStateStore implements StateStore {
         if (state.lastError() != null) {
             node.set("lastError", errorToJson(state.lastError()));
         }
+        if (state.dispatchInput() != null) {
+            node.set("dispatchInput", state.dispatchInput()); // SDD 2.9, RF4
+        }
         return node;
     }
 
@@ -405,7 +408,8 @@ public class DynamoDbStateStore implements StateStore {
                 node.get("attempt").asInt(),
                 Instant.ofEpochMilli(node.get("firstAttemptAt").asLong()),
                 lastError,
-                node.hasNonNull("currentCorrelationId") ? node.get("currentCorrelationId").asText() : null);
+                node.hasNonNull("currentCorrelationId") ? node.get("currentCorrelationId").asText() : null,
+                node.hasNonNull("dispatchInput") ? node.get("dispatchInput") : null);
     }
 
     private static ObjectNode errorToJson(ErrorInfo error) {

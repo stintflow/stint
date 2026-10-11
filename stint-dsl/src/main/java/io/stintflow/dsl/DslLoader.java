@@ -322,9 +322,13 @@ public final class DslLoader {
             }
             String routingKey = with.get("task").asText();
             Duration timeout = compileTimeout(body, pointer);
+            // SDD 2.9, RF4: input.from transforms the task's input, then with.input (the call's argument) is
+            // evaluated over it — both apply, inside a try or not (DSL 1.0 data flow, then the call's 'with').
             JsonNode remoteInput = with.get("input");
-            DataFlow dataFlow = compileDataFlow(body, pointer, remoteInput, pointer + "/with/input");
-            return new CallRemoteNode(name, pointer, dataFlow, compileThen(body), routingKey, timeout);
+            Expr withInput = remoteInput == null ? null
+                    : compileAndValidate(TemplateCompiler.compileTemplate(remoteInput), pointer + "/with/input");
+            DataFlow dataFlow = compileDataFlow(body, pointer, null, null);
+            return new CallRemoteNode(name, pointer, dataFlow, compileThen(body), routingKey, timeout, withInput);
         }
 
         /**
