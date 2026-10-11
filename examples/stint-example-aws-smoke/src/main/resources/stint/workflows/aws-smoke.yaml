@@ -3,6 +3,7 @@
 # - call: remote   -> SQS task transport, worker in-process; its 20-minute timeout is beyond SQS's 15 min, so it
 #                     is armed as an EventBridge Scheduler one-time schedule (and cancelled when the result arrives)
 # - emit           -> the EventBridge domain bus, through the DynamoDB outbox
+# - a jq builtin   -> `length` (SDD 2.10): native images must carry jackson-jq's Java functions
 document:
   dsl: '1.0.0'
   namespace: smoke
@@ -17,6 +18,7 @@ do:
         task: echo
         input:
           name: ${ .name }
+          nameLength: ${ .name | length }
       timeout:
         after:
           minutes: 20

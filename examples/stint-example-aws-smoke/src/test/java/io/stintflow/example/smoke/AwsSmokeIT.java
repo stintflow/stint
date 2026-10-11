@@ -53,6 +53,8 @@ class AwsSmokeIT {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
         JsonNode context = Json.read(response.body().getBytes(StandardCharsets.UTF_8));
         assertThat(context.get("echo").asText()).isEqualTo("smoke");
+        // SDD 2.10: computed by jq's builtin `length`, which a native image only has with stint-core's metadata
+        assertThat(context.get("nameLength").asInt()).isEqualTo(5);
         assertThat(context.get("chainId").asText()).startsWith("chn-");
 
         try (SqsClient sqs = SqsClient.builder().endpointOverride(FlociResource.endpoint).region(Region.US_EAST_1)
@@ -64,6 +66,7 @@ class AwsSmokeIT {
             JsonNode event = Json.read(fact.body().getBytes(StandardCharsets.UTF_8));
             assertThat(event.get("type").asText()).isEqualTo("io.stintflow.smoke.done.v1");
             assertThat(event.get("data").get("echo").asText()).isEqualTo("smoke");
+            assertThat(event.get("data").get("nameLength").asInt()).isEqualTo(5);
             assertThat(event.get("chainid").asText()).isEqualTo(context.get("chainId").asText());
 
             assertThat(scheduler.listSchedules(r -> r.groupName("stint-schedules")).schedules()).hasSize(1);

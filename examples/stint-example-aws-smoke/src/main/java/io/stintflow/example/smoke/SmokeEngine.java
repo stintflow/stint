@@ -119,6 +119,7 @@ public class SmokeEngine {
         WorkerRuntime runtime = new WorkerRuntime(new TaskHandlerRegistry().register("echo", ctx -> {
             ObjectNode out = Json.obj();
             out.put("echo", ctx.input().path("name").asText());
+            out.set("nameLength", ctx.input().path("nameLength"));
             out.put("chainId", ctx.chainId());
             return java.util.concurrent.CompletableFuture.completedFuture(out);
         }), blobs);
