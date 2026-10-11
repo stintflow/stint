@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -127,6 +128,40 @@ public final class DslLoader {
     /** Per-load mutable compiler state — a fresh instance backs every {@link #load} call. */
     private static final class Compiler {
         private final String sourceName;
+        // SDD 2.9, RF4: the keys the compiler uses, per object (DSL 1.0 informative keys included).
+        private static final Set<String> ROOT_KEYS = Set.of("document", "schedule", "do");
+        private static final Set<String> DOCUMENT_KEYS =
+                Set.of("dsl", "namespace", "name", "version", "title", "summary", "tags", "metadata");
+        private static final Set<String> SCHEDULE_KEYS = Set.of("cron", "every", "on", "after");
+        private static final List<String> TASK_CONSTRUCTS =
+                List.of("call", "set", "switch", "try", "emit", "listen", "fork", "wait", "for", "raise", "run", "do");
+        private static final Set<String> COMMON_TASK_KEYS = Set.of("input", "output", "export", "then", "metadata");
+        private static final Map<String, Set<String>> TASK_KEYS = Map.of(
+                "call", Set.of("call", "with", "timeout"),
+                "set", Set.of("set"),
+                "switch", Set.of("switch"),
+                "try", Set.of("try", "catch"),
+                "emit", Set.of("emit"),
+                "listen", Set.of("listen", "timeout"));
+        private static final Set<String> CALL_REMOTE_WITH_KEYS = Set.of("task", "input");
+        private static final Set<String> TIMEOUT_KEYS = Set.of("after");
+        private static final Set<String> DURATION_KEYS = Set.of("days", "hours", "minutes", "seconds", "milliseconds");
+        private static final Set<String> INPUT_KEYS = Set.of("from");
+        private static final Set<String> OUTPUT_KEYS = Set.of("as");
+        private static final Set<String> EMIT_KEYS = Set.of("event");
+        private static final Set<String> EMIT_EVENT_KEYS = Set.of("with");
+        private static final Set<String> LISTEN_KEYS = Set.of("to", "read", "foreach");
+        private static final Set<String> LISTEN_TO_KEYS = Set.of("one", "any", "all", "until");
+        private static final Set<String> EVENT_FILTER_KEYS = Set.of("with", "correlate");
+        private static final Set<String> CORRELATION_KEYS = Set.of("from", "expect");
+        private static final Set<String> SWITCH_CASE_KEYS = Set.of("when", "then");
+        private static final Set<String> CATCH_KEYS = Set.of("errors", "as", "when", "exceptWhen", "retry", "do", "then");
+        private static final Set<String> CATCH_ERRORS_KEYS = Set.of("with");
+        private static final Set<String> RETRY_KEYS = Set.of("delay", "backoff", "limit", "jitter", "when", "exceptWhen");
+        private static final Set<String> BACKOFF_KEYS = Set.of("constant", "linear", "exponential");
+        private static final Set<String> RETRY_LIMIT_KEYS = Set.of("attempt", "duration");
+        private static final Set<String> RETRY_ATTEMPT_KEYS = Set.of("count", "duration");
+
         private final LoadOptions opts;
         private final ExpressionEvaluator evaluator;
         private final YamlLocationIndex locations;
@@ -140,7 +175,9 @@ public final class DslLoader {
         }
 
         WorkflowDefinition compileDocument(JsonNode root) {
+            checkKeys(root, "", ROOT_KEYS);
             JsonNode document = require(root, "document", "/");
+            checkKeys(document, "/document", DOCUMENT_KEYS);
             String namespace = document.path("namespace").asText("default");
             String name = requireText(document, "name", "/document/name");
             String version = requireText(document, "version", "/document/version");
@@ -194,9 +231,14 @@ public final class DslLoader {
                 hardError(schedule.has("cron") ? "/schedule/cron" : "/schedule/every", e.getMessage(), null);
                 return null;
             }
+            checkKeys(schedule, "/schedule", SCHEDULE_KEYS);
+            if (schedule.has("every")) {
+                checkDuration(schedule.get("every"), "/schedule/every");
+            }
             List<EventFilter> on = new ArrayList<>();
             if (schedule.has("on")) {
                 JsonNode to = schedule.get("on");
+                checkKeys(to, "/schedule/on", LISTEN_TO_KEYS);
                 if (to.has("all") || to.has("until")) {
                     unsupported("/schedule/on", "'schedule.on' with 'all' or 'until' is not supported in this phase");
                     return null;
@@ -231,6 +273,7 @@ public final class DslLoader {
 
         /** An exact-match filter that starts a definition (SDD 2.1 {@link EventFilter}); no {@code correlate}. */
         private EventFilter compileStartFilter(JsonNode filter, String pointer) {
+            checkKeys(filter, pointer, EVENT_FILTER_KEYS);
             if (filter.has("correlate")) {
                 unsupported(pointer + "/correlate", "'correlate' when starting a workflow is not supported in this phase");
                 return null;
@@ -277,6 +320,7 @@ public final class DslLoader {
         }
 
         private TaskNode compileTask(String name, JsonNode body, String pointer) {
+            checkTaskKeys(body, pointer);
             if (body.has("call")) {
                 return compileCallRemote(name, body, pointer);
             }
@@ -320,6 +364,7 @@ public final class DslLoader {
                 hardError(pointer + "/with", "'call: remote' requires 'with.task' (the routing key)", null);
                 return null;
             }
+            checkKeys(with, pointer + "/with", CALL_REMOTE_WITH_KEYS);
             String routingKey = with.get("task").asText();
             Duration timeout = compileTimeout(body, pointer);
             // SDD 2.9, RF4: input.from transforms the task's input, then with.input (the call's argument) is
@@ -339,6 +384,8 @@ public final class DslLoader {
          */
         private TaskNode compileEmit(String name, JsonNode body, String pointer) {
             String withPointer = pointer + "/emit/event/with";
+            checkKeys(body.path("emit"), pointer + "/emit", EMIT_KEYS);
+            checkKeys(body.path("emit").path("event"), pointer + "/emit/event", EMIT_EVENT_KEYS);
             JsonNode with = body.path("emit").path("event").path("with");
             if (!with.isObject()) {
                 hardError(withPointer, "'emit' requires an 'event.with' object", null);
@@ -378,7 +425,9 @@ public final class DslLoader {
         private TaskNode compileListen(String name, JsonNode body, String pointer) {
             String listenPointer = pointer + "/listen";
             JsonNode listen = body.get("listen");
+            checkKeys(listen, listenPointer, LISTEN_KEYS);
             JsonNode to = listen.path("to");
+            checkKeys(to, listenPointer + "/to", LISTEN_TO_KEYS);
             if (listen.has("foreach")) {
                 unsupported(listenPointer + "/foreach", "'listen.foreach' is not supported in this phase");
                 return null;
@@ -436,6 +485,7 @@ public final class DslLoader {
         }
 
         private ListenNode.Filter compileEventFilter(JsonNode filter, String pointer) {
+            checkKeys(filter, pointer, EVENT_FILTER_KEYS);
             JsonNode with = filter.path("with");
             if (!with.isObject() || !with.hasNonNull("type")) {
                 hardError(pointer + "/with/type", "an event filter requires 'with.type'", null);
@@ -465,6 +515,7 @@ public final class DslLoader {
                 String correlationName = it.next();
                 JsonNode correlation = correlate.get(correlationName);
                 String correlationPointer = pointer + "/correlate/" + correlationName;
+                checkKeys(correlation, correlationPointer, CORRELATION_KEYS);
                 if (!correlation.hasNonNull("from")) {
                     hardError(correlationPointer + "/from", "a correlation requires 'from'", null);
                     return null;
@@ -499,6 +550,7 @@ public final class DslLoader {
                 String caseName = names.next();
                 JsonNode caseBody = entry.get(caseName);
                 String casePointer = pointer + "/switch/" + i;
+                checkKeys(caseBody, casePointer + "/" + caseName, SWITCH_CASE_KEYS);
                 Expr when = caseBody.has("when")
                         ? compileAndValidate(TemplateCompiler.compileBareExpression(caseBody.get("when").asText()), casePointer + "/when")
                         : null;
@@ -526,6 +578,12 @@ public final class DslLoader {
                 return null;
             }
             TaskNode bodyCall = bodyTasks.get(0);
+            JsonNode bodyEntry = tryList.get(0);
+            String bodyName = bodyEntry.fieldNames().next();
+            if (bodyEntry.get(bodyName).has("then")) {
+                unsupported(bodyCall.pointer() + "/then", "'then' of a try's body is not used: the try's own 'then' "
+                        + "applies (SDD 2.9)");
+            }
 
             JsonNode catchNode = body.get("catch");
             if (catchNode == null) {
@@ -537,6 +595,10 @@ public final class DslLoader {
         }
 
         private TryNode.Catch compileCatch(JsonNode catchNode, String pointer) {
+            checkKeys(catchNode, pointer, CATCH_KEYS);
+            if (catchNode.has("errors")) {
+                checkKeys(catchNode.get("errors"), pointer + "/errors", CATCH_ERRORS_KEYS);
+            }
             Expr errorFilter = compileErrorFilter(catchNode.get("errors"), pointer + "/errors");
             Expr when = catchNode.has("when")
                     ? compileAndValidate(TemplateCompiler.compileBareExpression(catchNode.get("when").asText()), pointer + "/when")
@@ -550,8 +612,9 @@ public final class DslLoader {
             FlowDirective then = compileThen(catchNode);
 
             if (catchNode.has("as") && !"error".equals(catchNode.get("as").asText())) {
-                LOG.log(Level.WARNING, "{0}/as: custom error variable names are not supported yet — "
-                        + "the caught error is always exposed as '.' to errors/when/exceptWhen/retry/do", pointer);
+                // SDD 2.9: a declared name that would be ignored fails STRICT (was a warning).
+                unsupported(pointer + "/as", "custom error variable names are not supported yet — the caught error "
+                        + "is always exposed as '.' to errors/when/exceptWhen/retry/do");
             }
 
             return new TryNode.Catch(errorFilter, when, exceptWhen, retry, compensation, then);
@@ -600,6 +663,19 @@ public final class DslLoader {
                 unsupported(pointer, "retry-level 'when'/'exceptWhen' guards are not supported yet (ignored)");
             }
 
+            checkKeys(retry, pointer, RETRY_KEYS);
+            if (retry.has("delay")) {
+                checkDuration(retry.get("delay"), pointer + "/delay");
+            }
+            if (retry.has("backoff")) {
+                checkKeys(retry.get("backoff"), pointer + "/backoff", BACKOFF_KEYS);
+            }
+            if (retry.has("limit")) {
+                checkKeys(retry.get("limit"), pointer + "/limit", RETRY_LIMIT_KEYS);
+                if (retry.get("limit").has("attempt")) {
+                    checkKeys(retry.get("limit").get("attempt"), pointer + "/limit/attempt", RETRY_ATTEMPT_KEYS);
+                }
+            }
             Duration delay = retry.has("delay") ? compileDurationSpec(retry.get("delay")) : Duration.ZERO;
             RetryPolicy.Backoff backoff = RetryPolicy.Backoff.CONSTANT;
             JsonNode backoffNode = retry.get("backoff");
@@ -628,7 +704,8 @@ public final class DslLoader {
 
             double jitterRatio = 0.0;
             if (retry.has("jitter")) {
-                LOG.log(Level.WARNING, "{0}/jitter: jitter.from/to is not supported yet (no jitter applied)", pointer);
+                // SDD 2.9: declared but not applied fails STRICT (was a warning).
+                unsupported(pointer + "/jitter", "jitter.from/to is not supported yet (no jitter would be applied)");
             }
 
             return new RetryPolicy(delay, backoff, maxAttempts, maxDuration, jitterRatio);
@@ -657,6 +734,9 @@ public final class DslLoader {
         }
 
         private DataFlow compileDataFlow(JsonNode body, String pointer, JsonNode fallbackInputSource, String fallbackPointer) {
+            checkKeys(body.get("input"), pointer + "/input", INPUT_KEYS);
+            checkKeys(body.get("output"), pointer + "/output", OUTPUT_KEYS);
+            checkKeys(body.get("export"), pointer + "/export", OUTPUT_KEYS);
             Expr inputFrom;
             JsonNode inputHolder = body.get("input");
             if (inputHolder != null && inputHolder.has("from")) {
@@ -701,10 +781,12 @@ public final class DslLoader {
             if (timeout == null || timeout.isNull()) {
                 return null;
             }
+            checkKeys(timeout, pointer + "/timeout", TIMEOUT_KEYS);
             JsonNode after = timeout.get("after");
             if (after == null) {
                 return null;
             }
+            checkDuration(after, pointer + "/timeout/after");
             return compileDurationSpec(after);
         }
 
@@ -740,6 +822,47 @@ public final class DslLoader {
                 hardError(pointer, "invalid expression: " + e.getMessage(), null);
             }
             return expr;
+        }
+
+        /**
+         * SDD 2.9, RF4: every key a definition declares is either used by the compiler or reported — STRICT fails,
+         * PERMISSIVE warns. Nothing declared is ignored in silence.
+         */
+        private void checkKeys(JsonNode node, String pointer, Set<String> allowed) {
+            if (node == null || !node.isObject()) {
+                return;
+            }
+            for (Iterator<String> it = node.fieldNames(); it.hasNext(); ) {
+                String key = it.next();
+                if (!allowed.contains(key)) {
+                    unsupported(pointer + "/" + key, "'" + key + "' is declared but not supported by this version of "
+                            + "Stint (SDD 2.9: nothing declared is ignored in silence)");
+                }
+            }
+        }
+
+        private void checkDuration(JsonNode duration, String pointer) {
+            checkKeys(duration, pointer, DURATION_KEYS);
+        }
+
+        /** A task: one construct, and only the keys that construct and the common task properties use. */
+        private void checkTaskKeys(JsonNode body, String pointer) {
+            if (body == null || !body.isObject()) {
+                return;
+            }
+            List<String> constructs = TASK_CONSTRUCTS.stream().filter(body::has).toList();
+            if (constructs.size() > 1) {
+                unsupported(pointer, "a task declares more than one construct " + constructs
+                        + "; only one would be used (SDD 2.9)");
+                return;
+            }
+            Set<String> specific = constructs.isEmpty() ? null : TASK_KEYS.get(constructs.get(0));
+            if (specific == null) {
+                return; // reported by compileTask (an unsupported construct, or none)
+            }
+            Set<String> allowed = new java.util.HashSet<>(COMMON_TASK_KEYS);
+            allowed.addAll(specific);
+            checkKeys(body, pointer, allowed);
         }
 
         private void unsupported(String pointer, String message) {
