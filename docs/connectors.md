@@ -35,8 +35,32 @@ default 365 days), so register definitions against it. A long timer is an `at(..
 to the minute** (never early; fires within ~1 min after `fireAt`), `ActionAfterCompletion=DELETE`, in the group
 `stint.aws.scheduler.timer-group` (default `stint-timers`). Its target is the **same timer queue**
 (`stint.aws.scheduler.timer-target-arn` = the ARN of `stint.aws.sqs.timer-queue-url`) with the **same JSON**
-`{timerId, workflowInstanceId}`, so `SqsDelayTimerService`'s poller fires both. `EventBridgeSchedulerTimerService`
+`{timerId, workflowInstanceId, armedAt}`, so `SqsDelayTimerService`'s poller fires both. `EventBridgeSchedulerTimerService`
 is injectable by its own type only (`@Typed`): `TimerService` injection points keep resolving to SQS.
+
+### Fires that arrive before their wait (SDD 2.9)
+The engine arms a timer **before** the save that registers the wait it guards (SDD 2.1, RF8: a crash after the save
+must not leave a waiting instance without its timer). A short timer can therefore fire before that wait exists.
+- **SQS delay** is rounded **up** to whole seconds (`fireAt` 1 ms ahead → `DelaySeconds=1`): a timer never fires
+  before its `fireAt`. The Scheduler already rounds `at(...)` up to the minute.
+- **The timer JSON carries `armedAt`** (ISO-8601 UTC, when the connector armed it). Readers accept the older
+  `{timerId, workflowInstanceId}` without it.
+- **A fire that finds no wait** is classified by the engine and logged (logger `io.stintflow.core.WorkflowEngine`,
+  fields `decision`, `timerId`, `instanceId`, `armedAt`, `age`, `instanceStatus`):
+
+| `decision` | When | Level | Connector |
+|---|---|---|---|
+| `obsolete` | the instance is terminal (`COMPLETED`, `FAILED`, `ABORTED`) | INFO | acks |
+| `early` | armed less than the early-fire window ago (default 30 s, `WorkflowEngine#earlyFireWindow`) | INFO | **does not ack**: the handler fails with `TimerFireTooEarly` |
+| `obsolete-after-window` | past the window, or no `armedAt` | WARN | acks |
+
+- The SQS poller handles each message on its own. On `TimerFireTooEarly` it makes the message visible again after
+  2, 4, 8, then 16 s (by `ApproximateReceiveCount`). That is 30 s over four redeliveries, inside the window and
+  under the documented `maxReceiveCount` of 5. Any other failure is logged and left for the visibility timeout,
+  without holding back the rest of the batch.
+- In memory, a `TimerFireTooEarly` fire is kept and delivered again on the next `tick()`.
+- A custom `TimerService` must do the same: keep a fire whose handler fails with `TimerFireTooEarly` and deliver it
+  again shortly, and put `armedAt` in `TimerFire` when it can.
 
 ## ScheduleService — recurring schedules (`schedule.cron` / `every`, SDD 2.4)
 | Ecosystem | Connector | MVP |
@@ -201,7 +225,7 @@ Verified end to end on floci by `FlociDomainEventTriggerIT`.
 ### Lineage on the wire (SDD 2.5)
 Every transport carries the optional `chainid`, `causationid`, `traceparent` and `tracestate` extensions
 as-is (they're CloudEvent attributes: SQS/SNS/EventBridge bodies keep them). A custom connector must not
-drop unknown extensions. Timer connectors keep their own format (`{timerId, workflowInstanceId}`): the
+drop unknown extensions. Timer connectors keep their own format (`{timerId, workflowInstanceId, armedAt}`): the
 engine takes the chain of a timer-resumed instance from its snapshot.
 
 ## Capability honesty

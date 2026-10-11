@@ -257,6 +257,10 @@ schedule:
 - Timers beyond SQS's 15 minutes (a 48 h `listen`, a long retry) go through `DelayRoutingTimerService` to
   Scheduler one-time schedules. These are deleted after firing and deliver the same timer JSON to the same
   queue.
+- **SDD 2.9:** SQS delays are rounded up to whole seconds. A timer that fires before the save of its wait is
+  delivered again instead of being dropped; the timer JSON carries `armedAt`, and the engine logs every fire that
+  finds no wait as `early`, `obsolete` or `obsolete-after-window` (`docs/connectors.md`, "Fires that arrive before
+  their wait").
 - **Not yet:** `schedule.after`, `schedule.on` with `all`/`until`/`correlate`, input for scheduled runs, catching
   up missed occurrences.
 
@@ -295,7 +299,13 @@ filters written in YAML. That compatibility is temporary.
    extension are valid CNCF DSL 1.0 but not implemented yet (`emit` is implemented since SDD 2.2,
    `listen` — the subset above — since SDD 2.3, `schedule` — cron/every/on — since SDD 2.4) — `stint-dsl` fails
    the load citing the construct and its JSON Pointer, unless loaded permissively (see
-   `stint-example-send-report`).
+   `stint-example-send-report`). Since SDD 2.9 this holds for **every declared key**: a key the compiler doesn't
+   use fails a `STRICT` load with its path, so nothing in a definition is ignored in silence. Examples are `if`,
+   `use`, schemas, `timeout` on a `set`, `then` on a `try`'s body, `catch.as` and `retry.jitter`. `PERMISSIVE`
+   warns instead. The informative DSL keys (`title`, `summary`, `tags`, `metadata`) are accepted.
+   A `call: remote` sends its worker `with.input` evaluated over the task's input after `input.from` (DSL 1.0:
+   input transformation, then the call's `with`). This holds inside a `try` too, and each retry sends exactly what
+   attempt 1 sent.
 2. **AWS transports**: SQS is the default (native + floci-testable). SNS and EventBridge are included
    as `@Alternative` connectors (opt-in). Every AWS client — S3, DynamoDB, SQS, SNS, EventBridge and
    EventBridge Scheduler — comes from its Quarkus extension (SDD 2.7). The `stint-example-aws-smoke` app runs
