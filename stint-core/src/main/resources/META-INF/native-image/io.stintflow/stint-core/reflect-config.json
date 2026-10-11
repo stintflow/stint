@@ -1,0 +1,731 @@
+[
+  {
+    "name": "net.thisptr.jackson.jq.internal.filters.CsvFilter",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.filters.TsvFilter",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.AtBase64Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.AtBase64dFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.AtHtmlFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.AtShFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.AtUriFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.BuiltinsFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ContainsFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.DelPathsFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.EmptyFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.EndsWithFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ErrorFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ExplodeFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.FromDateIso8601Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.FromEntriesFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.FromJsonFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.GetPathFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.GroupByFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.HasFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ImplodeFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.IndexFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.IndicesFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.InfiniteFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.IsInfiniteFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.IsNanFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.IsNormalFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.JoinFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.KeysFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.KeysUnsortedFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.LTrimStrFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.LengthFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$AcosFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$AsinFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$AtanFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$CbrtFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$CeilFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$CosFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$CoshFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$Exp10Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$Exp2Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$ExpFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$Expm1Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$FloorFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$Log10Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$Log1pFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$Log2Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$LogFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$RoundFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$SinFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$SinhFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$SqrtFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$TanFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MathFunction$TanhFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MaxByFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.MinByFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.NanFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.NotFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.NowFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.PathFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.PathsFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.RIndexFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.RTrimStrFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.RangeFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ReverseFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.SetPathFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.SortByFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.SplitFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.StartsWithFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ToDateIso8601Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ToEntriesFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ToJsonFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ToNumberFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.ToStringFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.TypeFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.Utf8ByteLengthFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions._MatchImplFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions._SubImplFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.debug.DebugScopeFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.math.Atan2Function",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "net.thisptr.jackson.jq.internal.functions.math.PowFunction",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  }
+]
