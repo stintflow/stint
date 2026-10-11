@@ -57,6 +57,7 @@ import io.stintflow.spi.StateStore;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskTransport;
+import io.stintflow.spi.TimerFireTooEarly;
 import io.stintflow.spi.TimerRequest;
 import io.stintflow.spi.TimerService;
 import io.stintflow.spi.TraceAttributes;
@@ -95,6 +96,11 @@ public final class WorkflowEngine {
     /** SDD 1.5, RF4: how often {@link #awaitCompletion} rechecks the StateStore — an engine
      *  implementation detail (not business time), so a real short delay is fine even in tests. */
     private static final Duration AWAIT_POLL_INTERVAL = Duration.ofMillis(20);
+    /**
+     * SDD 2.9, sec. 8a: how long after its {@code armedAt} a timer fire that finds no wait is taken as early (the
+     * save of its wait hasn't landed yet: the connector delivers it again) rather than obsolete.
+     */
+    public static final Duration DEFAULT_EARLY_FIRE_WINDOW = Duration.ofSeconds(30);
     private static final Duration DEFAULT_AWAIT_TIMEOUT = Duration.ofSeconds(30);
 
     private static final ScheduledExecutorService RETRY_SCHEDULER = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -110,6 +116,7 @@ public final class WorkflowEngine {
     private final BlobStore blob;
     private final TreeInterpreter interpreter;
     private final InstantSource clock;
+    private volatile Duration earlyFireWindow = DEFAULT_EARLY_FIRE_WINDOW;
     /** SDD 2.2: the domain channel; {@code null} = this engine can't run {@code emit}. */
     private final EventPublisher publisher;
     /** SDD 2.2, sec. 8d: where fact payloads above the publisher's limit go ({@code dataref}); may be {@code null}. */
@@ -393,8 +400,64 @@ public final class WorkflowEngine {
                 resumeWithRetry(taskKey, new ResumeEvent.TaskCompleted(result), 1));
     }
 
+    /**
+     * SDD 2.9, sec. 8a: a timer is armed before the save of the wait it guards (SDD 2.1, RF8), so a short one can
+     * fire before that wait exists. A fire whose wait is there resumes as always. One that finds no wait is:
+     * <ul>
+     *   <li><b>obsolete</b> when its instance is terminal: nothing can wait on it any more — acked (INFO);</li>
+     *   <li><b>early</b> when it was armed less than {@link #earlyFireWindow} ago: failed with
+     *       {@link TimerFireTooEarly}, so the connector keeps it and delivers it again (INFO);</li>
+     *   <li><b>obsolete after the window</b> otherwise (or without {@code armedAt}, the pre-2.9 format): an orphan of
+     *       a save that lost, a wait already consumed, or a loss the window didn't cover — acked (WARN).</li>
+     * </ul>
+     * A missing instance is not proof: the save that creates it may be the one still on its way.
+     */
     private CompletionStage<Void> onTimerFire(io.stintflow.spi.TimerFire fire) {
-        return resumeWithRetry(fire.timerId(), new ResumeEvent.TimerElapsed(fire.timerId()), 1);
+        return state.findWait(fire.timerId()).thenCompose(wait -> wait.isPresent()
+                ? resumeWithRetry(fire.timerId(), new ResumeEvent.TimerElapsed(fire.timerId()), 1)
+                : unmatchedTimerFire(fire));
+    }
+
+    private CompletionStage<Void> unmatchedTimerFire(io.stintflow.spi.TimerFire fire) {
+        return state.load(fire.workflowInstanceId()).thenCompose(snap -> {
+            String status = snap.map(s -> s.status().name()).orElse("ABSENT");
+            Duration age = fire.armedAt() == null ? null : Duration.between(fire.armedAt(), clock.instant());
+            if (snap.isPresent() && isTerminal(snap.get().status())) {
+                logTimerFire(Level.INFO, "obsolete", fire, age, status);
+                return done();
+            }
+            if (age != null && age.compareTo(earlyFireWindow) < 0) {
+                logTimerFire(Level.INFO, "early", fire, age, status);
+                return CompletableFuture.failedFuture(new TimerFireTooEarly(fire.timerId(), "Timer " + fire.timerId()
+                        + " fired " + age + " after it was armed, before the save of its wait; deliver it again"));
+            }
+            logTimerFire(Level.WARNING, "obsolete-after-window", fire, age, status);
+            return done();
+        });
+    }
+
+    private static boolean isTerminal(InstanceStatus status) {
+        return status == InstanceStatus.COMPLETED || status == InstanceStatus.FAILED || status == InstanceStatus.ABORTED;
+    }
+
+    /** SDD 2.9, sec. 8d: one line per timer fire that finds no wait, with the decision and what it was based on. */
+    private static void logTimerFire(Level level, String decision, io.stintflow.spi.TimerFire fire, Duration age,
+            String instanceStatus) {
+        LOG.log(level, "Timer fire without its wait: decision={0} timerId={1} instanceId={2} armedAt={3} age={4} "
+                + "instanceStatus={5}", decision, fire.timerId(), fire.workflowInstanceId(), fire.armedAt(), age,
+                instanceStatus);
+    }
+
+    /**
+     * SDD 2.9, sec. 8a: sets how long after arming a fire without its wait is taken as early. Must cover the time
+     * between arming a timer and saving its wait; the SQS connector's redeliveries (2+4+8+16 s) fit the default.
+     */
+    public WorkflowEngine earlyFireWindow(Duration window) {
+        if (window == null || window.isNegative()) {
+            throw new IllegalArgumentException("early-fire window must be zero or positive: " + window);
+        }
+        this.earlyFireWindow = window;
+        return this;
     }
 
     // --- resume path: findWait -> load -> apply -> save, retrying on CONFLICT ----------------------

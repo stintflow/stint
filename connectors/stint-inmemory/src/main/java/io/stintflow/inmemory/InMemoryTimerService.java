@@ -1,6 +1,7 @@
 package io.stintflow.inmemory;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.InstantSource;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -12,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 
 import io.stintflow.spi.TimerFire;
 import io.stintflow.spi.TimerFireHandler;
+import io.stintflow.spi.TimerFireTooEarly;
 import io.stintflow.spi.TimerRequest;
 import io.stintflow.spi.TimerService;
 
@@ -28,6 +30,8 @@ public final class InMemoryTimerService implements TimerService {
     private static final Duration SWEEP_INTERVAL = Duration.ofMillis(20);
 
     private final Map<String, TimerRequest> timers = new ConcurrentHashMap<>();
+    /** SDD 2.9, sec. 8c: when each timer was armed, on this service's clock. */
+    private final Map<String, Instant> armedAt = new ConcurrentHashMap<>();
     private final InstantSource clock;
     private final ScheduledExecutorService sweeper;
 
@@ -59,6 +63,7 @@ public final class InMemoryTimerService implements TimerService {
 
     @Override
     public CompletionStage<String> schedule(TimerRequest req) {
+        armedAt.put(req.timerId(), clock.instant());
         timers.put(req.timerId(), req);
         return CompletableFuture.completedFuture(req.timerId());
     }
@@ -66,6 +71,7 @@ public final class InMemoryTimerService implements TimerService {
     @Override
     public CompletionStage<Void> cancel(String timerId) {
         timers.remove(timerId);
+        armedAt.remove(timerId);
         return CompletableFuture.completedFuture(null);
     }
 
@@ -84,7 +90,7 @@ public final class InMemoryTimerService implements TimerService {
         TimerFireHandler h = handler;
         TimerRequest req = timers.remove(timerId);
         if (h != null && req != null) {
-            h.handle(new TimerFire(timerId, req.workflowInstanceId()));
+            deliver(h, req);
         }
     }
 
@@ -97,8 +103,23 @@ public final class InMemoryTimerService implements TimerService {
         var now = clock.instant();
         for (TimerRequest req : timers.values()) {
             if (!req.fireAt().isAfter(now) && timers.remove(req.timerId(), req)) {
-                h.handle(new TimerFire(req.timerId(), req.workflowInstanceId()));
+                deliver(h, req);
             }
         }
+    }
+
+    /**
+     * SDD 2.9, sec. 8a: a fire the engine reports as {@link TimerFireTooEarly} (its wait isn't saved yet) is kept
+     * and delivered again on the next tick, like the SQS connector leaves it on the queue.
+     */
+    private void deliver(TimerFireHandler h, TimerRequest req) {
+        h.handle(new TimerFire(req.timerId(), req.workflowInstanceId(), armedAt.get(req.timerId())))
+                .whenComplete((v, failure) -> {
+                    if (failure != null && TimerFireTooEarly.isCause(failure)) {
+                        timers.putIfAbsent(req.timerId(), req);
+                    } else if (!timers.containsKey(req.timerId())) {
+                        armedAt.remove(req.timerId());
+                    }
+                });
     }
 }
