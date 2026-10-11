@@ -100,7 +100,11 @@ must not leave a waiting instance without its timer). A short timer can therefor
   credentials chain.
 - **Native:** proven by `stint-example-aws-smoke`. Run
   `mvn -Pnative verify -Dquarkus.native.container-build=true -pl examples/stint-example-aws-smoke -am`; it needs
-  Docker, no local GraalVM.
+  Docker, no local GraalVM. jq's builtin functions (`length`, `type`, ...) work natively with no consumer
+  configuration (SDD 2.10): jackson-jq loads them through `ServiceLoader`, which Quarkus leaves out of native images,
+  so `stint-core` carries the metadata itself (`META-INF/native-image/io.stintflow/stint-core`: the service file and
+  each provider's constructor), kept equal to jackson-jq's list by `JqNativeMetadataTest`. The smoke evaluates
+  `length` to cover it.
 | Generic | DB-poller · Redis timer wheel · Quartz | ⚪ |
 
 ## BlobStore — claim-check / large payload offload

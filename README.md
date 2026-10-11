@@ -59,6 +59,8 @@ Package boundaries, in dependency order: `stint-spi ← stint-wire ← stint-cor
 
 - **Java 25** (`JAVA_HOME` must point at a JDK 25)
 - **Quarkus 3.33.2** (first line supporting JDK 25), **native-ready** from the start
+  (jq expressions, builtin functions included, need no native configuration in the consuming app: `stint-core`
+  carries the metadata, SDD 2.10)
 - Maven 3.8+, Docker (for floci ITs)
 
 ## Build & run
