@@ -295,6 +295,32 @@ Workers get the same from `stint-worker-sdk`; a worker's own `status`/`instance`
 types of earlier versions are still accepted as **aliases**: on the wire, from older workers, and in `catch`
 filters written in YAML. That compatibility is temporary.
 
+## Decisions with `call: decision` (SDD 3a.1)
+
+A decision (classify, score, yes/no) is a **remote task** answered by a decision worker; the engine never talks to
+a model provider. `call: decision` is a Stint extension, compiled to a `call: remote` followed by a `switch`:
+
+```yaml
+- classifyItem:
+    call: decision
+    with:
+      task: decide-minute-item           # routing key of the decision worker
+      kind: choice                       # choice | score | boolean
+      input: ${ { text: .redactedText } }
+      options:
+        - approve: { description: "Approved in the meeting", then: recordApproval }
+        - reject:  { description: "Rejected in the meeting" }   # no then: the task's then
+    onUncertain: humanReview             # optional; without it, an uncertain decision follows its value
+    timeout: { after: { seconds: 60 } }
+```
+
+- The contract (`io.stintflow.wire.decision`): the worker receives `{kind, options, input}` and returns
+  `{value, confidence, uncertain, provenance: {adapter, provider, model, version}}`.
+- An output out of contract is the standard `validation` error (400), raised at the task and catchable in a `try`.
+- The provenance of the first result applied is kept in the snapshot (`InstanceSnapshot.decisions`, by pointer);
+  a duplicate or late result never replaces it. Nothing of the decision's input goes to logs, spans or the record.
+- The expansion is logged at DEBUG by `DslLoader`; `DefinitionPrinter` prints any compiled definition as YAML.
+
 ## Honest MVP cuts (deliberate, documented)
 
 1. **DSL Fase 2 constructs**: `fork`, `wait`, `for` and call types other than the `remote` Stint
