@@ -57,6 +57,7 @@ import io.stintflow.spi.StateStore;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskTransport;
+import io.stintflow.spi.TimerFireTooEarly;
 import io.stintflow.spi.TimerRequest;
 import io.stintflow.spi.TimerService;
 import io.stintflow.spi.TraceAttributes;
@@ -95,6 +96,11 @@ public final class WorkflowEngine {
     /** SDD 1.5, RF4: how often {@link #awaitCompletion} rechecks the StateStore — an engine
      *  implementation detail (not business time), so a real short delay is fine even in tests. */
     private static final Duration AWAIT_POLL_INTERVAL = Duration.ofMillis(20);
+    /**
+     * SDD 2.9, sec. 8a: how long after its {@code armedAt} a timer fire that finds no wait is taken as early (the
+     * save of its wait hasn't landed yet: the connector delivers it again) rather than obsolete.
+     */
+    public static final Duration DEFAULT_EARLY_FIRE_WINDOW = Duration.ofSeconds(30);
     private static final Duration DEFAULT_AWAIT_TIMEOUT = Duration.ofSeconds(30);
 
     private static final ScheduledExecutorService RETRY_SCHEDULER = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -110,6 +116,7 @@ public final class WorkflowEngine {
     private final BlobStore blob;
     private final TreeInterpreter interpreter;
     private final InstantSource clock;
+    private volatile Duration earlyFireWindow = DEFAULT_EARLY_FIRE_WINDOW;
     /** SDD 2.2: the domain channel; {@code null} = this engine can't run {@code emit}. */
     private final EventPublisher publisher;
     /** SDD 2.2, sec. 8d: where fact payloads above the publisher's limit go ({@code dataref}); may be {@code null}. */
@@ -393,8 +400,64 @@ public final class WorkflowEngine {
                 resumeWithRetry(taskKey, new ResumeEvent.TaskCompleted(result), 1));
     }
 
+    /**
+     * SDD 2.9, sec. 8a: a timer is armed before the save of the wait it guards (SDD 2.1, RF8), so a short one can
+     * fire before that wait exists. A fire whose wait is there resumes as always. One that finds no wait is:
+     * <ul>
+     *   <li><b>obsolete</b> when its instance is terminal: nothing can wait on it any more — acked (INFO);</li>
+     *   <li><b>early</b> when it was armed less than {@link #earlyFireWindow} ago: failed with
+     *       {@link TimerFireTooEarly}, so the connector keeps it and delivers it again (INFO);</li>
+     *   <li><b>obsolete after the window</b> otherwise (or without {@code armedAt}, the pre-2.9 format): an orphan of
+     *       a save that lost, a wait already consumed, or a loss the window didn't cover — acked (WARN).</li>
+     * </ul>
+     * A missing instance is not proof: the save that creates it may be the one still on its way.
+     */
     private CompletionStage<Void> onTimerFire(io.stintflow.spi.TimerFire fire) {
-        return resumeWithRetry(fire.timerId(), new ResumeEvent.TimerElapsed(fire.timerId()), 1);
+        return state.findWait(fire.timerId()).thenCompose(wait -> wait.isPresent()
+                ? resumeWithRetry(fire.timerId(), new ResumeEvent.TimerElapsed(fire.timerId()), 1)
+                : unmatchedTimerFire(fire));
+    }
+
+    private CompletionStage<Void> unmatchedTimerFire(io.stintflow.spi.TimerFire fire) {
+        return state.load(fire.workflowInstanceId()).thenCompose(snap -> {
+            String status = snap.map(s -> s.status().name()).orElse("ABSENT");
+            Duration age = fire.armedAt() == null ? null : Duration.between(fire.armedAt(), clock.instant());
+            if (snap.isPresent() && isTerminal(snap.get().status())) {
+                logTimerFire(Level.INFO, "obsolete", fire, age, status);
+                return done();
+            }
+            if (age != null && age.compareTo(earlyFireWindow) < 0) {
+                logTimerFire(Level.INFO, "early", fire, age, status);
+                return CompletableFuture.failedFuture(new TimerFireTooEarly(fire.timerId(), "Timer " + fire.timerId()
+                        + " fired " + age + " after it was armed, before the save of its wait; deliver it again"));
+            }
+            logTimerFire(Level.WARNING, "obsolete-after-window", fire, age, status);
+            return done();
+        });
+    }
+
+    private static boolean isTerminal(InstanceStatus status) {
+        return status == InstanceStatus.COMPLETED || status == InstanceStatus.FAILED || status == InstanceStatus.ABORTED;
+    }
+
+    /** SDD 2.9, sec. 8d: one line per timer fire that finds no wait, with the decision and what it was based on. */
+    private static void logTimerFire(Level level, String decision, io.stintflow.spi.TimerFire fire, Duration age,
+            String instanceStatus) {
+        LOG.log(level, "Timer fire without its wait: decision={0} timerId={1} instanceId={2} armedAt={3} age={4} "
+                + "instanceStatus={5}", decision, fire.timerId(), fire.workflowInstanceId(), fire.armedAt(), age,
+                instanceStatus);
+    }
+
+    /**
+     * SDD 2.9, sec. 8a: sets how long after arming a fire without its wait is taken as early. Must cover the time
+     * between arming a timer and saving its wait; the SQS connector's redeliveries (2+4+8+16 s) fit the default.
+     */
+    public WorkflowEngine earlyFireWindow(Duration window) {
+        if (window == null || window.isNegative()) {
+            throw new IllegalArgumentException("early-fire window must be zero or positive: " + window);
+        }
+        this.earlyFireWindow = window;
+        return this;
     }
 
     // --- resume path: findWait -> load -> apply -> save, retrying on CONFLICT ----------------------
@@ -545,8 +608,11 @@ public final class WorkflowEngine {
             });
         }
 
-        ErrorInfo error = event instanceof ResumeEvent.TaskCompleted tc ? tc.result().error()
-                : ErrorInfo.timeout("Task at " + snap.position() + " did not respond within its timeout");
+        // SDD 2.8: the standard type, its status, and the failing component's pointer as instance.
+        ErrorInfo error = (event instanceof ResumeEvent.TaskCompleted tc && tc.result().error() != null
+                ? tc.result().error()
+                : ErrorInfo.timeout("Task at " + snap.position() + " did not respond within its timeout"))
+                .raisedAt(snap.position());
 
         if (node instanceof TryNode tryNode) {
             return handleTryFailure(inst, def, tryNode, snap, error, consumeKeys);
@@ -611,7 +677,8 @@ public final class WorkflowEngine {
         String instanceId = inst.id();
         String retryId = UUID.randomUUID().toString();
         String retryKey = WaitKeys.retry(retryId);
-        RetryState newRetryState = new RetryState(tryNode.pointer(), attempt, firstAttemptAt, error, null);
+        RetryState newRetryState = new RetryState(tryNode.pointer(), attempt, firstAttemptAt, error, null,
+                snap.retryState() != null ? snap.retryState().dispatchInput() : null);
         InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(), retryKey,
                 snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState, clock.instant(),
                 inst.input(), inst.startedAt(), inst.chainId(), inst.trace(), inst.listenState());
@@ -633,16 +700,26 @@ public final class WorkflowEngine {
         String timerKey = WaitKeys.timer(correlationId);
         CallRemoteNode body = tryNode.body();
 
-        JsonNode effectiveInput = DataFlowSupport.applyExpr(interpreter.evaluator(), tryNode.dataFlow().inputFrom(),
-                snap.context(), snap.context(), inst.descriptor(def.ref()));
-
-        // Keyed per attempt: with deterministic event-started ids (SDD 2.1, 8a) two racing duplicates must
-        // never overwrite each other's claim-checked payload.
-        return ClaimCheck.offload(effectiveInput, transport.capabilities(), blob,
-                        instanceId + "/" + body.name() + "/" + correlationId)
+        // SDD 2.9, RF4: a retry dispatches again exactly what attempt 1 dispatched (recorded in its wire form, so a
+        // claim-checked payload is reused as is). Snapshots from before SDD 2.9 have no record: recompute it, from
+        // $context as before, but through the body's input.from and with.input.
+        JsonNode recorded = prior != null ? prior.dispatchInput() : null;
+        CompletionStage<JsonNode> wire;
+        if (recorded != null) {
+            wire = CompletableFuture.completedFuture(recorded);
+        } else {
+            WorkflowDescriptor wf = inst.descriptor(def.ref());
+            JsonNode tryInput = DataFlowSupport.applyExpr(interpreter.evaluator(), tryNode.dataFlow().inputFrom(),
+                    snap.context(), snap.context(), wf);
+            // Keyed per attempt: with deterministic event-started ids (SDD 2.1, 8a) two racing duplicates must
+            // never overwrite each other's claim-checked payload.
+            wire = ClaimCheck.offload(interpreter.tryBodyArgument(tryNode, tryInput, snap.context(), wf),
+                    transport.capabilities(), blob, instanceId + "/" + body.name() + "/" + correlationId);
+        }
+        return wire
                 .thenCompose(wireInput -> {
                     RetryState newRetryState = new RetryState(tryNode.pointer(), nextAttempt, firstAttemptAt,
-                            prior != null ? prior.lastError() : null, correlationId);
+                            prior != null ? prior.lastError() : null, correlationId, wireInput);
                     InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(),
                             taskKey, snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState,
                             clock.instant(), inst.input(), inst.startedAt(), inst.chainId(), inst.trace(),
@@ -683,7 +760,8 @@ public final class WorkflowEngine {
 
     private static JsonNode errorToJsonForEval(ErrorInfo error) {
         var node = Json.obj();
-        node.put("type", error.type() == null ? null : error.type().toString());
+        // SDD 2.8: normalized, so a catch on a legacy stint://errors/* type and one on the standard type both match.
+        node.put("type", error.type() == null ? null : ErrorInfo.normalize(error.type()).toString());
         if (error.status() != null) {
             node.put("status", error.status());
         }
@@ -825,14 +903,16 @@ public final class WorkflowEngine {
         String correlationId = UUID.randomUUID().toString();
         String taskKey = WaitKeys.task(correlationId);
         String timerKey = WaitKeys.timer(correlationId);
-        RetryState retryState = initialRetryState == null ? null
-                : new RetryState(initialRetryState.tryNodePointer(), initialRetryState.attempt(),
-                        initialRetryState.firstAttemptAt(), initialRetryState.lastError(), correlationId);
-
         // Keyed per attempt (see redispatchRetry): racing duplicate creates never share a blob key.
         return ClaimCheck.offload(dispatchInput, transport.capabilities(), blob,
                         instanceId + "/" + node.name() + "/" + correlationId)
                 .thenCompose(wireInput -> {
+                    // SDD 2.9, RF4: inside a try, attempt 1 records what it dispatched; retries send it again.
+                    RetryState retryState = initialRetryState == null ? null
+                            : new RetryState(initialRetryState.tryNodePointer(), initialRetryState.attempt(),
+                                    initialRetryState.firstAttemptAt(), initialRetryState.lastError(), correlationId,
+                                    initialRetryState.dispatchInput() != null ? initialRetryState.dispatchInput()
+                                            : wireInput);
                     InstanceSnapshot snap = new InstanceSnapshot(instanceId, def.ref(), position, taskKey, context,
                             InstanceStatus.WAITING, expectedVersion + 1, retryState, clock.instant(),
                             inst.input(), inst.startedAt(), inst.chainId(), inst.trace(), inst.listenState());
@@ -1006,7 +1086,7 @@ public final class WorkflowEngine {
 
         if (!(event instanceof ResumeEvent.EventArrived arrived)) {
             ErrorInfo error = ErrorInfo.timeout("listen at " + snap.position()
-                    + " did not receive the events it waits for within its timeout");
+                    + " did not receive the events it waits for within its timeout").raisedAt(snap.position());
             if (tryNode != null) {
                 return handleTryFailure(inst, def, tryNode, snap, error, consumeAll);
             }

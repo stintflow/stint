@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 
 import io.cloudevents.CloudEvent;
+import io.stintflow.core.WorkflowDefinition;
 import io.stintflow.core.WorkflowRegistry;
 import io.stintflow.spi.WorkflowRef;
 
@@ -38,6 +39,30 @@ public final class TriggerBindings {
         if (byId.putIfAbsent(binding.id(), binding) != null) {
             throw new IllegalArgumentException("Trigger binding '" + binding.id() + "' is already bound");
         }
+    }
+
+    /**
+     * SDD 2.4, RF1: binds every registered definition's DSL 1.0 {@code schedule.on} ({@code one}/{@code any}:
+     * any matching event starts it). Binding ids are {@code schedule-on:<definition>:<index>}. Calling it again
+     * binds only what is not bound yet.
+     *
+     * @return how many bindings were added
+     */
+    public synchronized int bindDeclaredSchedules() {
+        int added = 0;
+        for (WorkflowDefinition def : registry.definitions()) {
+            if (def.schedule() == null) {
+                continue;
+            }
+            for (int i = 0; i < def.schedule().on().size(); i++) {
+                String id = "schedule-on:" + def.ref().canonical() + ":" + i;
+                if (!byId.containsKey(id)) {
+                    bind(new TriggerBinding(id, def.schedule().on().get(i), def.ref()));
+                    added++;
+                }
+            }
+        }
+        return added;
     }
 
     public synchronized void unbind(String bindingId) {

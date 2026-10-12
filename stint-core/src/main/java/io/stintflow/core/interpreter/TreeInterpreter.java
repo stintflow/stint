@@ -80,7 +80,7 @@ public final class TreeInterpreter {
             JsonNode effectiveInput = DataFlowSupport.applyExpr(evaluator, node.dataFlow().inputFrom(), data, context, wf);
 
             if (node instanceof CallRemoteNode remote) {
-                return InterpretResult.suspend(remote, pointer, effectiveInput, context);
+                return InterpretResult.suspend(remote, pointer, callArgument(remote, effectiveInput, context, wf), context);
             }
 
             if (node instanceof ListenNode listen) {
@@ -91,7 +91,9 @@ public final class TreeInterpreter {
                 if (tryNode.listen() != null) {
                     return InterpretResult.suspendOnListen(tryNode.listen(), tryNode, pointer, effectiveInput, context);
                 }
-                return InterpretResult.suspendInTry(tryNode, effectiveInput, context);
+                // SDD 2.9, RF4 (S.2 finding 8h): the body is a task like any other — the try's input, through the
+                // body's own input.from, then its with.input.
+                return InterpretResult.suspendInTry(tryNode, tryBodyArgument(tryNode, effectiveInput, context, wf), context);
             }
 
             if (node instanceof DoNode doNode) {
@@ -210,6 +212,21 @@ public final class TreeInterpreter {
             return InterpretResult.complete(tryNode.pointer(), context);
         }
         return run(def, wf, nextPointer.get(), data, context);
+    }
+
+    /**
+     * SDD 2.9, RF4: what a {@code call: remote} sends its worker — its {@code with.input} evaluated over the task's
+     * (already {@code input.from}-transformed) input, or that input as is when it declares none.
+     */
+    public JsonNode callArgument(CallRemoteNode call, JsonNode taskInput, JsonNode context, WorkflowDescriptor wf) {
+        return DataFlowSupport.applyExpr(evaluator, call.withInput(), taskInput, context, wf);
+    }
+
+    /** SDD 2.9, RF4: the argument of a try's body, from the try's transformed input. */
+    public JsonNode tryBodyArgument(TryNode tryNode, JsonNode tryInput, JsonNode context, WorkflowDescriptor wf) {
+        CallRemoteNode body = tryNode.body();
+        JsonNode bodyInput = DataFlowSupport.applyExpr(evaluator, body.dataFlow().inputFrom(), tryInput, context, wf);
+        return callArgument(body, bodyInput, context, wf);
     }
 
     /** Exposed so {@code WorkflowEngine} can evaluate a {@code TryNode}'s catch filter/compensation

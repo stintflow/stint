@@ -125,7 +125,7 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
 
     private static ObjectNode errorToJson(ErrorInfo error) {
         ObjectNode err = Json.obj();
-        err.put("type", error.type().toString());
+        err.put("type", ErrorInfo.normalize(error.type()).toString()); // SDD 2.8: always the standard type
         if (error.status() != null) {
             err.put("status", error.status());
         }
@@ -150,9 +150,10 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
         URI type = parseTypeUri(rawType);
         if (err.hasNonNull("message") && !err.hasNonNull("detail")) {
             // legacy shape: {type, message}
-            return new ErrorInfo(type, null, null, err.path("message").asText(), null, null);
+            return new ErrorInfo(type, ErrorInfo.defaultStatus(type), null, err.path("message").asText(), null, null);
         }
-        Integer status = err.hasNonNull("status") ? err.get("status").asInt() : null;
+        // SDD 2.8, RF4: an error without status (older workers) gets its type's default one.
+        Integer status = err.hasNonNull("status") ? err.get("status").asInt() : ErrorInfo.defaultStatus(type);
         String title = err.path("title").asText(null);
         String detail = err.path("detail").asText(null);
         String instance = err.path("instance").asText(null);

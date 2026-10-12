@@ -1,7 +1,13 @@
 package io.stintflow.core;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -13,6 +19,8 @@ import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
+import io.stintflow.spi.CronExpression;
+import io.stintflow.spi.ScheduleSpec;
 import io.stintflow.spi.WorkflowRef;
 import io.stintflow.spi.wire.StintEvents;
 
@@ -31,6 +39,9 @@ import io.stintflow.spi.wire.StintEvents;
  * filter by event type ({@link #correlationShapes}) — static, derived from the definitions alone, so every
  * engine that registers the same definitions has the same index. The subset of {@code listen} this phase
  * supports is enforced here as well (sec. 8f).
+ * <p>
+ * SDD 2.4, sec. 8a: every registered definition with a {@code schedule.cron}/{@code every} contributes one
+ * {@link ScheduleSpec} to the desired state {@link #scheduleSpecs()} reconciles against.
  */
 public final class WorkflowRegistry {
 
@@ -84,6 +95,39 @@ public final class WorkflowRegistry {
 
     public Optional<WorkflowDefinition> find(WorkflowRef ref) {
         return Optional.ofNullable(byRef.get(ref.canonical()));
+    }
+
+    /** Every registered definition, ordered by canonical ref. */
+    public List<WorkflowDefinition> definitions() {
+        return byRef.values().stream().sorted(Comparator.comparing(d -> d.ref().canonical())).toList();
+    }
+
+    /** SDD 2.4, sec. 8a: the schedules the registered definitions want, ordered by name. */
+    public List<ScheduleSpec> scheduleSpecs() {
+        return definitions().stream()
+                .filter(d -> d.schedule() != null && d.schedule().cron() != null)
+                .map(d -> new ScheduleSpec(scheduleName(d.ref().canonical(), d.schedule().cron(), d.schedule().zone()),
+                        d.ref(), d.schedule().cron(), d.schedule().zone()))
+                .sorted(Comparator.comparing(ScheduleSpec::name))
+                .toList();
+    }
+
+    public Optional<ScheduleSpec> scheduleSpec(String name) {
+        return scheduleSpecs().stream().filter(spec -> spec.name().equals(name)).findFirst();
+    }
+
+    /**
+     * SDD 2.4, sec. 8a: {@code stint-} + 40 hex of SHA-256(definition | cron | zone) — content-addressed, at most
+     * 46 characters of {@code [0-9a-z-]}, so it is a valid AWS schedule name.
+     */
+    static String scheduleName(String definition, CronExpression cron, ZoneId zone) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(
+                    (definition + "|" + cron.expression() + "|" + zone.getId()).getBytes(StandardCharsets.UTF_8));
+            return "stint-" + HexFormat.of().formatHex(digest).substring(0, 40);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is always available", e);
+        }
     }
 
     private void validateTimeouts(TaskNode node) {

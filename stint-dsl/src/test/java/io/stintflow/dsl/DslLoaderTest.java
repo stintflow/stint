@@ -53,7 +53,9 @@ class DslLoaderTest {
         assertThat(node.name()).isEqualTo("extractData");
         assertThat(node.pointer()).isEqualTo("/do/0/extractData");
         assertThat(node.routingKey()).isEqualTo("query-and-stage");
-        assertThat(((Expr.Jq) node.dataFlow().inputFrom()).source()).contains("$context.reportQuery");
+        // SDD 2.9, RF4 (approved change of this assertion): with.input is the call's argument, kept apart from input.from.
+        assertThat(((Expr.Jq) node.withInput()).source()).contains("$context.reportQuery");
+        assertThat(node.dataFlow().inputFrom()).isNull();
         assertThat(((Expr.Jq) node.dataFlow().exportAs()).source()).isEqualTo("$context + {pointer, rows}");
     }
 

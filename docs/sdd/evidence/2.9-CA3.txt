@@ -1,0 +1,7 @@
+SDD 2.9, CA3: on floci (real SQS + DynamoDB, timer queue with the documented redrive), 50 instances each retry
+once after delay: 1 s. None is left waiting.
+Stint phase-2/federated-orchestration; SDD 2.9 commits 8a47d03..185c16b (local, not pushed).
+Command: mvn verify -pl stint-it (FlociEarlyFireIT)
+
+CA3: 50 of 50 instances completed after a 1 s retry; stranded: []; waits left: 0; timer DLQ depth: 0
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.255 s -- in io.stintflow.it.FlociEarlyFireIT

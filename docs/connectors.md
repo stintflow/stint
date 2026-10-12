@@ -9,7 +9,7 @@ Each **port** (abstraction) is a socket; each **connector** is a plug. The core 
 | Local | in-memory (same JVM) | 🟢 |
 | AWS | SQS (default) | 🟢 |
 | AWS | SNS (fan-out, `@Alternative`) | 🟢 |
-| AWS | EventBridge (`@Alternative`, raw SDK) | 🟢 |
+| AWS | EventBridge (`@Alternative`, `quarkus-amazon-eventbridge`) | 🟢 |
 | Generic | Kafka · NATS · RabbitMQ | ⚪ |
 | K8s | Knative Eventing | ⚪ |
 | Azure / GCP | Service Bus · Pub/Sub | ⚪ |
@@ -27,7 +27,84 @@ Each **port** (abstraction) is a socket; each **connector** is a plug. The core 
 |---|---|---|
 | Local | in-memory | 🟢 |
 | AWS | SQS DelaySeconds (≤ 15 min) | 🟢 |
-| AWS | EventBridge Scheduler (long delays) | ⚪ |
+| AWS | EventBridge Scheduler one-time schedules (long delays, SDD 2.4) | 🟢 |
+
+Compose them with `DelayRoutingTimerService(sqsTimers, schedulerTimers, clock)` (in `stint-core`): up to
+15 min goes to SQS, longer to the Scheduler; its `maxDelay()` is the Scheduler's (`stint.aws.scheduler.timer-max-delay`,
+default 365 days), so register definitions against it. A long timer is an `at(...)` schedule in UTC, **rounded up
+to the minute** (never early; fires within ~1 min after `fireAt`), `ActionAfterCompletion=DELETE`, in the group
+`stint.aws.scheduler.timer-group` (default `stint-timers`). Its target is the **same timer queue**
+(`stint.aws.scheduler.timer-target-arn` = the ARN of `stint.aws.sqs.timer-queue-url`) with the **same JSON**
+`{timerId, workflowInstanceId, armedAt}`, so `SqsDelayTimerService`'s poller fires both. `EventBridgeSchedulerTimerService`
+is injectable by its own type only (`@Typed`): `TimerService` injection points keep resolving to SQS.
+
+### Fires that arrive before their wait (SDD 2.9)
+The engine arms a timer **before** the save that registers the wait it guards (SDD 2.1, RF8: a crash after the save
+must not leave a waiting instance without its timer). A short timer can therefore fire before that wait exists.
+- **SQS delay** is rounded **up** to whole seconds (`fireAt` 1 ms ahead → `DelaySeconds=1`): a timer never fires
+  before its `fireAt`. The Scheduler already rounds `at(...)` up to the minute.
+- **The timer JSON carries `armedAt`** (ISO-8601 UTC, when the connector armed it). Readers accept the older
+  `{timerId, workflowInstanceId}` without it.
+- **A fire that finds no wait** is classified by the engine and logged (logger `io.stintflow.core.WorkflowEngine`,
+  fields `decision`, `timerId`, `instanceId`, `armedAt`, `age`, `instanceStatus`):
+
+| `decision` | When | Level | Connector |
+|---|---|---|---|
+| `obsolete` | the instance is terminal (`COMPLETED`, `FAILED`, `ABORTED`) | INFO | acks |
+| `early` | armed less than the early-fire window ago (default 30 s, `WorkflowEngine#earlyFireWindow`) | INFO | **does not ack**: the handler fails with `TimerFireTooEarly` |
+| `obsolete-after-window` | past the window, or no `armedAt` | WARN | acks |
+
+- The SQS poller handles each message on its own. On `TimerFireTooEarly` it makes the message visible again after
+  2, 4, 8, then 16 s (by `ApproximateReceiveCount`). That is 30 s over four redeliveries, inside the window and
+  under the documented `maxReceiveCount` of 5. Any other failure is logged and left for the visibility timeout,
+  without holding back the rest of the batch.
+- In memory, a `TimerFireTooEarly` fire is kept and delivered again on the next `tick()`.
+- A custom `TimerService` must do the same: keep a fire whose handler fails with `TimerFireTooEarly` and deliver it
+  again shortly, and put `armedAt` in `TimerFire` when it can.
+
+## ScheduleService — recurring schedules (`schedule.cron` / `every`, SDD 2.4)
+| Ecosystem | Connector | MVP |
+|---|---|---|
+| Local | in-memory (controllable clock, `tick()`) | 🟢 |
+| AWS | EventBridge Scheduler (`cron(...)` + `ScheduleExpressionTimezone`) | 🟢 |
+
+- **Reconcile at startup on every replica:** `new ScheduleReconciler(registry, schedules).reconcile()`. It is
+  create-only and idempotent: an existing name is a no-op, so concurrent replicas converge. Nothing is ever
+  removed automatically.
+- **Prune explicitly** as a deploy/CLI step, with the deployed version's definitions:
+  `reconciler.prune()` deletes the schedules in the group that no registered definition wants.
+- **One group per application:** `stint.aws.scheduler.group` (default `stint-schedules`). Schedule names are
+  content-addressed (`stint-` + 40 hex of definition | cron | zone), so changing a cron creates a new schedule
+  and leaves the old one for `prune()`.
+- **Target:** the schedule queue `stint.aws.sqs.schedule-queue-url`, whose ARN goes in
+  `stint.aws.scheduler.schedule-target-arn`. The role in `stint.aws.scheduler.role-arn` must allow
+  `sqs:SendMessage` on both queues. Wire `schedules.onFire(new ScheduledStart(registry, engine))`.
+- **Each occurrence** starts the definition through the SDD 2.1 idempotent start, with a synthetic CloudEvent:
+  `type io.stintflow.schedule.fired.v1`, `id <schedule>@<scheduled instant>`. A duplicated delivery is therefore
+  a no-op, and every occurrence starts a new chain.
+  - AWS substitutes `<aws.scheduler.scheduled-time>` in the input.
+  - A delivery without it is a misconfigured `Input`: it is not acked and ends up in the DLQ (SDD 2.7).
+  - Only for emulators that don't substitute it (floci), set `stint.aws.scheduler.sent-timestamp-fallback=true`.
+    The engine then takes the last occurrence at or before the message's `SentTimestamp`, and rejects a delivery
+    half a period or more after it.
+- **Cron:** five POSIX fields, translated to AWS's six (`0 7 * * 1-5` → `cron(0 7 ? * 2-6 *)`). The loader rejects
+  what has no equivalent: day-of-month and day-of-week both restricted, steps on the day of the week, wrapping
+  ranges, macros, `? L W #`. `every` must divide an hour or a day.
+- **Time zone:** UTC unless `document.metadata["stint.schedule.timezone"]` (Stint extension, IANA id) says
+  otherwise. Daylight saving follows `java.time`: a skipped time fires at the shifted instant, a repeated one
+  fires once. AWS documents DST adjustment but not the repeated hour, so verify that case on AWS if it matters.
+- **Clients (SDD 2.7):** `quarkus-amazon-eventbridge` and `quarkus-amazon-scheduler` produce the clients, configured
+  through `quarkus.eventbridge.*` and `quarkus.eventbridge-scheduler.*` (endpoint override, region, credentials,
+  `sync-client.type=url`). Mind the prefix: `quarkus.scheduler.*` belongs to Quarkus's own scheduler and is
+  ignored here. A client whose configuration is ignored falls back to dev services, or to the default AWS
+  credentials chain.
+- **Native:** proven by `stint-example-aws-smoke`. Run
+  `mvn -Pnative verify -Dquarkus.native.container-build=true -pl examples/stint-example-aws-smoke -am`; it needs
+  Docker, no local GraalVM. jq's builtin functions (`length`, `type`, ...) work natively with no consumer
+  configuration (SDD 2.10): jackson-jq loads them through `ServiceLoader`, which Quarkus leaves out of native images,
+  so `stint-core` carries the metadata itself (`META-INF/native-image/io.stintflow/stint-core`: the service file and
+  each provider's constructor), kept equal to jackson-jq's list by `JqNativeMetadataTest`. The smoke evaluates
+  `length` to cover it.
 | Generic | DB-poller · Redis timer wheel · Quartz | ⚪ |
 
 ## BlobStore — claim-check / large payload offload
@@ -152,7 +229,7 @@ Verified end to end on floci by `FlociDomainEventTriggerIT`.
 ### Lineage on the wire (SDD 2.5)
 Every transport carries the optional `chainid`, `causationid`, `traceparent` and `tracestate` extensions
 as-is (they're CloudEvent attributes: SQS/SNS/EventBridge bodies keep them). A custom connector must not
-drop unknown extensions. Timer connectors keep their own format (`{timerId, workflowInstanceId}`): the
+drop unknown extensions. Timer connectors keep their own format (`{timerId, workflowInstanceId, armedAt}`): the
 engine takes the chain of a timer-resumed instance from its snapshot.
 
 ## Capability honesty

@@ -13,6 +13,7 @@ import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.FlowDirective;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.RetryPolicy;
+import io.stintflow.core.model.Schedule;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
@@ -32,6 +33,7 @@ import io.stintflow.spi.WorkflowRef;
 public final class WorkflowBuilder {
 
     private final List<TaskNode> tasks = new ArrayList<>();
+    private Schedule schedule;
 
     private WorkflowBuilder() {
     }
@@ -128,9 +130,15 @@ public final class WorkflowBuilder {
         return new TryNode.Catch(null, null, null, retry, compensation, then);
     }
 
+    /** SDD 2.4: the definition's DSL 1.0 {@code schedule}. */
+    public WorkflowBuilder schedule(Schedule schedule) {
+        this.schedule = schedule;
+        return this;
+    }
+
     public WorkflowDefinition build(WorkflowRef ref) {
         DoNode root = new DoNode("root", "", DataFlow.NONE, FlowDirective.END, List.copyOf(tasks));
-        return new WorkflowDefinition(ref, root);
+        return new WorkflowDefinition(ref, root, schedule);
     }
 
     private String pointerFor(String name) {

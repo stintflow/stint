@@ -1,0 +1,22 @@
+SDD 2.9, CA1: a timer fired before the save of its wait (barrier between arming and saving) still resumes the
+instance, for every kind of timer of RF2.
+Stint phase-2/federated-orchestration; SDD 2.9 commits 8a47d03..185c16b (local, not pushed).
+
+Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.585 s -- in io.stintflow.it.EarlyTimerFireTest
+  - long_timer_fired_before_its_wait_is_saved_still_resumes
+  - retry_delay_fired_before_its_wait_is_saved_still_resumes
+  - listen_timeout_fired_before_its_wait_is_saved_still_resumes
+  - task_timeout_fired_before_its_wait_is_saved_still_resumes
+
+Each test: the save that registers the wait is held by HeldSaveStore; the armed timer is fired -> the engine
+answers TimerFireTooEarly (not acknowledged); the save is released; the same fire is delivered again -> the
+instance resumes (task timeout and listen timeouts caught as the DSL timeout error; the retry reaches attempt 2).
+The long timer is routed by DelayRoutingTimerService to the long-timer service (24 h listen timeout).
+
+Discrimination: with WorkflowEngine#earlyFireWindow(Duration.ZERO) (every unmatched fire acked, the pre-2.9
+behavior) the four tests fail: "Tests run: 6, Failures: 4" (long_timer, retry_delay, listen_timeout,
+task_timeout). Restored right after.
+
+Connectors: InMemoryTimerEarlyFireTest (stint-inmemory) — a too-early fire is kept for the next tick with its
+armedAt; any other failure is not redelivered:
+Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in io.stintflow.inmemory.InMemoryTimerEarlyFireTest

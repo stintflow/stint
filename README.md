@@ -46,7 +46,8 @@ bundles/
   stint-bundle-aws       core + AWS
 examples/
   stint-example-build-report   "query → stage S3 pointer → format", loaded from build-report.yaml
-  stint-example-send-report    schedule + emit + call:remote — strict-vs-permissive loading; emits report-sent
+  stint-example-send-report    schedule.cron + emit + call:remote — publishes report-sent (SDD 2.6 milestone)
+  stint-example-archive-report schedule.on report-sent → archive record; independent of send-report (SDD 2.6)
 stint-architecture-tests   the single consolidated ArchUnit suite for the whole reactor (test-only)
 stint-it                 floci (local AWS emulator) integration tests
 ```
@@ -58,6 +59,8 @@ Package boundaries, in dependency order: `stint-spi ← stint-wire ← stint-cor
 
 - **Java 25** (`JAVA_HOME` must point at a JDK 25)
 - **Quarkus 3.33.2** (first line supporting JDK 25), **native-ready** from the start
+  (jq expressions, builtin functions included, need no native configuration in the consuming app: `stint-core`
+  carries the metadata, SDD 2.10)
 - Maven 3.8+, Docker (for floci ITs)
 
 ## Build & run
@@ -107,6 +110,21 @@ All four are optional on read: an event in the older format is accepted.
 
 `definition` carries the workflow's `namespace:name:version` — `TaskContext.definition()` on the worker
 side is the exact version the running instance started with, not necessarily the latest registered one.
+
+### Event types at a glance
+
+| Type | Channel | Who emits it | Notes |
+|---|---|---|---|
+| `io.stintflow.task.invoke.v1` / `io.stintflow.task.result.v1` | task transport | engine / worker | internal protocol |
+| timer fire `{timerId, workflowInstanceId}` | timer queue | SQS delay or EventBridge Scheduler | **not** a CloudEvent (SDD 1.3/2.4) |
+| `io.stintflow.schedule.fired.v1` | none (in-process) | the schedule consumer | synthetic start event of a cron occurrence; id `<schedule>@<scheduled instant>` (SDD 2.4) |
+| any other type, e.g. `io.stintflow.reports.report-sent.v1` | domain channel (EventBridge domain bus / SNS) | an `emit` task | a **domain fact**; workflows react through `schedule.on` or `listen` |
+
+The prefixes `io.stintflow.task.`, `io.stintflow.timer.` and `io.stintflow.schedule.` are reserved: an `emit`
+using them is rejected. Domain facts carry the same lineage extensions (`chainid`, `causationid`,
+`traceparent`, `tracestate`) plus `dataref` when their data went to the facts store. A `listen` correlates on
+values it extracts from the fact (`correlate.from`) — no Stint-specific correlation extension is needed on the
+fact itself.
 
 ## Tracing and structured logs (SDD 2.5)
 
@@ -196,7 +214,7 @@ A `listen` task (DSL 1.0 *Listen*) suspends the instance until correlated domain
             read: data                 # data (default) | envelope | raw
           timeout: { after: { minutes: 10 } }
     catch:
-      errors: { with: { type: 'stint://errors/timeout' } }
+      errors: { with: { type: 'https://serverlessworkflow.io/spec/1.0.0/errors/timeout' } }
 ```
 
 - **Correlation:** each `expect` is evaluated when the instance suspends and each `from` on the arriving
@@ -213,27 +231,89 @@ A `listen` task (DSL 1.0 *Listen*) suspends the instance until correlated domain
   wait is kept in an inbox for `ResumeReaction`'s window (default 5 min, max 15) and consumed when the
   instance suspends.
 - **Timeout:** `timeout.after` must fit the timer (SQS: 15 min) until SDD 2.4; it raises
-  `stint://errors/timeout`, catchable by `try/catch` (no `retry` around a `listen`).
+  the DSL 1.0 standard `https://serverlessworkflow.io/spec/1.0.0/errors/timeout` (status 408), catchable by
+  `try/catch` (no `retry` around a `listen`).
 - **Not yet:** `until`, `foreach`, `any: []`, expressions/regex in `with`, a filter without `correlate` or a
   correlation without `expect`, one event resuming several instances.
 
 Wire it next to `StartReaction`: `new DomainEventRouter(List.of(new StartReaction(bindings, engine),
 new ResumeReaction(engine)))`.
 
+## Schedules and long timers (SDD 2.4)
+
+```yaml
+document:
+  metadata:
+    stint.schedule.timezone: America/Sao_Paulo   # Stint extension; UTC by default
+schedule:
+  cron: '0 7 * * 1-5'          # or every: { minutes: 15 }, or on: { one: { with: { type: ... } } }
+```
+
+- `schedule.cron`/`every` become one EventBridge Scheduler schedule per definition (in-memory: `tick()` on a
+  controllable clock). Every replica reconciles them create-only at startup; `prune()` is an explicit deploy
+  step.
+- An occurrence starts the definition through the idempotent start of SDD 2.1, with a synthetic
+  `io.stintflow.schedule.fired.v1` event whose id is `<schedule>@<scheduled instant>`. A duplicated delivery
+  creates nothing, and each run starts a new chain.
+- `schedule.on` (`one`/`any`, exact `with`) binds through `TriggerBindings.bindDeclaredSchedules()`.
+- Timers beyond SQS's 15 minutes (a 48 h `listen`, a long retry) go through `DelayRoutingTimerService` to
+  Scheduler one-time schedules. These are deleted after firing and deliver the same timer JSON to the same
+  queue.
+- **SDD 2.9:** SQS delays are rounded up to whole seconds. A timer that fires before the save of its wait is
+  delivered again instead of being dropped; the timer JSON carries `armedAt`, and the engine logs every fire that
+  finds no wait as `early`, `obsolete` or `obsolete-after-window` (`docs/connectors.md`, "Fires that arrive before
+  their wait").
+- **Not yet:** `schedule.after`, `schedule.on` with `all`/`until`/`correlate`, input for scheduled runs, catching
+  up missed occurrences.
+
+## Milestone: send-report → report-sent → archive-report (SDD 2.6)
+
+Two workflows that only know each other through a fact:
+
+- `examples/stint-example-send-report` — `send-report.yaml` runs on `schedule.cron: '0 9 * * MON'` (UTC).
+  Its `prepare` task falls back to default recipients on a cron run, which has no input of its own. It mails
+  through `MailGateway` and emits `io.stintflow.reports.report-sent.v1`.
+- `examples/stint-example-archive-report` — `archive-report.yaml` starts on `schedule.on` for that type and
+  stores an archive record (with the chain id) in the `BlobStore`. Its build bans any dependency on
+  send-report, and a test fails if its sources mention it.
+
+The archive instance runs on the chain of the report that caused it. If an engine dies between the checkpoint
+and the publication, the outbox sweep of another engine still delivers the fact.
+
+- **Locally:** `SendReportMilestoneLocalTest`, with a controllable clock and in-memory everything.
+- **On floci:** `FlociSendReportMilestoneIT`, with real SQS, EventBridge, EventBridge Scheduler, DynamoDB and
+  S3, and real SMTP captured by Mailpit. Timers stay in-memory there, as in every IT.
+
+## Errors (SDD 2.8)
+
+Errors raised by Stint follow DSL 1.0:
+- a **standard type** (`https://serverlessworkflow.io/spec/1.0.0/errors/<timeout|runtime|communication|…>`);
+- its **status** (timeout 408, runtime 500, …);
+- the failing component's JSON Pointer as **instance**.
+
+Workers get the same from `stint-worker-sdk`; a worker's own `status`/`instance` is kept. The `stint://errors/*`
+types of earlier versions are still accepted as **aliases**: on the wire, from older workers, and in `catch`
+filters written in YAML. That compatibility is temporary.
+
 ## Honest MVP cuts (deliberate, documented)
 
-1. **DSL Fase 2 constructs**: `schedule`, `fork`, `wait`, `for` and call types other
-   than the `remote` Stint extension are valid CNCF DSL 1.0 but not implemented yet (event-started
-   workflows exist programmatically via `TriggerBindings`; reading `schedule.on` from YAML is SDD 2.4;
-   `emit` is implemented since SDD 2.2, `listen` — the subset above — since SDD 2.3) — `stint-dsl` fails
+1. **DSL Fase 2 constructs**: `fork`, `wait`, `for` and call types other than the `remote` Stint
+   extension are valid CNCF DSL 1.0 but not implemented yet (`emit` is implemented since SDD 2.2,
+   `listen` — the subset above — since SDD 2.3, `schedule` — cron/every/on — since SDD 2.4) — `stint-dsl` fails
    the load citing the construct and its JSON Pointer, unless loaded permissively (see
-   `stint-example-send-report`).
+   `stint-example-send-report`). Since SDD 2.9 this holds for **every declared key**: a key the compiler doesn't
+   use fails a `STRICT` load with its path, so nothing in a definition is ignored in silence. Examples are `if`,
+   `use`, schemas, `timeout` on a `set`, `then` on a `try`'s body, `catch.as` and `retry.jitter`. `PERMISSIVE`
+   warns instead. The informative DSL keys (`title`, `summary`, `tags`, `metadata`) are accepted.
+   A `call: remote` sends its worker `with.input` evaluated over the task's input after `input.from` (DSL 1.0:
+   input transformation, then the call's `with`). This holds inside a `try` too, and each retry sends exactly what
+   attempt 1 sent.
 2. **AWS transports**: SQS is the default (native + floci-testable). SNS and EventBridge are included
-   as `@Alternative` connectors (opt-in). EventBridge uses the raw AWS SDK → **native caveat**: it
-   needs reflection registration for native image; the SQS/S3/DynamoDB path is fully native via
-   Quarkus extensions.
-3. **EventBridge Scheduler timer** (delays > 15 min) and the **Lambda/Knative worker bindings** are
-   mapped in `docs/connectors.md` but not yet coded.
+   as `@Alternative` connectors (opt-in). Every AWS client — S3, DynamoDB, SQS, SNS, EventBridge and
+   EventBridge Scheduler — comes from its Quarkus extension (SDD 2.7). The `stint-example-aws-smoke` app runs
+   them end to end over floci, as a JVM jar in `it.yml` and as a native image in the on-demand `native.yml`.
+3. The **Lambda/Knative worker bindings** are mapped in `docs/connectors.md` but not yet coded (the
+   EventBridge Scheduler timer exists since SDD 2.4).
 4. **`WorkflowEngine.awaitCompletion`** polls the `StateStore` — fine for tests and one-off synchronous
    calls, not designed for high-volume production use. It also can't report *why* an instance failed,
    only that it did: `InstanceSnapshot` doesn't persist a failure reason, only the terminal status.
@@ -241,6 +321,7 @@ new ResumeReaction(engine)))`.
 ## floci
 
 [floci](https://github.com/floci-io/floci) is a lightweight local AWS emulator (≈90 MB, ~24 ms start)
-exposing AWS-shaped services on `http://localhost:4566`. Connectors point at it via
-`stint.aws.endpoint-override` (raw clients) and the standard `quarkus.<svc>.endpoint-override` (Quarkus
-extensions). It replaces LocalStack for CI and local dev.
+exposing AWS-shaped services on `http://localhost:4566`. Connectors point at it via the standard
+`quarkus.<svc>.endpoint-override` of each Quarkus extension (`sqs`, `dynamodb`, `s3`, `sns`, `eventbridge`,
+`eventbridge-scheduler` — not `scheduler`, which is Quarkus's own scheduling extension). It replaces
+LocalStack for CI and local dev.

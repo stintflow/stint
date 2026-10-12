@@ -1,0 +1,22 @@
+# CNCF Serverless Workflow definition for archive-report (SDD 2.6, RF2).
+# Started by schedule.on (SDD 2.4) whenever a report-sent domain fact arrives. It knows only the fact's
+# type — not who publishes it — and inherits the fact's chain (SDD 2.5).
+document:
+  dsl: '1.0.0'
+  namespace: archive
+  name: archive-report
+  version: '1.0.0'
+schedule:
+  on:
+    one:
+      with:
+        type: io.stintflow.reports.report-sent.v1
+do:
+  - archive:
+      call: remote
+      with:
+        task: archive-record    # routing key -> CloudEvent subject -> selects the worker
+        input:
+          fact: ${ $workflow.input[0] }
+      export:
+        as: '${ . }'            # an event-started instance's $context is [the fact]; keep the archive result

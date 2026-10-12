@@ -1,0 +1,24 @@
+name: Native (AWS smoke)
+
+# SDD 2.7, sec. 8b: builds the AWS smoke app as a native image inside a Mandrel container (no local GraalVM)
+# and runs the same QuarkusIntegrationTest against the binary over floci. Slow and memory-hungry, so it runs
+# on demand rather than on every push; its result is recorded in the phase gate.
+on:
+  workflow_dispatch:
+
+jobs:
+  native-smoke:
+    name: aws-smoke native over floci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Native build and smoke test
+        run: mvn -B -ntp -Pnative -Dquarkus.native.container-build=true -pl examples/stint-example-aws-smoke -am verify

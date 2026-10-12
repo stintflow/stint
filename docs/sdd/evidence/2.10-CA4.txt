@@ -1,0 +1,66 @@
+SDD 2.10, CA4: the sandbox's native happy path (S.4 NativeIT, S.3 CA1 on both domains as native images) against the
+fixed Stint and WITHOUT the sandbox workaround of S.4 8i.
+Stint ee4a4af installed in ~/.m2 (mvn install -DskipTests; the stint-core jar carries
+META-INF/native-image/io.stintflow/stint-core/{reflect,resource}-config.json). Sandbox phase-2-validation at 1f24ceb,
+unchanged: the workaround stays committed (README pins b1f4579 until this SHA is on the remote, 8b) and is switched
+off on the command line.
+Commands (C:\dev\stint-consumer-sandbox):
+  mvn package -Dnative -Dquarkus.native.remote-container-build=true \
+      -Dquarkus.native.auto-service-loader-registration=false -DskipTests -pl sandbox-orders,sandbox-billing -am
+  docker build -t stint-s4/<module>:native (the runner on ubi9-quarkus-micro-image:2.0, as infra/gate.sh --native)
+  bash infra/reset.sh
+  mvn verify -Pscenarios -pl sandbox-scenarios -Dtest=NativeIT -Dscenarios.apps=native
+
+The native-image command lines still carry Quarkus's -H:-UseServiceLoaderFeature (occurrences in the build log):
+        4 UseServiceLoaderFeature
+  Finished generating 'sandbox-orders-1.0.0-SNAPSHOT-runner' in 2m 3s.
+  Finished generating 'sandbox-billing-1.0.0-SNAPSHOT-runner' in 1m 59s.
+  [INFO] BUILD SUCCESS
+  [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 156.6 s -- in io.stintflow.sandbox.scenarios.NativeIT
+  [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+  [INFO] BUILD SUCCESS
+
+--- S.4-CA5.txt written by NativeIT ---
+S.4 RF4: S.3 CA1's happy path on both native images
+  t+   0.4s  started native-orders (ORDERS, pid 232552, :8081) 
+  t+   0.8s  started native-billing (BILLING, pid 276648, :8082) 
+  t+   0.8s  sandbox-orders: sandbox-orders 1.0.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.070s. Listening on: http://0.0.0.0:8081
+  t+   0.8s  sandbox-billing: sandbox-billing 1.0.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.070s. Listening on: http://0.0.0.0:8082
+  t+   4.2s  order native-cdedc064 confirmed
+  spy, one chain chn-e36d36d0-2ba2-3533-ab18-9639e8041afe: [io.sandbox.orders.order-placed.v1, io.sandbox.billing.invoice-requested.v1, io.sandbox.billing.invoice-issued.v1, io.sandbox.orders.order-confirmed.v1]
+  MailHog:
+    native-cdedc064@example.com | Order native-cdedc064 confirmed: invoice inv-bb068eef78782f80 | [invoice-inv-bb068eef78782f80.html (342 bytes)]
+Leftovers (SDD S.4, 8e), aws --endpoint-url http://localhost:4566 ...
+  [orders]
+    waits                 0   dynamodb scan --table-name orders-waits --select COUNT
+    outbox (pending)      0   dynamodb query --table-name orders-outbox --index-name pending-by-age --key-condition-expression "shard = :s" (shards 0-3) --select COUNT
+    inbox                 0   dynamodb scan --table-name orders-inbox --select COUNT
+    non-terminal          0   dynamodb scan --table-name orders-instances --filter-expression "#s <> COMPLETED|FAILED|ABORTED" []
+    orders-tasks               visible 0, in flight 0, delayed 0
+    orders-results             visible 0, in flight 0, delayed 0
+    orders-timers              visible 0, in flight 0, delayed 2
+    orders-domain-events       visible 0, in flight 0, delayed 0
+    orders-tasks-dlq           visible 0, in flight 0, delayed 0
+    orders-results-dlq         visible 0, in flight 0, delayed 0
+    orders-timers-dlq          visible 0, in flight 0, delayed 0
+    orders-schedules-dlq       visible 0, in flight 0, delayed 0
+    orders-domain-events-dlq   visible 0, in flight 0, delayed 0
+    one-time schedules    0   scheduler list-schedules --group-name orders-timers []
+  [billing]
+    waits                 0   dynamodb scan --table-name billing-waits --select COUNT
+    outbox (pending)      0   dynamodb query --table-name billing-outbox --index-name pending-by-age --key-condition-expression "shard = :s" (shards 0-3) --select COUNT
+    inbox                 0   dynamodb scan --table-name billing-inbox --select COUNT
+    non-terminal          0   dynamodb scan --table-name billing-instances --filter-expression "#s <> COMPLETED|FAILED|ABORTED" []
+    billing-tasks              visible 0, in flight 0, delayed 0
+    billing-results            visible 0, in flight 0, delayed 0
+    billing-timers             visible 0, in flight 0, delayed 6
+    billing-domain-events      visible 0, in flight 0, delayed 0
+    billing-tasks-dlq          visible 0, in flight 0, delayed 0
+    billing-results-dlq        visible 0, in flight 0, delayed 0
+    billing-timers-dlq         visible 0, in flight 0, delayed 0
+    billing-schedules-dlq      visible 0, in flight 0, delayed 0
+    billing-domain-events-dlq  visible 0, in flight 0, delayed 0
+    one-time schedules    0   scheduler list-schedules --group-name billing-timers []
+  (sqs get-queue-attributes --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible ApproximateNumberOfMessagesDelayed)
+  Delayed messages on <domain>-timers are timers still to fire (e.g. 5 min task timeouts). Once
+  their instance is terminal, Stint acknowledges them as 'obsolete' (SDD 2.9); they are not leftovers.

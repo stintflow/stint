@@ -55,11 +55,28 @@
             <artifactId>url-connection-client</artifactId>
         </dependency>
 
-        <!-- EventBridge has no Quarkus extension yet: raw SDK v2 client.
-             NATIVE CAVEAT: needs reflection registration for native image (documented in README). -->
+        <!-- SDD 2.7: EventBridge (SDD 2.2) and EventBridge Scheduler (SDD 2.4) through their Quarkiverse extensions,
+             like S3/DynamoDB/SQS/SNS above: the extensions produce the clients and register what the native image
+             needs. (SDD 2.2/2.4 assumed no extension existed; the 3.33.2 platform BOM has both.) -->
         <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>eventbridge</artifactId>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-eventbridge</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-scheduler</artifactId>
+        </dependency>
+        <!-- tests (SDD 2.4) -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
