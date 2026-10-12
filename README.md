@@ -321,6 +321,45 @@ a model provider. `call: decision` is a Stint extension, compiled to a `call: re
   a duplicate or late result never replaces it. Nothing of the decision's input goes to logs, spans or the record.
 - The expansion is logged at DEBUG by `DslLoader`; `DefinitionPrinter` prints any compiled definition as YAML.
 
+## Decision adapters (SDD 3a.2)
+
+A `call: decision` names a routing key (`with.task`); the worker's configuration says which **adapter** answers it, with
+which question and threshold. The workflow never names a provider, a threshold or a credential.
+
+```java
+DecisionHandlers.builder(DecisionConfig.fromProperties(props))   // fails on any invalid key, at startup
+        .adapter(LlmDecisionAdapter.builder().id("llm").chatModel(model).build())
+        .adapter(JevDecisionAdapter.builder().id("jev").apiKey(secrets::jevKey).build())
+        .build()
+        .registerAll(registry);
+```
+
+```properties
+stint.decision.routes.classify-meeting.adapter=llm
+stint.decision.routes.classify-meeting.instructions=Which document does this meeting produce?
+stint.decision.adapters.llm.threshold=0.8              # default 0.7; also threshold.<choice|score|boolean>
+stint.decision.adapters.llm.max-input-tokens=20000     # optional ceiling, checked before the call
+stint.decision.adapters.llm.price.input-per-million=0.15   # optional, for the estimated cost in the usage line
+```
+
+- **`uncertain`** is computed by the handler, never by the adapter: no confidence, a tie at the top of the adapter's
+  distribution, or a (calibrated) confidence below the threshold. Equal to the threshold is certain. A
+  `ConfidenceCalibration` per adapter maps the raw confidence before the threshold.
+- **Errors**: a malformed answer — not JSON, the wrong type, a confidence outside [0, 1], or a value that is not one of
+  the options — is a `validation` error (400) a `catch` can handle. A low confidence is never an error. Provider
+  failures map as for every LLM worker (429 with `retryAfter`, `timeout`, `communication`, `authentication`).
+- **Adapters**:
+  - `FakeDecisionAdapter` (module `stint-worker-decision`): rules for tests and CI;
+  - `LlmDecisionAdapter` (`stint-worker-langchain4j`): one call, the model's own confidence (not calibrated, valid only
+    for that adapter, model and prompt version, which goes into the provenance), a JSON Schema with the options as an
+    enum when the model supports it;
+  - `JevDecisionAdapter` (`stint-worker-decision-jev`): TypeSafe AI's Jev over its HTTP API with the JDK's
+    `HttpClient`; `Retry-After` of a 429 is honoured. **Tested only against a fake server.**
+- **Usage**: one `Decision usage` line per decision (adapter, provider, model, tokens, latency, estimated cost), with
+  the task's ids and no content. A `DecisionPolicy` (SDD 3a.5) is consulted before every call; it allows all by default.
+- **No real providers in tests**: every test JVM runs with `-Djdk.net.hosts.file=build/test-hosts`, which resolves only
+  `localhost`; `NoRealProvidersTest` fails if a provider key is set.
+
 ## LLM workers with `stint-worker-langchain4j` (SDD 3a.3)
 
 An LLM task is an ordinary worker task: the engine dispatches it, retries it and routes its errors like any other,
