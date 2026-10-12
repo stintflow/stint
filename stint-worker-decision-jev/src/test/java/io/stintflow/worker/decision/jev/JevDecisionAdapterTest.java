@@ -39,6 +39,8 @@ class JevDecisionAdapterTest {
     static final DecisionRequest MEETING = new DecisionRequest(DecisionKind.CHOICE, List.of(
             new DecisionOption("ata", "Minutes"), new DecisionOption("adr", null),
             new DecisionOption("runbook", "Operating steps")), Json.obj().put("text", "synthetic meeting"));
+    /** Was {@code {}}: an empty object is no input since SDD 3a.2b, 4.3. */
+    static final JsonNode SOME_INPUT = Json.obj().put("text", "synthetic meeting");
 
     private final FakeJevServer server;
 
@@ -126,8 +128,8 @@ class JevDecisionAdapterTest {
                  "probabilities":{"0":0.05,"1":0.1,"2":0.3,"3":0.55},"confidence":0.55}}}"""));
         JevDecisionAdapter jev = adapter().scoreLevels(List.of("none", "low", "medium", "high")).build();
         DecisionRequest urgent = new DecisionRequest(DecisionKind.BOOLEAN, List.of(
-                new DecisionOption("true", "Needs action today"), new DecisionOption("false", "Can wait")), Json.obj());
-        DecisionRequest relevance = new DecisionRequest(DecisionKind.SCORE, List.of(), Json.obj());
+                new DecisionOption("true", "Needs action today"), new DecisionOption("false", "Can wait")), SOME_INPUT);
+        DecisionRequest relevance = new DecisionRequest(DecisionKind.SCORE, List.of(), SOME_INPUT);
 
         JsonNode no = run(handler(jev, "0.7"), urgent);
         JsonNode score = run(handler(jev, "0.7"), relevance);
@@ -147,7 +149,7 @@ class JevDecisionAdapterTest {
     @Test
     void a_score_without_levels_is_a_configuration_error_without_a_call() {
         ErrorInfo error = error(handler(adapter().build(), "0.7"),
-                new DecisionRequest(DecisionKind.SCORE, List.of(), Json.obj()));
+                new DecisionRequest(DecisionKind.SCORE, List.of(), SOME_INPUT));
 
         assertThat(error.type()).isEqualTo(ErrorInfo.StandardType.CONFIGURATION.uri());
         assertThat(server.requests).isEmpty();
