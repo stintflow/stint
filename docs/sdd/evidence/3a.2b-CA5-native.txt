@@ -1,0 +1,16 @@
+SDD 3a.2b, CA5 — native build and run of examples/stint-example-ai-worker with the Jev adapter's local profile (12/10/2026)
+
+Versions: Quarkus 3.33.2, dev.langchain4j:langchain4j 1.11.7, JDK 25.0.3 (build), Mandrel 25.0.4.1 (native)
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-ai-worker
+[INFO] [io.quarkus.deployment.pkg.steps.NativeImageBuildStep] Running Quarkus native-image plugin on MANDREL 25.0.4.1 JDK 25.0.4.1+1-LTS
+                        7,7s (8,3% of total time) in 817 GCs | Peak RSS: 2,52GB | CPU load: 8,94
+Finished generating 'stint-example-ai-worker-0.1.0-SNAPSHOT-runner' in 1m 31s.
+[INFO] BUILD SUCCESS
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0), exit code 0. The urgency decision goes to JevDecisionAdapter.server(LITJEV) — no key, loopback, so remote=false — against an in-process fake of a LitJev server on 127.0.0.1 (LitJev's format, no authentication; a request with Authorization would get 400):
+INFO  [io.quarkus] (main) stint-example-ai-worker 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.013s. 
+INFO  [io.stintflow.worker.decision.DecisionUsageSink] () Decision usage of task /do/1/classify in instance 5bf2c49b-ad04-4365-9899-882a7dade061 (chain chn-709627b6-75e5-3b45-a2fb-52dc7a0d897b, attempt 1): adapter=llm, provider=fake, model=fake-meeting-rules, calls=1, inputTokens=41, outputTokens=8, latencyMs=0, estimatedCost=null
+INFO  [io.stintflow.worker.decision.DecisionUsageSink] (ForkJoinPool.commonPool-worker-1) Decision usage of task /do/2/urgent in instance 5bf2c49b-ad04-4365-9899-882a7dade061 (chain chn-709627b6-75e5-3b45-a2fb-52dc7a0d897b, attempt 1): adapter=litjev, provider=litjev, model=synthetic/qwen-checkpoint, calls=1, inputTokens=40, outputTokens=0, latencyMs=4, estimatedCost=null
+AI-WORKER result={"transcript":"Topic: quarterly planning\nSpeaker A: the release slips one week.\nSpeaker B: I will update the roadmap.\nSpeaker A: and I will tell the support team.","doc":"ata","urgent":false,"summary":{"topic":"quarterly planning","speakers":2},"actions":{"items":["Speaker B: I will update the roadmap.","Speaker A: and I will tell the support team."],"contextMessages":3}}
+AI-WORKER urgent decision={"kind":"boolean","value":false,"confidence":0.8,"uncertain":false,"provenance":{"adapter":"litjev","provider":"litjev","model":"synthetic/qwen-checkpoint","version":"jev-adapter/1;server=litjev"},"attempt":1,"correlationId":"bcf61632-c318-4588-b5e9-984e944fcbd1","decidedAt":"2026-10-12T22:36:10.772187123Z","count":1}
+AI-WORKER OK

@@ -360,6 +360,35 @@ stint.decision.adapters.llm.price.input-per-million=0.15   # optional, for the e
 - **No real providers in tests**: every test JVM runs with `-Djdk.net.hosts.file=build/test-hosts`, which resolves only
   `localhost`; `NoRealProvidersTest` fails if a provider key is set.
 
+### Local decisions with LitJev (SDD 3a.2b)
+
+The same `JevDecisionAdapter` serves a local [LitJev](https://github.com/zhengxuyu/litjev) server — an independent,
+Apache-2.0 reproduction of Jev's API over Qwen checkpoints — so a decision's input never leaves the machine:
+
+```java
+JevDecisionAdapter.builder().server(JevDecisionAdapter.Server.LITJEV)   // http://127.0.0.1:8000, id and model "litjev"
+        .model("Qwen/Qwen3.5-2B").serverVersion("2cd915a").readout("content")   // optional, for the provenance
+        .build();
+```
+
+```properties
+stint.decision.adapters.litjev.threshold=0.7                 # its own threshold: never the hosted Jev's
+stint.decision.adapters.litjev.calibration.temperature=1.5   # optional temperature scaling, any adapter
+```
+
+- **Profile**: no key and no `Authorization`; on a loopback address the descriptor is `remote = false` and
+  `provider = litjev`, for the sensitivity policy (SDD 3a.5). A non-loopback address fails at build time unless
+  `allowRemote(true)`, which logs a warning and makes the adapter remote. The default stays the hosted Jev, with a key.
+- **Confidence**: `ConfidenceSource.MAX_PROBABILITY` by default for LitJev — the chance of the chosen option — rather
+  than its `confidence`, a Gini concentration that depends on the number of options; `SERVER` takes the latter (and is
+  the hosted Jev's default). A boolean is always `max(p, 1 − p)`. LitJev is not calibrated: tune its threshold, or a
+  temperature, on its own data.
+- **No input**: `null`, blank text, `{}` or `[]` is a `validation` error before any call, for both servers.
+- **Provenance**: `provider` `litjev`, the checkpoint the server reports as `model`, and a version like
+  `jev-adapter/1;server=litjev@2cd915a;readout=content`.
+- **Manual run**: [`docs/manual/local-decision.md`](docs/manual/local-decision.md) runs the example's `triage` mode
+  against a real LitJev with 15 synthetic pt-BR meetings. The build never needs a LitJev or a model.
+
 ## LLM workers with `stint-worker-langchain4j` (SDD 3a.3)
 
 An LLM task is an ordinary worker task: the engine dispatches it, retries it and routes its errors like any other,

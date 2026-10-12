@@ -28,15 +28,18 @@ export HF_HOME=/mnt/e/stint-local-decision/hf
 export UV_CACHE_DIR=/mnt/e/stint-local-decision/uv
 git clone https://github.com/zhengxuyu/litjev.git ~/litjev
 cd ~/litjev && git checkout 2cd915aff989b37bb1c46ef5ae480c4a01501404
+uv sync --locked --python 3.13
 ```
 
 ## 2. Subir o LitJev
 ```bash
 cd ~/litjev
 HF_HOME=/mnt/e/stint-local-decision/hf UV_CACHE_DIR=/mnt/e/stint-local-decision/uv \
-  uv run --locked litjev --model Qwen/Qwen3.5-2B \
+  uv run --locked --python 3.13 litjev --model Qwen/Qwen3.5-2B \
   --revision 15852e8c16360a2fea060d615a32b45270f8a8fc --dtype float16 --port 8000
 ```
+
+`--python 3.13` é necessário: o `requires-python >=3.11` do LitJev deixa o uv escolher o Python mais novo (3.15), para o qual o `torch==2.11.0+cu128` travado no `uv.lock` não tem roda.
 
 O LitJev sobe só em `127.0.0.1` e não tem autenticação. **Não o exponha na rede.**
 
