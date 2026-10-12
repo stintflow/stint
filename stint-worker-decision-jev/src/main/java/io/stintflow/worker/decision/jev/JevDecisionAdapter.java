@@ -51,7 +51,8 @@ import io.stintflow.worker.decision.DecisionUsage;
  *   <tr><th>Stint</th><th>Jev question</th><th>Decision</th></tr>
  *   <tr><td>choice</td><td>{@code choice}, criteria = option → description</td>
  *       <td>value = {@code choice}; confidence by the {@link ConfidenceSource}; distribution = {@code probabilities}</td></tr>
- *   <tr><td>boolean</td><td>{@code noul}, criteria from the options {@code true}/{@code false} if any</td>
+ *   <tr><td>boolean</td><td>{@code noul}, criteria from the options {@code true}/{@code false} if any; without
+ *       options, none for TypeSafe and {@code {true: "Yes", false: "No"}} for LitJev</td>
  *       <td>value = p ≥ 0.5; confidence = max(p, 1 − p); distribution = {true: p, false: 1 − p}</td></tr>
  *   <tr><td>score</td><td>{@code score}, criteria = the configured levels</td>
  *       <td>value = {@code score}; confidence by the {@link ConfidenceSource}; distribution = {@code probabilities}</td></tr>
@@ -115,6 +116,7 @@ public final class JevDecisionAdapter implements DecisionAdapter {
         MAX_PROBABILITY
     }
 
+    private final Server server;
     private final AdapterDescriptor descriptor;
     private final URI endpoint;
     private final Supplier<String> apiKey;
@@ -128,6 +130,7 @@ public final class JevDecisionAdapter implements DecisionAdapter {
 
     private JevDecisionAdapter(Builder b) {
         Server server = b.server;
+        this.server = server;
         String id = b.id != null ? b.id : server.id;
         URI baseUri = b.baseUri != null ? b.baseUri : server.baseUri;
         this.model = b.model != null ? b.model : server.model;
@@ -255,6 +258,9 @@ public final class JevDecisionAdapter implements DecisionAdapter {
                 if (!request.options().isEmpty()) {
                     ObjectNode criteria = question.putObject("criteria");
                     request.options().forEach(option -> criteria.put(option.name(), describe(option)));
+                } else if (server == Server.LITJEV) {
+                    // LitJev 2cd915a's content readout refuses a noul without both descriptions (SDD 3a.2b, 9.6)
+                    question.putObject("criteria").put("true", "Yes").put("false", "No");
                 }
             }
             case SCORE -> {

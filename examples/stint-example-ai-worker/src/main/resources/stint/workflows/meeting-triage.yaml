@@ -1,7 +1,7 @@
 # SDD 3a.2b, CA6: the manual run against a real LitJev — only the two decisions of meeting-notes, both answered by the
 # Jev adapter's local profile. Run by `AiWorkerMain triage <folder>`; never by the build.
-# The boolean declares its two options with descriptions: LitJev 2cd915a's content readout refuses a noul without both
-# (422 "expected str instance, NoneType found"), see SDD 3a.2b, section 9.
+# The boolean declares its two options with descriptions, which LitJev scores; without them the local profile sends a
+# plain Yes/No (LitJev 2cd915a refuses a noul without both descriptions, SDD 3a.2b, 9.6).
 document:
   dsl: '1.0.0'
   namespace: examples

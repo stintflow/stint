@@ -148,6 +148,30 @@ class LitJevProfileTest {
     }
 
     @Test
+    void a_boolean_without_options_gets_plain_yes_no_criteria_locally_and_none_from_the_hosted_profile() {
+        server.reply(Reply.litjevNoul(0.3));
+        server.reply(Reply.litjevNoul(0.3));
+        server.reply(Reply.ok("{\"model\":\"jev-1.13.0\",\"answers\":{\"decision\":{\"type\":\"noul\",\"noul\":0.3}}}"));
+        DecisionRequest bare = new DecisionRequest(DecisionKind.BOOLEAN, List.of(), MEETING.input());
+        DecisionRequest described = new DecisionRequest(DecisionKind.BOOLEAN, List.of(
+                new DecisionOption("true", "Needs action today"), new DecisionOption("false", "Can wait")),
+                MEETING.input());
+        JevDecisionAdapter hosted = JevDecisionAdapter.builder().baseUri(server.baseUri()).apiKey(() -> "test")
+                .build();
+
+        run(handler(local().build()), bare);
+        run(handler(local().build()), described);
+        run(handler(hosted), bare);
+
+        JsonNode local = server.requests.get(0).path("questions").path("decision");
+        assertThat(local.path("criteria").path("true").asText()).isEqualTo("Yes");
+        assertThat(local.path("criteria").path("false").asText()).isEqualTo("No");
+        JsonNode declared = server.requests.get(1).path("questions").path("decision");
+        assertThat(declared.path("criteria").path("true").asText()).isEqualTo("Needs action today");
+        assertThat(server.requests.get(2).path("questions").path("decision").has("criteria")).isFalse();   // 3a.2
+    }
+
+    @Test
     void without_a_key_the_local_profile_starts_and_sends_no_authorization() {
         server.reply(Reply.litjev("choice", "ata", MOSTLY_ATA));
         server.reply(Reply.litjev("choice", "ata", MOSTLY_ATA));
