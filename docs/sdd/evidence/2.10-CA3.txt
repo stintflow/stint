@@ -1,0 +1,70 @@
+SDD 2.10, CA3 (8a): stint-example-aws-smoke as a native image, run in a container next to its own floci, checked with
+the AwsSmokeIT assertions (POST /smoke, the fact on smoke-facts, the derived schedule).
+Stint phase-2/federated-orchestration at 98be886 (RF1-RF3). Windows 11, Docker Desktop (Hyper-V, 10 GB).
+Build: mvn package -Dnative -DskipTests -DskipITs -Dquarkus.native.remote-container-build=true
+       -pl examples/stint-example-aws-smoke -am   (Mandrel 25.0.4.1; the Hyper-V backend never creates a container
+       with a bind mount of C:, hence the remote build, S.4 8f of the sandbox)
+  8,1s (8,7% of total time) in 919 GCs | Peak RSS: 3,71GB | CPU load: 8,89
+  Finished generating 'stint-example-aws-smoke-0.1.0-SNAPSHOT-runner' in 1m 31s.
+Run: a scratch script (network stint-210, floci/floci:latest, the resources of FlociResource created with the aws CLI,
+the runner copied into an image on quay.io/quarkus/ubi9-quarkus-micro-image:2.0, the client config passed by -D).
+The official proof stays native.yml (workflow_dispatch), now with nameLength in AwsSmokeIT.
+
+=== 1. With stint-core's native metadata (HEAD 98be886) ===
+== image stint-210/aws-smoke:fixed from /c/dev/CDO/examples/stint-example-aws-smoke/target/stint-example-aws-smoke-0.1.0-SNAPSHOT-runner
+sha256:2e1f885d356a2d4261b1c018a0b32a11dc35fa79e7bb8e98af036a1495e271e2
+== floci on network stint-210 (host port 4567)
+== native smoke app
+{"timestamp":"2026-10-11T23:50:44.380006302Z","sequence":391,"loggerClassName":"org.jboss.logging.Logger","loggerName":"io.quarkus","level":"INFO","message":"stint-aws-smoke 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.057s. Listening on: http://0.0.0.0:8080","threadName":"main","threadId":3,"mdc":{},"ndc":"","hostName":"b8a43984935d","processName":"/work/application","processId":1}
+== POST /smoke {"name":"smoke"}
+{"echo":"smoke","nameLength":5,"chainId":"chn-ae3ab59d-2d02-36e2-8aeb-9112f7bdccff"}
+HTTP 200
+== fact on smoke-facts (long poll)
+{"specversion":"1.0","id":"f4f736a5-0ff7-31e4-b8a7-e69eca402362","source":"https://stintflow.io/smoke","type":"io.stintflow.smoke.done.v1","datacontenttype":"application/json","time":"2026-10-11T23:50:46.045375566Z","chainid":"chn-ae3ab59d-2d02-36e2-8aeb-9112f7bdccff","causationid":"26187589-e0f8-45a3-8330-22ccf8823a75","data":{"echo":"smoke","nameLength":5,"chainId":"chn-ae3ab59d-2d02-36e2-8aeb-9112f7bdccff"}}
+== schedules in group stint-schedules
+stint-5cf5eef489da322b0a68dc29ac9d333cd61b61a8
+== checks (the AwsSmokeIT assertions)
+OK   HTTP 200
+OK   context.echo == smoke
+OK   context.nameLength == 5 (jq length)
+OK   context.chainId starts with chn-
+OK   fact.type == io.stintflow.smoke.done.v1
+OK   fact.data.echo == smoke
+OK   fact.data.nameLength == 5
+OK   fact.chainid == context.chainId
+== app log (failures)
+
+=== 2. Control: the same build with stint-core/src/main/resources/META-INF/native-image deleted (throwaway worktree) ===
+== app log (WARN/ERROR)
+== image stint-210/aws-smoke:without-metadata from C:/Users/Kayan/AppData/Local/Temp/claude/C--dev-CDO/e90f2ec3-017a-4a8b-8775-71f82be1f6a1/scratchpad/stint-210-neg/examples/stint-example-aws-smoke/target/stint-example-aws-smoke-0.1.0-SNAPSHOT-runner
+sha256:f8fb2a23a81a414307052a58747d8800c6cfd23639694d1de10196f2297b746f
+== floci on network stint-210 (host port 4567)
+== native smoke app
+{"timestamp":"2026-10-11T23:54:26.044079522Z","sequence":391,"loggerClassName":"org.jboss.logging.Logger","loggerName":"io.quarkus","level":"INFO","message":"stint-aws-smoke 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.067s. Listening on: http://0.0.0.0:8080","threadName":"main","threadId":3,"mdc":{},"ndc":"","hostName":"376215241e67","processName":"/work/application","processId":1}
+== POST /smoke {"name":"smoke"}
+500 - Internal Server Error
+---------------------------
+Details:
+	Error id 2d6ddd2a-fd67-40ea-aa85-1ab538eab1ca-1
+Stack:
+HTTP 500
+== fact on smoke-facts (long poll)
+None
+== schedules in group stint-schedules
+stint-5cf5eef489da322b0a68dc29ac9d333cd61b61a8
+== checks (the AwsSmokeIT assertions)
+== app log (WARN/ERROR)
+ERROR QuarkusErrorHandler HTTP Request to /smoke failed, error id: 2d6ddd2a-fd67-40ea-aa85-1ab538eab1ca-1
+    io.stintflow.core.expr.ExpressionEvaluationException : Failed to evaluate jq expression: {"name": (.name), "nameLength": (.name | length)}
+    net.thisptr.jackson.jq.exception.JsonQueryException : Function length/0 does not exist
+  (the check script stops on the 500 body: no context to check)
+Result: without the metadata the native smoke fails on the first jq builtin ("Function length/0 does not exist"),
+with it all eight checks pass. The smoke now covers what SDD 2.7's version did not.
+
+=== CA1 control (JqNativeMetadataTest with TypeFunction removed from reflect-config.json, then restored) ===
+[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.237 s <<< FAILURE! -- in io.stintflow.core.expr.JqNativeMetadataTest
+    "net.thisptr.jackson.jq.internal.functions.TypeFunction",
+but could not find the following elements:
+  ["net.thisptr.jackson.jq.internal.functions.TypeFunction"]
+    "net.thisptr.jackson.jq.internal.functions.TypeFunction",
+but could not find the following elements:
