@@ -31,6 +31,25 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-aws</artifactId>
         </dependency>
+        <!-- SDD 3a.3: LLM workers end to end (fake model only), and their DynamoDB conversation store on floci -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-langchain4j</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-aws-conversations</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-otel</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- reuse the build-report workflow + handlers -->
         <dependency>
             <groupId>io.github.stintflow</groupId>
