@@ -67,7 +67,7 @@ java -Dstint.example.litjev.base-uri=http://127.0.0.1:8000 \
      triage docs/manual/local-decision/meetings | grep '^TRIAGE'
 ```
 
-**Um `noul` precisa das duas descrições.** No `2cd915a`, a leitura por conteúdo recusa com 422 um `noul` sem `criteria` ou só com `true`, com a mensagem "sequence item 0: expected str instance, NoneType found". Por isso o `meeting-triage` declara as opções `true` e `false` com descrição.
+**Um `noul` precisa das duas descrições.** No `2cd915a`, a leitura por conteúdo recusa com 422 um `noul` sem `criteria` ou só com `true`, com a mensagem "sequence item 0: expected str instance, NoneType found". Por isso o adapter, no perfil local, manda `{"true": "Yes", "false": "No"}` quando a decisão booleana não declara opções. O `meeting-triage` declara as suas, com descrições mais específicas.
 
 O modo `triage` roda o workflow `meeting-triage` (as duas decisões do exemplo) para cada reunião, com as duas rotas no adapter Jev em perfil local (`server(LITJEV)`). O adapter recusa um `base-uri` que não seja de loopback.
 

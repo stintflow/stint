@@ -384,6 +384,8 @@ stint.decision.adapters.litjev.calibration.temperature=1.5   # optional temperat
   the hosted Jev's default). A boolean is always `max(p, 1 − p)`. LitJev is not calibrated: tune its threshold, or a
   temperature, on its own data.
 - **No input**: `null`, blank text, `{}` or `[]` is a `validation` error before any call, for both servers.
+- **Booleans**: without declared options, the local profile asks a plain `Yes`/`No` (LitJev needs both descriptions);
+  declared `true`/`false` options send their own descriptions.
 - **Provenance**: `provider` `litjev`, the checkpoint the server reports as `model`, and a version like
   `jev-adapter/1;server=litjev@2cd915a;readout=content`.
 - **Manual run**: [`docs/manual/local-decision.md`](docs/manual/local-decision.md) runs the example's `triage` mode
