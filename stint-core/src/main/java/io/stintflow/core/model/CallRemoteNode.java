@@ -15,6 +15,7 @@ import io.stintflow.core.expr.Expr;
  * @param withInput  SDD 2.9, RF4: {@code with.input}, the call's argument, evaluated over the task's input after
  *                   {@code input.from} (DSL 1.0: input transformation first, then the call's {@code with}). It is
  *                   what the worker receives; {@code null} = the task's (transformed) input as is.
+ * @param outputContract SDD 3a.1, RF4: what a successful output must meet before it is applied, or {@code null}
  */
 public record CallRemoteNode(
         String name,
@@ -23,7 +24,14 @@ public record CallRemoteNode(
         FlowDirective then,
         String routingKey,
         Duration timeout,
-        Expr withInput) implements TaskNode {
+        Expr withInput,
+        OutputContract outputContract) implements TaskNode {
+
+    /** Without an output contract (every call but a decision's, SDD 3a.1). */
+    public CallRemoteNode(String name, String pointer, DataFlow dataFlow, FlowDirective then, String routingKey,
+            Duration timeout, Expr withInput) {
+        this(name, pointer, dataFlow, then, routingKey, timeout, withInput, null);
+    }
 
     /** Without {@code with.input} (built in code, or a definition that declares none). */
     public CallRemoteNode(String name, String pointer, DataFlow dataFlow, FlowDirective then, String routingKey,
