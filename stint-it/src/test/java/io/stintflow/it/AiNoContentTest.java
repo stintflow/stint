@@ -3,6 +3,7 @@ package io.stintflow.it;
 import static io.stintflow.it.AiFixture.input;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Handler;
@@ -109,7 +110,7 @@ class AiNoContentTest {
             StringBuilder line = new StringBuilder(record.getLevel() + " " + record.getLoggerName() + " ");
             line.append(record instanceof ExtLogRecord ext ? ext.getFormattedMessage() : record.getMessage());
             if (record.getParameters() != null) {
-                line.append(" params=").append(List.of(record.getParameters()));
+                line.append(" params=").append(Arrays.asList(record.getParameters()));   // may hold nulls
             }
             if (record instanceof ExtLogRecord ext) {
                 line.append(" mdc=").append(ext.getMdcCopy());

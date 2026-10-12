@@ -29,10 +29,12 @@ class ArchitectureTest {
         // SDD 3a.1, RF9: the packages the AI-free rule now also covers are imported too.
         assertThat(classes.containPackage("io.stintflow.wire.decision")).isTrue();
         assertThat(classes.containPackage("io.stintflow.dsl")).isTrue();
-        // SDD 3a.3, CA3: every package the LLM rules below analyze or name is imported, each with classes.
+        // SDD 3a.3, CA3 and SDD 3a.2, CA10: every package the LLM and decision rules below analyze or name is imported,
+        // each with classes.
         for (String pkg : new String[] {"io.stintflow.spi", "io.stintflow.wire", "io.stintflow.core",
                 "io.stintflow.dsl", "io.stintflow.worker", "io.stintflow.worker.langchain4j",
-                "io.stintflow.worker.langchain4j.memory", "io.stintflow.aws.conversations"}) {
+                "io.stintflow.worker.langchain4j.memory", "io.stintflow.aws.conversations",
+                "io.stintflow.worker.decision", "io.stintflow.worker.decision.jev"}) {
             assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))
                     .as("classes imported from %s", pkg).isNotEmpty();
         }
@@ -81,6 +83,23 @@ class ArchitectureTest {
             .and().resideOutsideOfPackage("io.stintflow.worker.langchain4j")
             .and().resideOutsideOfPackage("io.stintflow.example.ai..")
             .should().dependOnClassesThat().resideInAnyPackage("dev.langchain4j..", "io.quarkiverse.langchain4j..");
+
+    /**
+     * SDD 3a.2, CA10: the decision adapters are worker-side. Nothing of the engine side — and not the plain worker SDK —
+     * depends on them; {@code io.stintflow.worker} is matched as a single package, since the adapters live under it.
+     */
+    @ArchTest
+    static final ArchRule engine_side_and_worker_sdk_do_not_depend_on_decision_adapters = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.dsl..", "io.stintflow.worker")
+            .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.worker.decision..");
+
+    /** SDD 3a.2, 4.1: the decision module and the Jev adapter carry no AI library and no cloud SDK. */
+    @ArchTest
+    static final ArchRule decision_adapters_have_no_ai_libs_or_cloud_sdks = noClasses()
+            .that().resideInAnyPackage("io.stintflow.worker.decision..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "dev.langchain4j..", "io.quarkiverse.langchain4j..", "software.amazon..", "com.amazonaws..");
 
     /**
      * SDD 1.5, RF1/RF2: reactivated once {@code Json}, {@code CeWire}, {@code DefaultCloudEventCodec}

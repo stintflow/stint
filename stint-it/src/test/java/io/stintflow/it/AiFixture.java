@@ -14,6 +14,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
 
@@ -77,6 +78,7 @@ final class AiFixture {
     final InMemoryTimerService timers = new InMemoryTimerService(now::get);
     final BlockingQueue<TimerRequest> armed = new LinkedBlockingQueue<>();
     final InMemoryConversationStore conversations = new InMemoryConversationStore(now::get);
+    final InMemoryStateStore state = new InMemoryStateStore();
     final WorkflowDefinition def;
     final WorkflowEngine engine;
     final LangChain4jWorker worker;
@@ -87,6 +89,12 @@ final class AiFixture {
 
     AiFixture(String tasks, ChatModel model, UnaryOperator<LangChain4jWorker.Builder> options,
             ExecutionTracer tracer) throws Exception {
+        this(tasks, model, options, tracer, registry -> { });
+    }
+
+    /** SDD 3a.2: {@code more} registers further handlers — the decision routes — next to the LLM tasks. */
+    AiFixture(String tasks, ChatModel model, UnaryOperator<LangChain4jWorker.Builder> options,
+            ExecutionTracer tracer, Consumer<TaskHandlerRegistry> more) throws Exception {
         String yaml = """
                 document:
                   dsl: '1.0.0'
@@ -105,6 +113,7 @@ final class AiFixture {
                 .register("summarize", worker.handler(Summarizer.class,
                         (ai, t) -> ai.summarize(t.input().path("text").asText())))
                 .register("ask", worker.handler(Chat.class, (ai, t) -> ai.reply(t.input().path("question").asText())));
+        more.accept(handlers);
         InMemoryTaskTransport transport = new InMemoryTaskTransport();
         transport.connectWorker(new WorkerRuntime(handlers, blobs, tracer)::handle);
         TimerService recording = new TimerService() {
@@ -129,8 +138,13 @@ final class AiFixture {
                 return timers.maxDelay();
             }
         };
-        engine = new WorkflowEngine(registry, transport, new InMemoryStateStore(), recording, blobs,
+        engine = new WorkflowEngine(registry, transport, state, recording, blobs,
                 new TreeInterpreter(new JqExpressionEvaluator()), now::get, null, null, tracer);
+    }
+
+    /** The decision record of the task at {@code pointer} (SDD 3a.1). */
+    JsonNode decision(String id, String pointer) throws Exception {
+        return state.load(id).toCompletableFuture().get(10, TimeUnit.SECONDS).orElseThrow().decisions().get(pointer);
     }
 
     String start(JsonNode input) {
