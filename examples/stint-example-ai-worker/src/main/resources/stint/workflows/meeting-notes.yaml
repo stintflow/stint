@@ -1,0 +1,24 @@
+# SDD 3a.3, CA4: two LLM steps of one instance. The second step gets no transcript: it reads the meeting from the
+# instance's conversation memory, which the first step committed.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: meeting-notes
+  version: '1.0.0'
+do:
+  - summarize:
+      call: remote
+      with:
+        task: summarize-meeting
+        input:
+          transcript: ${ .transcript }
+      export:
+        as: '${ {summary: .} }'
+  - extract:
+      call: remote
+      with:
+        task: extract-actions
+        input:
+          ask: action-items
+      export:
+        as: '${ $context + {actions: .} }'
