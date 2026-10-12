@@ -24,6 +24,9 @@ class ArchitectureTest {
     @ArchTest
     static void classes_are_actually_imported(JavaClasses classes) {
         assertThat(classes.size()).isGreaterThan(0);
+        // SDD 3a.1, RF9: the packages the AI-free rule now also covers are imported too.
+        assertThat(classes.containPackage("io.stintflow.wire.decision")).isTrue();
+        assertThat(classes.containPackage("io.stintflow.dsl")).isTrue();
     }
 
     @ArchTest
@@ -36,9 +39,14 @@ class ArchitectureTest {
                     "com.google.cloud..",  // GCP
                     "io.fabric8..");       // Kubernetes
 
+    /**
+     * SDD 3a.1, RF9: the decision contract lives in {@code stint-wire} and {@code call: decision} compiles in
+     * {@code stint-dsl}; neither may pull an AI library in — providers live only in workers.
+     */
     @ArchTest
-    static final ArchRule spi_and_core_have_no_ai_libs = noClasses()
-            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.core..")
+    static final ArchRule spi_wire_core_and_dsl_have_no_ai_libs = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.dsl..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     "dev.langchain4j..",
                     "io.quarkiverse.langchain4j..");
