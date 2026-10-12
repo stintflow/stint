@@ -8,10 +8,14 @@ import java.nio.charset.StandardCharsets;
 import com.sun.net.httpserver.HttpServer;
 
 /**
- * An in-process stand-in for TypeSafe's Jev API ({@code POST /v1/systemone}) on 127.0.0.1, so the example runs the Jev
- * adapter without an account or a key (SDD 3a.2, 8d). It answers every yes/no question with {@code noul} 0.2.
+ * An in-process stand-in for a local LitJev server ({@code POST /v1/systemone}) on 127.0.0.1, so the example runs the
+ * Jev adapter's local profile without a model (SDD 3a.2b, 4.7). Like LitJev, it has no authentication — a request
+ * with an {@code Authorization} header gets a 400 — and answers in its format: every yes/no question with {@code noul}
+ * 0.2, the model as a checkpoint id, no output tokens.
  */
 final class FakeJevEndpoint implements AutoCloseable {
+
+    static final String MODEL = "synthetic/qwen-checkpoint";
 
     private final HttpServer server;
 
@@ -20,11 +24,13 @@ final class FakeJevEndpoint implements AutoCloseable {
         server.createContext("/v1/systemone", exchange -> {
             try (exchange) {
                 exchange.getRequestBody().readAllBytes();
-                byte[] body = """
-                        {"model":"jev-fake","answers":{"decision":{"type":"noul","noul":0.2}},
-                         "usage":{"input_tokens":40,"output_tokens":1}}""".getBytes(StandardCharsets.UTF_8);
+                boolean authenticated = exchange.getRequestHeaders().containsKey("Authorization");
+                byte[] body = (authenticated ? "{\"detail\":\"no authentication here\"}" : """
+                        {"model":"%s","answers":{"decision":{"type":"noul","noul":0.2}},
+                         "usage":{"input_tokens":40,"output_tokens":0}}""".formatted(MODEL))
+                        .getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, body.length);
+                exchange.sendResponseHeaders(authenticated ? 400 : 200, body.length);
                 exchange.getResponseBody().write(body);
             }
         });

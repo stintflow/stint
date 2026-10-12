@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "ata",
+    "urgent": false
+  },
+  "transcript": "Tema: retrospectiva da sprint\nPessoa A: o que funcionou foi o pareamento nas tarefas grandes.\nPessoa B: o que não funcionou foram as revisões de código atrasadas.\nPessoa C: combinamos limitar revisões abertas a duas por pessoa; eu acompanho isso.\nPessoa A: registramos os pontos e seguimos na próxima sprint."
+}

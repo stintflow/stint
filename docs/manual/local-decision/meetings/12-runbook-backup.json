@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "runbook",
+    "urgent": false
+  },
+  "transcript": "Tema: procedimento de restauração de backup\nPessoa A: vamos documentar os passos para restaurar o banco a partir do backup diário.\nPessoa B: primeiro, escolher o ponto de restauração; depois, criar a instância temporária.\nPessoa C: em seguida, validar as contagens de registros e trocar a conexão do serviço.\nPessoa A: por fim, remover a instância temporária e registrar o horário."
+}

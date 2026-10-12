@@ -1,0 +1,32 @@
+# SDD 3a.2b, CA6: the manual run against a real LitJev — only the two decisions of meeting-notes, both answered by the
+# Jev adapter's local profile. Run by `AiWorkerMain triage <folder>`; never by the build.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: meeting-triage
+  version: '1.0.0'
+do:
+  - keep:
+      set: '${ . }'
+      export:
+        as: '${ {transcript: .transcript} }'
+  - classify:
+      input: { from: '${ $context }' }
+      call: decision
+      with:
+        task: classify-meeting
+        kind: choice
+        input: '${ {transcript: .transcript} }'
+        options:
+          - ata: { description: "Minutes: what was discussed and who does what" }
+          - adr: { description: "A record of an architecture decision" }
+          - runbook: { description: "Operating steps" }
+      export: { as: '${ $context + {doc: .value} }' }
+  - urgent:
+      input: { from: '${ $context }' }
+      call: decision
+      with:
+        task: is-urgent
+        kind: boolean
+        input: '${ {transcript: .transcript} }'
+      export: { as: '${ $context + {urgent: .value} }' }

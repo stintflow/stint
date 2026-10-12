@@ -1,11 +1,16 @@
 package io.stintflow.example.ai;
 
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+
+import org.eclipse.microprofile.config.ConfigProvider;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -35,7 +40,13 @@ import io.stintflow.worker.langchain4j.LlmDecisionAdapter;
 import io.stintflow.worker.langchain4j.memory.InMemoryConversationStore;
 
 /**
- * SDD 3a.3, CA4 and SDD 3a.2, CA12: runs {@code meeting-notes} once on the local engine and checks it. The worker is an ordinary Stint
+ * SDD 3a.3, CA4, SDD 3a.2, CA12 and SDD 3a.2b, CA5: runs {@code meeting-notes} once on the local engine and checks it.
+ * Its urgency is decided by the Jev adapter's local profile, against an in-process fake of a LitJev server.
+ * <p>
+ * {@code triage <folder>} is the manual run of SDD 3a.2b (CA6) instead: see {@link MeetingTriage}. It needs
+ * {@code stint.example.litjev.base-uri} (a real LitJev, e.g. {@code http://127.0.0.1:8000}) and takes
+ * {@code stint.example.litjev.model}, {@code .server-version} and {@code .readout}.
+ * <p> The worker is an ordinary Stint
  * worker — a {@link WorkerRuntime} behind a {@link WorkerPool} — whose handlers come from {@link LangChain4jWorker},
  * over {@link FakeMeetingModel} and an in-memory conversation store. Prints {@code AI-WORKER OK} and exits 0 when the
  * second step found the meeting's action items through the memory the first step committed.
@@ -56,23 +67,33 @@ public class AiWorkerMain implements QuarkusApplication {
 
     @Override
     public int run(String... args) throws Exception {
+        if (args.length > 0 && args[0].equals("triage")) {
+            if (args.length != 2) {
+                System.out.println("usage: triage <folder of meeting files>");
+                return 2;
+            }
+            URI baseUri = URI.create(setting("base-uri").orElseThrow(() -> new IllegalArgumentException(
+                    "The triage runs against a real LitJev: set stint.example.litjev.base-uri")));
+            return MeetingTriage.run(Path.of(args[1]), localJev(baseUri));
+        }
         BlobStore blobs = new FilesystemBlobStore(Files.createTempDirectory("stint-ai-worker"));
         LangChain4jWorker ai = LangChain4jWorker.builder()
                 .chatModel(new FakeMeetingModel())
                 .conversations(new InMemoryConversationStore(), blobs)
                 .build();
-        // SDD 3a.2: the two decisions — the meeting's document by the LLM adapter, its urgency by the Jev adapter
+        // SDD 3a.2: the two decisions — the meeting's document by the LLM adapter, its urgency by the Jev adapter's
+        // local profile (SDD 3a.2b) against an in-process fake of LitJev
         FakeJevEndpoint jev = new FakeJevEndpoint();
         DecisionHandlers decisions = DecisionHandlers.builder(DecisionConfig.fromProperties(Map.of(
                         "stint.decision.routes.classify-meeting.adapter", "llm",
                         "stint.decision.routes.classify-meeting.instructions",
                         "Which document should this meeting produce?",
-                        "stint.decision.routes.is-urgent.adapter", "jev",
+                        "stint.decision.routes.is-urgent.adapter", "litjev",
                         "stint.decision.routes.is-urgent.instructions", "Does this meeting need action today?",
                         "stint.decision.adapters.llm.threshold", "0.8")))
                 .adapter(LlmDecisionAdapter.builder().id("llm").chatModel(new FakeMeetingModel()).provider("fake")
                         .build())
-                .adapter(JevDecisionAdapter.builder().id("jev").baseUri(jev.baseUri()).apiKey(() -> "test").build())
+                .adapter(localJev(jev.baseUri()))
                 .build();
         TaskHandlerRegistry handlers = decisions.registerAll(new TaskHandlerRegistry())
                 .register("summarize-meeting", ai.handler(MeetingAssistant.class, (assistant, task) ->
@@ -104,16 +125,21 @@ public class AiWorkerMain implements QuarkusApplication {
                 def = new DslLoader().load(yaml, "meeting-notes.yaml", LoadOptions.STRICT);
             }
             registry.register(def);
-            WorkflowEngine engine = new WorkflowEngine(registry, transport, new InMemoryStateStore(),
-                    new InMemoryTimerService(), blobs);
+            InMemoryStateStore states = new InMemoryStateStore();
+            WorkflowEngine engine = new WorkflowEngine(registry, transport, states, new InMemoryTimerService(), blobs);
 
             String id = engine.start(def.ref(), Json.obj().put("transcript", TRANSCRIPT));
             JsonNode context = engine.awaitCompletion(id, Duration.ofSeconds(30)).toCompletableFuture()
                     .get(60, TimeUnit.SECONDS);
             System.out.println("AI-WORKER result=" + context);
+            JsonNode urgent = states.load(id).toCompletableFuture().get(10, TimeUnit.SECONDS).orElseThrow()
+                    .decisions().path("/do/2/urgent");
+            System.out.println("AI-WORKER urgent decision=" + urgent);
 
             boolean ok = "ata".equals(context.path("doc").asText())
                     && context.path("urgent").isBoolean() && !context.path("urgent").asBoolean()
+                    && "litjev".equals(urgent.path("provenance").path("provider").asText())
+                    && FakeJevEndpoint.MODEL.equals(urgent.path("provenance").path("model").asText())
                     && "quarterly planning".equals(context.path("summary").path("topic").asText())
                     && context.path("summary").path("speakers").asInt() == 2
                     && context.path("actions").path("items").size() == 2
@@ -122,5 +148,19 @@ public class AiWorkerMain implements QuarkusApplication {
             System.out.println(ok ? "AI-WORKER OK" : "AI-WORKER FAILED");
             return ok ? 0 : 1;
         }
+    }
+
+    /** SDD 3a.2b: the Jev adapter's local profile — no key; refused by the adapter if {@code baseUri} isn't loopback. */
+    private static JevDecisionAdapter localJev(URI baseUri) {
+        JevDecisionAdapter.Builder builder = JevDecisionAdapter.builder().server(JevDecisionAdapter.Server.LITJEV)
+                .baseUri(baseUri);
+        setting("model").ifPresent(builder::model);
+        setting("server-version").ifPresent(builder::serverVersion);
+        setting("readout").ifPresent(builder::readout);
+        return builder.build();
+    }
+
+    private static Optional<String> setting(String name) {
+        return ConfigProvider.getConfig().getOptionalValue("stint.example.litjev." + name, String.class);
     }
 }
