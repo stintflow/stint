@@ -321,6 +321,47 @@ a model provider. `call: decision` is a Stint extension, compiled to a `call: re
   a duplicate or late result never replaces it. Nothing of the decision's input goes to logs, spans or the record.
 - The expansion is logged at DEBUG by `DslLoader`; `DefinitionPrinter` prints any compiled definition as YAML.
 
+## LLM workers with `stint-worker-langchain4j` (SDD 3a.3)
+
+An LLM task is an ordinary worker task: the engine dispatches it, retries it and routes its errors like any other,
+and never sees a model. `stint-worker-langchain4j` builds the `TaskHandler` from a LangChain4j AI Service (plain
+LangChain4j, version from the platform's `quarkus-langchain4j-bom`: 1.11.7 on Quarkus 3.33.2):
+
+```java
+LangChain4jWorker ai = LangChain4jWorker.builder()
+        .chatModel(model)                       // the provider, built by the worker — with maxRetries(0)
+        .conversations(store, blobs)            // optional: the instance's conversation memory
+        .build();
+registry.register("summarize-meeting", ai.handler(MeetingAssistant.class,
+        (assistant, task) -> assistant.summarize(task.input().path("transcript").asText())));
+```
+
+- **Output**: a record or POJO becomes an object in the task's output; a `String`, a string. An answer that
+  doesn't fit the type, or fails `.validate(...)`, is a `validation` error (400) a `catch` can handle.
+- **Memory**: every task of an instance sees the instance's conversation (`MemoryScope.TASK` gives a task its own,
+  `NONE` none). Each execution commits its messages once, when it succeeds, keyed by its correlationId: a
+  redelivered message gets the committed output back without calling the model, and a retry sees only what
+  earlier executions committed. The port is `ConversationStore`: `InMemoryConversationStore` for tests, and
+  `DynamoDbConversationStore` (module `connectors/stint-aws-conversations`; table with `expiresAt` as TTL, 30 days by
+  default). Exchanges over 64 KB go to the `BlobStore` by pointer. `ai.forget(instanceId)` deletes everything an
+  instance remembers.
+- **Provider errors** become standard errors, with a fixed `detail` that never quotes the provider's message:
+  429 is `communication`/429 (with `retryAfter` from `.retryAfter(...)` or `.rateLimitRetryAfter(...)` — LangChain4j
+  doesn't expose the provider's header), timeouts are `timeout`/408, 5xx and connection failures are
+  `communication`, bad credentials are `authentication`/401, a bad request is `configuration`. Retrying is the
+  workflow's `catch.retry`: catch `communication` and `timeout`, not `authentication`.
+- **No content in telemetry**: each execution logs one `LLM usage` line (model, tokens, calls, tool calls, latency)
+  with the task's ids, and each model call is a `stint.llm` span with ids only. Prompts and answers are never logged
+  or traced; a `ContentPolicy` (SDD 3a.5) is the only way to hand them to a sink. Keep the providers'
+  `logRequests`/`logResponses` off.
+- **Tools**: a tool that may take long (over `toolCallLimit`, 5 s by default, logged as a WARN), needs approval or has
+  external effects with their own retries is a task of the workflow, not a tool call.
+- **Native**: annotate each AI Service interface with `@RegisterForProxy` and `@RegisterForReflection(methods = true)`
+  and its output records with `@RegisterForReflection`; the module registers LangChain4j's message types itself.
+  `examples/stint-example-ai-worker` runs two steps sharing the memory, as a jar and as a native image.
+- **Concurrency**: `WorkerPool` (in `stint-worker-sdk`) runs up to N deliveries at once on virtual threads and
+  acknowledges each one only after its result was shipped, so a slow task doesn't hold the others.
+
 ## Honest MVP cuts (deliberate, documented)
 
 1. **DSL Fase 2 constructs**: `fork`, `wait`, `for` and call types other than the `remote` Stint
