@@ -1,5 +1,7 @@
 # SDD 3a.2b, CA6: the manual run against a real LitJev — only the two decisions of meeting-notes, both answered by the
 # Jev adapter's local profile. Run by `AiWorkerMain triage <folder>`; never by the build.
+# The boolean declares its two options with descriptions: LitJev 2cd915a's content readout refuses a noul without both
+# (422 "expected str instance, NoneType found"), see SDD 3a.2b, section 9.
 document:
   dsl: '1.0.0'
   namespace: examples
@@ -29,4 +31,7 @@ do:
         task: is-urgent
         kind: boolean
         input: '${ {transcript: .transcript} }'
+        options:
+          - true: { description: "Yes: something in it must be done today" }
+          - false: { description: "No: it can wait" }
       export: { as: '${ $context + {urgent: .value} }' }

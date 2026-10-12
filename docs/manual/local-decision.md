@@ -46,11 +46,12 @@ O LitJev sobe só em `127.0.0.1` e não tem autenticação. **Não o exponha na 
 Sem memória de GPU suficiente, troque para o plano B (`Qwen/Qwen3.5-0.8B` e a revisão dele). Sem GPU, use `--device-map cpu --dtype float32`, que é bem mais lento.
 
 ## 3. Aquecer
-O primeiro pedido baixa e carrega o modelo, e pode levar minutos. Aqueça antes de medir:
+O primeiro pedido baixa e carrega o modelo; na máquina do Kayan, cerca de 20 min, quase tudo download. Aqueça antes de medir, **dentro do WSL**: no Git Bash do Windows, os acentos de um `-d` chegam em outra codificação e o LitJev responde 400.
 
 ```bash
-curl --fail-with-body http://127.0.0.1:8000/v1/systemone -H 'Content-Type: application/json' \
-  -d '{"model":"litjev","state":"aquecimento","questions":{"q":{"type":"noul","instructions":"Isto é um teste?"}}}'
+curl --fail-with-body --max-time 3600 http://127.0.0.1:8000/v1/systemone -H 'Content-Type: application/json' \
+  -d '{"model":"litjev","state":"aquecimento","questions":{"q":{"type":"noul","instructions":"Isto é um teste?",
+       "criteria":{"true":"sim","false":"não"}}}}'
 curl http://127.0.0.1:8000/health          # {"status":"ok","model_loaded":true}
 ```
 
@@ -65,6 +66,8 @@ java -Dstint.example.litjev.base-uri=http://127.0.0.1:8000 \
      -jar examples/stint-example-ai-worker/target/quarkus-app/quarkus-run.jar \
      triage docs/manual/local-decision/meetings | grep '^TRIAGE'
 ```
+
+**Um `noul` precisa das duas descrições.** No `2cd915a`, a leitura por conteúdo recusa com 422 um `noul` sem `criteria` ou só com `true`, com a mensagem "sequence item 0: expected str instance, NoneType found". Por isso o `meeting-triage` declara as opções `true` e `false` com descrição.
 
 O modo `triage` roda o workflow `meeting-triage` (as duas decisões do exemplo) para cada reunião, com as duas rotas no adapter Jev em perfil local (`server(LITJEV)`). O adapter recusa um `base-uri` que não seja de loopback.
 
