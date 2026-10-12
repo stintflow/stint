@@ -111,7 +111,7 @@ public final class DecisionHandler implements TaskHandler {
             confidence = 0;
             uncertain = true;
         } else {
-            confidence = Math.clamp(calibration.calibrate(request.kind(), raw), 0.0, 1.0);
+            confidence = Math.clamp(calibration.calibrate(request.kind(), raw, decision.distribution()), 0.0, 1.0);
             uncertain = confidence < threshold || tie(decision.distribution());
         }
         String model = decision.model() != null ? decision.model() : descriptor.model();

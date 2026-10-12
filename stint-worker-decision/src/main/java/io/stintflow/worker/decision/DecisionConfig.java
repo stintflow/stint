@@ -26,6 +26,7 @@ import io.stintflow.wire.decision.DecisionKind;
  * stint.decision.adapters.llm.max-input-tokens=20000
  * stint.decision.adapters.llm.price.input-per-million=0.15
  * stint.decision.adapters.llm.price.output-per-million=0.60
+ * stint.decision.adapters.llm.calibration.temperature=1.5
  * </pre>
  */
 public final class DecisionConfig {
@@ -65,10 +66,13 @@ public final class DecisionConfig {
 
     private final Map<String, Route> routes;
     private final Map<String, AdapterSettings> adapters;
+    private final Map<String, Double> temperatures;
 
-    private DecisionConfig(Map<String, Route> routes, Map<String, AdapterSettings> adapters) {
+    private DecisionConfig(Map<String, Route> routes, Map<String, AdapterSettings> adapters,
+            Map<String, Double> temperatures) {
         this.routes = Map.copyOf(routes);
         this.adapters = Map.copyOf(adapters);
+        this.temperatures = Map.copyOf(temperatures);
     }
 
     public Map<String, Route> routes() {
@@ -78,6 +82,14 @@ public final class DecisionConfig {
     /** Settings of {@code adapterId}: the configured ones, or the defaults. */
     public AdapterSettings adapter(String adapterId) {
         return adapters.getOrDefault(adapterId, AdapterSettings.DEFAULTS);
+    }
+
+    /**
+     * The temperature of {@code adapterId}'s {@link TemperatureScaling} ({@code calibration.temperature}, SDD 3a.2b,
+     * 4.5), or empty.
+     */
+    public Optional<Double> temperature(String adapterId) {
+        return Optional.ofNullable(temperatures.get(adapterId));
     }
 
     /** Adapter ids the configuration has settings for. */
@@ -133,12 +145,20 @@ public final class DecisionConfig {
                 problems.add(PREFIX + "routes." + route + ".adapter: route '" + route + "' has instructions but no adapter"));
 
         Map<String, AdapterSettings> adapters = new HashMap<>();
-        adapterKeys.forEach((adapter, keys) -> adapters.put(adapter, settings(adapter, keys, problems)));
+        Map<String, Double> temperatures = new HashMap<>();
+        adapterKeys.forEach((adapter, keys) -> {
+            String temperature = keys.remove("calibration.temperature");
+            if (temperature != null) {
+                temperature(PREFIX + "adapters." + adapter + ".calibration.temperature", temperature, problems)
+                        .ifPresent(t -> temperatures.put(adapter, t));
+            }
+            adapters.put(adapter, settings(adapter, keys, problems));
+        });
 
         if (!problems.isEmpty()) {
             throw new IllegalArgumentException("Invalid decision configuration:\n  - " + String.join("\n  - ", problems));
         }
-        return new DecisionConfig(routes, adapters);
+        return new DecisionConfig(routes, adapters, temperatures);
     }
 
     private static AdapterSettings settings(String adapter, Map<String, String> keys, List<String> problems) {
@@ -192,6 +212,19 @@ public final class DecisionConfig {
             // reported below
         }
         problems.add(key + ": a threshold is a number in [0, 1], got '" + value + "'");
+        return Optional.empty();
+    }
+
+    private static Optional<Double> temperature(String key, String value, List<String> problems) {
+        try {
+            double t = Double.parseDouble(value);
+            if (t > 0 && Double.isFinite(t)) {
+                return Optional.of(t);
+            }
+        } catch (NumberFormatException e) {
+            // reported below
+        }
+        problems.add(key + ": a temperature is a finite number above 0, got '" + value + "'");
         return Optional.empty();
     }
 
