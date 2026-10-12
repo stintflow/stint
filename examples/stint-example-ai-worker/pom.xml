@@ -35,6 +35,10 @@
             <artifactId>stint-worker-langchain4j</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-decision-jev</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>
         </dependency>

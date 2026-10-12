@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -23,6 +24,7 @@ import io.stintflow.wire.Json;
  * A deterministic stand-in for an LLM provider — no network, synthetic data only. It answers by rules over the
  * request's messages:
  * <ul>
+ *   <li>a decision (SDD 3a.2): {@code ata} when the transcript has action items, confidence 0.9;</li>
  *   <li>a request to summarize: the transcript's {@code Topic:} line and the number of distinct {@code Speaker X:};</li>
  *   <li>a request for action items: every transcript line with {@code " will "} found in <em>any</em> user message of
  *       the request — the transcript only reaches it through the conversation memory — and how many messages it saw.</li>
@@ -36,7 +38,12 @@ public final class FakeMeetingModel implements ChatModel {
     public ChatResponse doChat(ChatRequest request) {
         String last = lastUserText(request.messages());
         ObjectNode answer = Json.obj();
-        if (last.startsWith("Summarize")) {
+        if (request.messages().getFirst() instanceof SystemMessage system
+                && system.text().startsWith("You make one decision")) {
+            // SDD 3a.2: a decision of the LLM adapter — action items ("will") make minutes
+            answer.put("value", last.contains(" will ") ? "ata" : "adr");
+            answer.put("confidence", 0.9);
+        } else if (last.startsWith("Summarize")) {
             Set<String> speakers = new LinkedHashSet<>();
             for (String line : last.split("\n")) {
                 if (line.startsWith("Topic:")) {
