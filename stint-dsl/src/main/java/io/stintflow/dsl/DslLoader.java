@@ -42,6 +42,9 @@ import io.stintflow.spi.CronExpression;
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.WorkflowRef;
 import io.stintflow.spi.wire.StintEvents;
+import io.stintflow.wire.decision.DecisionKind;
+import io.stintflow.wire.decision.DecisionOption;
+import io.stintflow.wire.decision.DecisionRequest;
 
 /**
  * Compiles a CNCF Serverless Workflow DSL 1.0 YAML/JSON document into a {@link WorkflowDefinition}
@@ -144,6 +147,9 @@ public final class DslLoader {
                 "emit", Set.of("emit"),
                 "listen", Set.of("listen", "timeout"));
         private static final Set<String> CALL_REMOTE_WITH_KEYS = Set.of("task", "input");
+        /** SDD 3a.1: {@code call: decision} (Stint extension) — its own task key, {@code with} keys and option keys. */
+        private static final Set<String> DECISION_WITH_KEYS = Set.of("task", "kind", "input", "options");
+        private static final Set<String> DECISION_OPTION_KEYS = Set.of("description", "then");
         private static final Set<String> TIMEOUT_KEYS = Set.of("after");
         private static final Set<String> DURATION_KEYS = Set.of("days", "hours", "minutes", "seconds", "milliseconds");
         private static final Set<String> INPUT_KEYS = Set.of("from");
@@ -311,12 +317,183 @@ public final class DslLoader {
                 String taskName = names.next();
                 JsonNode body = entry.get(taskName);
                 String pointer = parentPointer + "/do/" + i + "/" + taskName;
-                TaskNode compiled = compileTask(taskName, body, pointer);
-                if (compiled != null) {
-                    tasks.add(compiled);
+                if (isDecision(body)) {
+                    checkTaskKeys(body, pointer);
+                    tasks.addAll(compileDecision(taskName, body, pointer, null));
+                } else if (isDecisionTry(body)) {
+                    tasks.addAll(compileTryDecision(taskName, body, pointer));
+                } else {
+                    TaskNode compiled = compileTask(taskName, body, pointer);
+                    if (compiled != null) {
+                        tasks.add(compiled);
+                    }
                 }
             }
+            checkUniqueNames(tasks);
             return tasks;
+        }
+
+        private static boolean isDecision(JsonNode body) {
+            return body != null && body.isObject() && "decision".equals(body.path("call").asText(null));
+        }
+
+        private static boolean isDecisionTry(JsonNode body) {
+            JsonNode tryList = body == null ? null : body.get("try");
+            if (tryList == null || !tryList.isArray() || tryList.size() != 1) {
+                return false;
+            }
+            Iterator<String> names = tryList.get(0).fieldNames();
+            return names.hasNext() && isDecision(tryList.get(0).get(names.next()));
+        }
+
+        /** SDD 3a.1, 5.2: the generated {@code <task>/route} must not shadow a task the author named the same. */
+        private void checkUniqueNames(List<TaskNode> tasks) {
+            Set<String> seen = new java.util.HashSet<>();
+            for (TaskNode task : tasks) {
+                if (task.name().endsWith(DecisionExpansion.ROUTE_SUFFIX) && !seen.add(task.name())) {
+                    hardError(task.pointer(), "task name '" + task.name() + "' is used twice in the same flow "
+                            + "(a 'call: decision' generates a switch with this name, SDD 3a.1)", null);
+                } else {
+                    seen.add(task.name());
+                }
+            }
+        }
+
+        /**
+         * SDD 3a.1, RF2/RF3: {@code call: decision} (Stint extension, like {@code call: remote} — DSL 1.0, Call:
+         * {@code call} is "The name of the function to call", {@code with} "A name/value mapping of the parameters to
+         * call the function with"). Compiles to two siblings, so {@code then}, {@code goTo} and {@code continue} work
+         * as anywhere in the flow:
+         * <ol>
+         *   <li>a {@code call: remote} to {@code with.task}, whose argument is the decision request (kind, options and
+         *       {@code with.input}), whose output is checked against the decision contract, and which carries the
+         *       author's {@code input.from};</li>
+         *   <li>a {@code switch} named {@code <task>/route} over the decision's result: {@code onUncertain} first, then
+         *       one case per option, then — for a score, or a boolean without options — a default. It carries the
+         *       author's {@code output.as} and {@code export.as}.</li>
+         * </ol>
+         *
+         * @param defaultThen where a case without its own {@code then} goes when the decision is a try's body (the
+         *                    try's {@code then}); {@code null} = the task's own {@code then}
+         */
+        private List<TaskNode> compileDecision(String name, JsonNode body, String pointer, FlowDirective defaultThen) {
+            JsonNode with = body.get("with");
+            if (with == null || !with.isObject()) {
+                hardError(pointer + "/with", "'call: decision' requires 'with' (task, kind, options, input)", null);
+                return List.of();
+            }
+            checkKeys(with, pointer + "/with", DECISION_WITH_KEYS);
+            boolean valid = true;
+            if (!with.hasNonNull("task") || with.get("task").asText().isBlank()) {
+                hardError(pointer + "/with/task", "'call: decision' requires 'with.task' (the routing key)", null);
+                valid = false;
+            }
+            DecisionKind kind = DecisionKind.fromWireName(with.path("kind").asText(null)).orElse(null);
+            if (kind == null) {
+                hardError(pointer + "/with/kind", "'call: decision' requires 'with.kind': choice, score or boolean",
+                        null);
+                valid = false;
+            }
+            List<DecisionOption> options = new ArrayList<>();
+            List<FlowDirective> optionThens = new ArrayList<>();
+            JsonNode optionsNode = with.get("options");
+            if (optionsNode != null && !optionsNode.isArray()) {
+                hardError(pointer + "/with/options", "'with.options' must be a list of single-key maps", null);
+                valid = false;
+            } else if (optionsNode != null) {
+                for (int i = 0; i < optionsNode.size(); i++) {
+                    JsonNode entry = optionsNode.get(i);
+                    String optionPointer = pointer + "/with/options/" + i;
+                    if (!entry.isObject() || entry.size() != 1) {
+                        hardError(optionPointer, "an option is a single-key map: '<name>: {description, then}'", null);
+                        valid = false;
+                        continue;
+                    }
+                    String optionName = entry.fieldNames().next();
+                    JsonNode optionBody = entry.get(optionName);
+                    String bodyPointer = optionPointer + "/" + optionName;
+                    if (optionBody != null && !optionBody.isNull() && !optionBody.isObject()) {
+                        hardError(bodyPointer, "an option's body is a map (description, then)", null);
+                        valid = false;
+                        continue;
+                    }
+                    checkKeys(optionBody, bodyPointer, DECISION_OPTION_KEYS);
+                    JsonNode description = optionBody == null ? null : optionBody.get("description");
+                    if (description != null && !description.isTextual()) {
+                        hardError(bodyPointer + "/description", "an option's description is text", null);
+                        valid = false;
+                    }
+                    options.add(new DecisionOption(optionName, description == null ? null : description.asText()));
+                    optionThens.add(optionBody != null && optionBody.has("then") ? compileThen(optionBody) : null);
+                }
+            }
+            if (kind != null) {
+                for (String problem : DecisionRequest.optionProblems(kind, options)) {
+                    hardError(pointer + "/with/options", problem, null);
+                    valid = false;
+                }
+            }
+            JsonNode onUncertain = body.get(DecisionExpansion.ON_UNCERTAIN);
+            if (onUncertain != null && !onUncertain.isTextual()) {
+                hardError(pointer + "/" + DecisionExpansion.ON_UNCERTAIN,
+                        "'onUncertain' is a task name or a flow directive, like 'then'", null);
+                valid = false;
+            }
+            if (!valid) {
+                return List.of();
+            }
+            DecisionRequest shape = DecisionRequest.shape(kind, options);
+            String input = with.has("input") ? TemplateCompiler.compileTemplate(with.get("input")) : ".";
+            Expr request = compileAndValidate(DecisionExpansion.requestTemplate(shape, input), pointer + "/with");
+            DataFlow authored = compileDataFlow(body, pointer, null, null);
+            FlowDirective otherwise = defaultThen != null ? defaultThen : compileThen(body);
+            List<TaskNode> expanded = DecisionExpansion.expand(name, pointer, shape, with.path("task").asText(),
+                    compileTimeout(body, pointer), request, authored, otherwise,
+                    onUncertain == null ? null : directive(onUncertain.asText()), optionThens);
+            LOG.log(Level.DEBUG, () -> sourceName + " " + pointer + ": 'call: decision' expands to\n"
+                    + DefinitionPrinter.print(expanded));
+            return expanded;
+        }
+
+        /**
+         * SDD 3a.1, 5.2: a {@code try} whose body is a {@code call: decision}. The try wraps the remote call only (so
+         * its timeout, retry and catch are those of SDD 1.3); the decision's switch becomes the try's next sibling, and
+         * the try's own {@code then} becomes the switch's default.
+         */
+        private List<TaskNode> compileTryDecision(String name, JsonNode body, String pointer) {
+            checkTaskKeys(body, pointer);
+            JsonNode bodyEntry = body.get("try").get(0);
+            String bodyName = bodyEntry.fieldNames().next();
+            JsonNode decision = bodyEntry.get(bodyName);
+            String bodyPointer = pointer + "/do/0/" + bodyName;
+            checkTaskKeys(decision, bodyPointer);
+            if (decision.has("then")) {
+                unsupported(bodyPointer + "/then", "'then' of a try's body is not used: the try's own 'then' "
+                        + "applies (SDD 2.9)");
+            }
+            List<TaskNode> expanded = compileDecision(bodyName, decision, bodyPointer, compileThen(body));
+            JsonNode catchNode = body.get("catch");
+            if (catchNode == null) {
+                hardError(pointer + "/catch", "'try' requires a 'catch' clause", null);
+                return List.of();
+            }
+            TryNode.Catch catchClause = compileCatch(catchNode, pointer + "/catch");
+            if (expanded.size() != 2) {
+                return List.of();
+            }
+            TryNode tryNode = new TryNode(name, pointer, compileDataFlow(body, pointer, null, null),
+                    FlowDirective.CONTINUE, expanded.get(0), catchClause);
+            return List.of(tryNode, expanded.get(1));
+        }
+
+        /** A flow directive written as text: {@code then}'s syntax, also used by {@code onUncertain} (SDD 3a.1). */
+        private static FlowDirective directive(String value) {
+            return switch (value) {
+                case "continue" -> FlowDirective.CONTINUE;
+                case "end" -> FlowDirective.END;
+                case "exit" -> FlowDirective.EXIT;
+                default -> FlowDirective.goTo(value);
+            };
         }
 
         private TaskNode compileTask(String name, JsonNode body, String pointer) {
@@ -767,13 +944,7 @@ public final class DslLoader {
             if (then == null || then.isNull()) {
                 return FlowDirective.CONTINUE;
             }
-            String v = then.asText();
-            return switch (v) {
-                case "continue" -> FlowDirective.CONTINUE;
-                case "end" -> FlowDirective.END;
-                case "exit" -> FlowDirective.EXIT;
-                default -> FlowDirective.goTo(v);
-            };
+            return directive(then.asText());
         }
 
         private Duration compileTimeout(JsonNode body, String pointer) {
@@ -862,6 +1033,9 @@ public final class DslLoader {
             }
             Set<String> allowed = new java.util.HashSet<>(COMMON_TASK_KEYS);
             allowed.addAll(specific);
+            if (isDecision(body)) {
+                allowed.add(DecisionExpansion.ON_UNCERTAIN); // SDD 3a.1: a Stint extension key, only on 'call: decision'
+            }
             checkKeys(body, pointer, allowed);
         }
 
