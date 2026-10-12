@@ -52,6 +52,15 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-otel</artifactId>
         </dependency>
+        <!-- SDD 3a.3, CA3: the LLM worker module and its DynamoDB adapter, so the rules analyze them too. -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-langchain4j</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-aws-conversations</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>

@@ -39,15 +39,18 @@
         <module>stint-core</module>
         <module>stint-dsl</module>
         <module>stint-worker-sdk</module>
+        <module>stint-worker-langchain4j</module>
         <module>stint-otel</module>
         <module>connectors/stint-inmemory</module>
         <module>connectors/stint-aws</module>
+        <module>connectors/stint-aws-conversations</module>
         <module>bundles/stint-bundle-local</module>
         <module>bundles/stint-bundle-aws</module>
         <module>examples/stint-example-build-report</module>
         <module>examples/stint-example-send-report</module>
         <module>examples/stint-example-archive-report</module>
         <module>examples/stint-example-aws-smoke</module>
+        <module>examples/stint-example-ai-worker</module>
         <module>stint-it</module>
         <module>stint-architecture-tests</module>
     </modules>
@@ -68,6 +71,17 @@
             <dependency>
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>quarkus-amazon-services-bom</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- SDD 3a.3, ADR 3a.3-A: plain LangChain4j (dev.langchain4j:*), with the versions the Quarkus platform
+                 aligns (langchain4j 1.11.7 on 3.33.2), so a worker may also use a quarkus-langchain4j model provider
+                 without a version clash. Only stint-worker-langchain4j and the workers that use it depend on it. -->
+            <dependency>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>quarkus-langchain4j-bom</artifactId>
                 <version>${quarkus.platform.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
@@ -110,6 +124,11 @@
             </dependency>
             <dependency>
                 <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-worker-langchain4j</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
                 <artifactId>stint-otel</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -121,6 +140,11 @@
             <dependency>
                 <groupId>io.github.stintflow</groupId>
                 <artifactId>stint-aws</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-aws-conversations</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

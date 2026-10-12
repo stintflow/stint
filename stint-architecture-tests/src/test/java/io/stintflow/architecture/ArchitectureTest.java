@@ -3,6 +3,8 @@ package io.stintflow.architecture;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -27,6 +29,13 @@ class ArchitectureTest {
         // SDD 3a.1, RF9: the packages the AI-free rule now also covers are imported too.
         assertThat(classes.containPackage("io.stintflow.wire.decision")).isTrue();
         assertThat(classes.containPackage("io.stintflow.dsl")).isTrue();
+        // SDD 3a.3, CA3: every package the LLM rules below analyze or name is imported, each with classes.
+        for (String pkg : new String[] {"io.stintflow.spi", "io.stintflow.wire", "io.stintflow.core",
+                "io.stintflow.dsl", "io.stintflow.worker", "io.stintflow.worker.langchain4j",
+                "io.stintflow.worker.langchain4j.memory", "io.stintflow.aws.conversations"}) {
+            assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))
+                    .as("classes imported from %s", pkg).isNotEmpty();
+        }
     }
 
     @ArchTest
@@ -50,6 +59,28 @@ class ArchitectureTest {
             .should().dependOnClassesThat().resideInAnyPackage(
                     "dev.langchain4j..",
                     "io.quarkiverse.langchain4j..");
+
+    /**
+     * SDD 3a.3, CA3 (RF1): LangChain4j stays in the LLM worker module. Nothing of the engine side — and not the plain
+     * worker SDK either — depends on the module or on LangChain4j; {@code io.stintflow.worker} is matched as a single
+     * package, since the module lives under it.
+     */
+    @ArchTest
+    static final ArchRule engine_side_and_worker_sdk_do_not_depend_on_the_llm_module = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.dsl..", "io.stintflow.worker")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "io.stintflow.worker.langchain4j..",
+                    "dev.langchain4j..",
+                    "io.quarkiverse.langchain4j..");
+
+    /** SDD 3a.3, 8h: only the module's main package speaks LangChain4j — its memory port and the adapters don't. */
+    @ArchTest
+    static final ArchRule only_the_llm_module_uses_langchain4j = noClasses()
+            .that().resideInAnyPackage("io.stintflow..")
+            .and().resideOutsideOfPackage("io.stintflow.worker.langchain4j")
+            .and().resideOutsideOfPackage("io.stintflow.example.ai..")
+            .should().dependOnClassesThat().resideInAnyPackage("dev.langchain4j..", "io.quarkiverse.langchain4j..");
 
     /**
      * SDD 1.5, RF1/RF2: reactivated once {@code Json}, {@code CeWire}, {@code DefaultCloudEventCodec}
