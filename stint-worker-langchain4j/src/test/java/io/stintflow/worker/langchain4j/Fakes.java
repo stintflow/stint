@@ -60,7 +60,7 @@ final class Fakes {
     }
 
     /** A model that answers by a rule and remembers every request. Nothing goes over the network. */
-    static final class ScriptedModel implements ChatModel {
+    static class ScriptedModel implements ChatModel {
         final List<ChatRequest> requests = new CopyOnWriteArrayList<>();
         private final Function<ChatRequest, ChatResponse> rule;
 

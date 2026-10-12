@@ -25,6 +25,11 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-wire</artifactId>
         </dependency>
+        <!-- SDD 3a.2: LlmDecisionAdapter implements the decision adapter interface. -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-decision</artifactId>
+        </dependency>
         <!-- ADR 3a.3-A: plain LangChain4j, version from the platform's quarkus-langchain4j-bom. -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
