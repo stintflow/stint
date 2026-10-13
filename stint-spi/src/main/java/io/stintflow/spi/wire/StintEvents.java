@@ -44,6 +44,11 @@ public final class StintEvents {
     /** CloudEvents Distributed Tracing extension (W3C Trace Context). */
     public static final String EXT_TRACEPARENT = "traceparent";
     public static final String EXT_TRACESTATE = "tracestate";
+    /**
+     * SDD 3a.3c, on a task invoke only: when the attempt's timeout fires, as an RFC 3339 instant in UTC. Optional: an
+     * invoke without it (or with an unreadable one) has no known deadline.
+     */
+    public static final String EXT_DEADLINE = "stintdeadline";
 
     public static final String CONTENT_TYPE_JSON = "application/json";
 

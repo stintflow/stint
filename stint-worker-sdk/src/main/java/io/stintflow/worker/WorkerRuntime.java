@@ -91,7 +91,8 @@ public final class WorkerRuntime {
                     .orElseThrow(() -> new IllegalStateException("No handler for routing key: " + inv.routingKey()));
             ClaimCheck.rehydrate(inv.input(), blob).thenCompose(input -> {
                 TaskContext ctx = new TaskContext(inv.taskId(), inv.workflowInstanceId(),
-                        inv.correlationId(), inv.attempt(), input, inv.definition(), lineage.chainId(), lineage);
+                        inv.correlationId(), inv.attempt(), input, inv.definition(), lineage.chainId(), lineage,
+                        inv.deadline());
                 return handler.execute(ctx);
             }).whenComplete((output, ex) -> {
                 if (ex != null) {

@@ -780,10 +780,12 @@ public final class WorkflowEngine {
                             clock.instant(), inst.input(), inst.startedAt(), inst.chainId(), inst.trace(),
                             inst.listenState(), inst.decisions());
                     Duration timeout = effectiveTimeout(body);
+                    // SDD 3a.3c: the attempt's deadline is the instant its timeout timer fires
+                    Instant deadline = clock.instant().plus(timeout);
                     TaskInvocation inv = new TaskInvocation(instanceId, snap.position(), correlationId,
-                            snap.definition(), body.routingKey(), wireInput, nextAttempt, inst.activation());
+                            snap.definition(), body.routingKey(), wireInput, nextAttempt, inst.activation(), deadline);
 
-                    return armThenSave(new TimerRequest(timerKey, instanceId, correlationId, clock.instant().plus(timeout)),
+                    return armThenSave(new TimerRequest(timerKey, instanceId, correlationId, deadline),
                             () -> state.save(next, snap.version(),
                                     List.of(new Wait(taskKey, instanceId, snap.position(), clock.instant()),
                                             new Wait(timerKey, instanceId, snap.position(), clock.instant())),
@@ -974,10 +976,12 @@ public final class WorkflowEngine {
                             inst.decisions());
                     Duration timeout = effectiveTimeout(node);
                     int attempt = retryState != null ? retryState.attempt() : 1;
+                    // SDD 3a.3c: the attempt's deadline is the instant its timeout timer fires
+                    Instant deadline = clock.instant().plus(timeout);
                     TaskInvocation inv = new TaskInvocation(instanceId, position, correlationId, def.ref(),
-                            node.routingKey(), wireInput, attempt, inst.activation());
+                            node.routingKey(), wireInput, attempt, inst.activation(), deadline);
 
-                    return armThenSave(new TimerRequest(timerKey, instanceId, correlationId, clock.instant().plus(timeout)),
+                    return armThenSave(new TimerRequest(timerKey, instanceId, correlationId, deadline),
                             () -> state.save(snap, expectedVersion,
                                     List.of(new Wait(taskKey, instanceId, position, clock.instant()),
                                             new Wait(timerKey, instanceId, position, clock.instant())),

@@ -3,6 +3,8 @@ package io.stintflow.wire;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -30,6 +32,7 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
     private static final URI SOURCE_ENGINE = URI.create("stint://engine");
     private static final URI SOURCE_WORKER = URI.create("stint://worker");
     private static final String LEGACY_TYPE_PREFIX = "urn:legacy:";
+    private static final System.Logger LOG = System.getLogger(DefaultCloudEventCodec.class.getName());
 
     @Override
     public CloudEvent toEvent(TaskInvocation inv) {
@@ -45,6 +48,9 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 .withExtension(StintEvents.EXT_TASK_ID, inv.taskId())
                 .withExtension(StintEvents.EXT_ATTEMPT, String.valueOf(inv.attempt()))
                 .withExtension(StintEvents.EXT_DEFINITION, inv.definition().canonical());
+        if (inv.deadline() != null) {
+            builder.withExtension(StintEvents.EXT_DEADLINE, inv.deadline().toString());
+        }
         return withLineage(builder, inv.lineage()).build();
     }
 
@@ -80,7 +86,26 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 event.getSubject(),
                 input,
                 Integer.parseInt(ext(event, StintEvents.EXT_ATTEMPT)),
-                lineage(event));
+                lineage(event),
+                deadline(event));
+    }
+
+    /**
+     * SDD 3a.3c, tolerant read: no {@code stintdeadline}, or one that isn't an instant, is no known deadline — never
+     * an error. An unreadable one is logged without its value.
+     */
+    static Instant deadline(CloudEvent event) {
+        String value = optionalExt(event, StintEvents.EXT_DEADLINE);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Instant.parse(value);
+        } catch (DateTimeParseException e) {
+            LOG.log(System.Logger.Level.WARNING, "Task invoke {0} has an unreadable {1} extension: read as no deadline",
+                    event.getId(), StintEvents.EXT_DEADLINE);
+            return null;
+        }
     }
 
     @Override

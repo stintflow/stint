@@ -1,5 +1,7 @@
 package io.stintflow.worker;
 
+import java.time.Instant;
+
 import com.fasterxml.jackson.databind.JsonNode;
 
 import io.stintflow.spi.Lineage;
@@ -29,6 +31,8 @@ import io.stintflow.spi.WorkflowRef;
  *                      or to put on anything the handler publishes itself; {@code null} from a pre-2.5 engine
  * @param lineage       this execution's lineage: the chain, its cause (the invoke's id) and the worker
  *                      span's trace context, for creating child spans or forwarding (SDD 2.5)
+ * @param deadline      when this attempt's timeout fires (SDD 3a.3c): the engine discards a result arriving later, so
+ *                      a handler may stop, and should record nothing, past it; {@code null} when unknown
  */
 public record TaskContext(
         String taskId,
@@ -38,11 +42,18 @@ public record TaskContext(
         JsonNode input,
         WorkflowRef definition,
         String chainId,
-        Lineage lineage) {
+        Lineage lineage,
+        Instant deadline) {
+
+    /** The pre-SDD-3a.3c shape, without a deadline. */
+    public TaskContext(String taskId, String instanceId, String correlationId, int attempt, JsonNode input,
+                       WorkflowRef definition, String chainId, Lineage lineage) {
+        this(taskId, instanceId, correlationId, attempt, input, definition, chainId, lineage, null);
+    }
 
     /** The pre-SDD-2.5 shape, without chain or lineage. */
     public TaskContext(String taskId, String instanceId, String correlationId, int attempt, JsonNode input,
                        WorkflowRef definition) {
-        this(taskId, instanceId, correlationId, attempt, input, definition, null, Lineage.NONE);
+        this(taskId, instanceId, correlationId, attempt, input, definition, null, Lineage.NONE, null);
     }
 }
