@@ -111,4 +111,41 @@ class FlociConversationIT {
             }
         }
     }
+
+    /**
+     * SDD 3a.3b, CA3: steps committed by the worker within the same millisecond of its clock come back from DynamoDB —
+     * whose sort key keeps committedAt in milliseconds — in their causal order, though their correlationIds would
+     * break the tie the other way.
+     */
+    @Test
+    void steps_within_one_millisecond_keep_their_order_in_dynamodb() {
+        try (GenericContainer<?> floci = new GenericContainer<>(DockerImageName.parse("floci/floci:latest"))
+                .withExposedPorts(4566)) {
+            floci.start();
+            URI endpoint = URI.create("http://" + floci.getHost() + ":" + floci.getMappedPort(4566));
+            var creds = StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test"));
+            try (DynamoDbClient ddb = DynamoDbClient.builder().endpointOverride(endpoint).region(Region.US_EAST_1)
+                    .credentialsProvider(creds).httpClient(UrlConnectionHttpClient.create()).build()) {
+                DynamoDbConversationStore.createTable(ddb, TABLE);
+                Instant sameMillisecond = T0.plusNanos(123_456);   // the clock never moves on
+                DynamoDbConversationStore store = new DynamoDbConversationStore(ddb, TABLE, () -> sameMillisecond);
+                RuleModel model = RuleModel.echoing();
+                LangChain4jWorker worker = LangChain4jWorker.builder().chatModel(model).conversations(store)
+                        .clock(() -> sameMillisecond).build();
+                TaskHandler step = worker.handler(Chat.class, (ai, t) -> ai.reply("step " + t.task().taskId()));
+
+                run(step, task("i-C", "/do/0/first", "c-9"));
+                run(step, task("i-C", "/do/1/second", "c-1"));
+                JsonNode third = run(step, task("i-C", "/do/2/third", "c-5"));
+
+                assertThat(join(store.committed(MemoryKey.instance("i-C")))).extracting(Exchange::taskId)
+                        .containsExactly("/do/0/first", "/do/1/second", "/do/2/third");
+                assertThat(join(store.committed(MemoryKey.instance("i-C")))).extracting(Exchange::committedAt)
+                        .containsExactly(T0, T0.plusMillis(1), T0.plusMillis(2));   // stored in milliseconds
+                assertThat(third.asText()).isEqualTo("5:step /do/2/third");
+                assertThat(model.requests.getLast().messages().toString())
+                        .containsSubsequence("step /do/0/first", "step /do/1/second", "step /do/2/third");
+            }
+        }
+    }
 }
