@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import io.stintflow.core.policy.Policy;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.FlowDirective;
 import io.stintflow.core.model.Schedule;
@@ -21,14 +22,20 @@ import io.stintflow.spi.WorkflowRef;
  * (SDD 1.4) is a swappable, later increment that compiles to this same tree.
  * <p>
  * SDD 2.4: {@code schedule} is the definition's DSL 1.0 {@code schedule}, or {@code null}.
+ * SDD 3a.5: {@code policy} is its compliance policy ({@code document.metadata.x-stint-policy}), or {@code null}.
  */
-public record WorkflowDefinition(WorkflowRef ref, DoNode root, Schedule schedule) {
+public record WorkflowDefinition(WorkflowRef ref, DoNode root, Schedule schedule, Policy policy) {
 
     static final String ROOT_POINTER = "";
 
+    /** A definition without a compliance policy (SDD 3a.5): the behaviour before 3a.5. */
+    public WorkflowDefinition(WorkflowRef ref, DoNode root, Schedule schedule) {
+        this(ref, root, schedule, null);
+    }
+
     /** A definition without a {@code schedule}. */
     public WorkflowDefinition(WorkflowRef ref, DoNode root) {
-        this(ref, root, null);
+        this(ref, root, null, null);
     }
 
     public WorkflowDefinition {

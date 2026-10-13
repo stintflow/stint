@@ -37,9 +37,11 @@ import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
+import io.stintflow.core.policy.Policy;
 import io.stintflow.core.trigger.EventFilter;
 import io.stintflow.spi.CronExpression;
 import io.stintflow.spi.ErrorInfo;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.WorkflowRef;
 import io.stintflow.spi.wire.StintEvents;
 import io.stintflow.wire.decision.DecisionKind;
@@ -167,6 +169,13 @@ public final class DslLoader {
         private static final Set<String> BACKOFF_KEYS = Set.of("constant", "linear", "exponential");
         private static final Set<String> RETRY_LIMIT_KEYS = Set.of("attempt", "duration");
         private static final Set<String> RETRY_ATTEMPT_KEYS = Set.of("count", "duration");
+        /** SDD 3a.5: {@code document.metadata.x-stint-policy} (Stint extension) and a task's own. */
+        private static final Set<String> POLICY_KEYS = Set.of("sensitivity", "routes", "retention");
+        private static final Set<String> POLICY_SENSITIVITY_KEYS = Set.of("from");
+        private static final Set<String> POLICY_RETENTION_KEYS = Set.of("days");
+        private static final Set<String> TASK_POLICY_KEYS = Set.of("maxSensitivity");
+        /** SDD 3a.5: a task's {@code metadata.x-stint-policy.maxSensitivity}, by the pointer of its remote call. */
+        private final Map<String, Sensitivity> taskMax = new java.util.HashMap<>();
 
         private final LoadOptions opts;
         private final ExpressionEvaluator evaluator;
@@ -196,10 +205,125 @@ public final class DslLoader {
                     ? compileTaskList(doArray, "")
                     : List.of();
 
+            Policy policy = compilePolicy(document.path("metadata").get(Policy.METADATA_KEY));
+            if (policy == null && !taskMax.isEmpty()) {
+                hardError("/document/metadata/" + Policy.METADATA_KEY, "a task declares metadata."
+                        + Policy.METADATA_KEY + " but the workflow has no document.metadata." + Policy.METADATA_KEY,
+                        null);
+            }
+
             failIfAnyHardErrors();
 
             DoNode rootNode = new DoNode("root", "", DataFlow.NONE, FlowDirective.END, tasks);
-            return new WorkflowDefinition(ref, rootNode, schedule);
+            return new WorkflowDefinition(ref, rootNode, schedule, policy);
+        }
+
+        /**
+         * SDD 3a.5, RF3: the Stint extension {@code document.metadata.x-stint-policy} — not part of the CNCF DSL, and
+         * kept under {@code document.metadata}, which the DSL leaves free, so the document stays valid for it. STRICT
+         * fails on any key it doesn't know.
+         */
+        private Policy compilePolicy(JsonNode node) {
+            if (node == null) {
+                return null;
+            }
+            String base = "/document/metadata/" + Policy.METADATA_KEY;
+            if (!node.isObject()) {
+                hardError(base, "'" + Policy.METADATA_KEY + "' is an object (sensitivity, routes, retention)", null);
+                return null;
+            }
+            checkKeys(node, base, POLICY_KEYS);
+            Expr from = null;
+            JsonNode sensitivity = node.get("sensitivity");
+            if (sensitivity != null) {
+                checkKeys(sensitivity, base + "/sensitivity", POLICY_SENSITIVITY_KEYS);
+                if (sensitivity.has("from")) {
+                    from = compileAndValidate(TemplateCompiler.compileTemplate(sensitivity.get("from")),
+                            base + "/sensitivity/from");
+                }
+            }
+            Map<Sensitivity, Set<String>> routes = new java.util.EnumMap<>(Sensitivity.class);
+            JsonNode routesNode = node.get("routes");
+            if (routesNode != null) {
+                if (!routesNode.isObject()) {
+                    hardError(base + "/routes", "'routes' maps a level to a list of routing keys", null);
+                } else {
+                    routesNode.properties().forEach(e -> {
+                        String pointer = base + "/routes/" + e.getKey();
+                        Sensitivity level = Sensitivity.parse(e.getKey()).orElse(null);
+                        if (level == null) {
+                            unsupported(pointer, "'" + e.getKey() + "' is not a level (internal, confidential, "
+                                    + "restricted)");
+                            return;
+                        }
+                        if (!e.getValue().isArray()) {
+                            hardError(pointer, "a level's routes are a list of routing keys ('*' = any)", null);
+                            return;
+                        }
+                        Set<String> keys = new java.util.LinkedHashSet<>();
+                        for (JsonNode key : e.getValue()) {
+                            if (!key.isTextual() || key.asText().isBlank()) {
+                                hardError(pointer, "a route is a routing key (text) or '*'", null);
+                            } else {
+                                keys.add(key.asText());
+                            }
+                        }
+                        routes.put(level, keys);
+                    });
+                }
+            }
+            Map<String, java.time.Duration> retention = new java.util.LinkedHashMap<>();
+            JsonNode retentionNode = node.get("retention");
+            if (retentionNode != null) {
+                if (!retentionNode.isObject()) {
+                    hardError(base + "/retention", "'retention' maps a blob class to {days}", null);
+                } else {
+                    retentionNode.properties().forEach(e -> {
+                        String pointer = base + "/retention/" + e.getKey();
+                        checkKeys(e.getValue(), pointer, POLICY_RETENTION_KEYS);
+                        JsonNode days = e.getValue().get("days");
+                        if (days == null || !days.canConvertToInt() || days.asInt() < 1) {
+                            hardError(pointer + "/days", "a retention is a whole number of days, at least 1", null);
+                        } else {
+                            retention.put(e.getKey(), java.time.Duration.ofDays(days.asInt()));
+                        }
+                    });
+                }
+            }
+            return new Policy(from, routes, retention, taskMax);
+        }
+
+        /** SDD 3a.5: a task's {@code metadata.x-stint-policy.maxSensitivity}, kept for each remote call it compiled to. */
+        private void collectTaskPolicy(JsonNode body, String pointer, List<TaskNode> compiled) {
+            JsonNode policy = body == null ? null : body.path("metadata").get(Policy.METADATA_KEY);
+            if (policy == null) {
+                return;
+            }
+            String base = pointer + "/metadata/" + Policy.METADATA_KEY;
+            checkKeys(policy, base, TASK_POLICY_KEYS);
+            JsonNode max = policy.get("maxSensitivity");
+            if (max == null) {
+                return;
+            }
+            Sensitivity level = Sensitivity.parse(max.asText()).orElse(null);
+            if (level == null) {
+                hardError(base + "/maxSensitivity", "'" + max.asText() + "' is not a level (internal, confidential, "
+                        + "restricted)", null);
+                return;
+            }
+            boolean remote = false;
+            for (TaskNode node : compiled) {
+                if (node instanceof CallRemoteNode call) {
+                    taskMax.put(call.pointer(), level);
+                    remote = true;
+                } else if (node instanceof TryNode tryNode && tryNode.body() != null) {
+                    taskMax.put(tryNode.body().pointer(), level);
+                    remote = true;
+                }
+            }
+            if (!remote) {
+                hardError(base, "only a task that dispatches (call) takes a maxSensitivity", null);
+            }
         }
 
         /**
@@ -317,17 +441,18 @@ public final class DslLoader {
                 String taskName = names.next();
                 JsonNode body = entry.get(taskName);
                 String pointer = parentPointer + "/do/" + i + "/" + taskName;
+                List<TaskNode> compiled;
                 if (isDecision(body)) {
                     checkTaskKeys(body, pointer);
-                    tasks.addAll(compileDecision(taskName, body, pointer, null));
+                    compiled = compileDecision(taskName, body, pointer, null);
                 } else if (isDecisionTry(body)) {
-                    tasks.addAll(compileTryDecision(taskName, body, pointer));
+                    compiled = compileTryDecision(taskName, body, pointer);
                 } else {
-                    TaskNode compiled = compileTask(taskName, body, pointer);
-                    if (compiled != null) {
-                        tasks.add(compiled);
-                    }
+                    TaskNode single = compileTask(taskName, body, pointer);
+                    compiled = single == null ? List.of() : List.of(single);
                 }
+                tasks.addAll(compiled);
+                collectTaskPolicy(body, pointer, compiled);
             }
             checkUniqueNames(tasks);
             return tasks;

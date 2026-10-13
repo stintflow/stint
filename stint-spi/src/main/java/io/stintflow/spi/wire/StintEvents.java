@@ -49,6 +49,14 @@ public final class StintEvents {
      * invoke without it (or with an unreadable one) has no known deadline.
      */
     public static final String EXT_DEADLINE = "stintdeadline";
+    /**
+     * SDD 3a.5, RF2: the level of the data ({@code internal}, {@code confidential}, {@code restricted}) — on a task
+     * invoke, on the events an instance emits, and read on the events that start or resume one. Optional; a value
+     * that isn't a level reads as {@code restricted}.
+     */
+    public static final String EXT_SENSITIVITY = "stintsensitivity";
+    /** SDD 3a.5, RF8: on a task result, the AI provider that produced it (for the audit trail), if the worker says. */
+    public static final String EXT_PROVIDER = "stintprovider";
 
     public static final String CONTENT_TYPE_JSON = "application/json";
 

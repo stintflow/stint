@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.Lineage;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.WorkflowRef;
@@ -51,6 +52,9 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
         if (inv.deadline() != null) {
             builder.withExtension(StintEvents.EXT_DEADLINE, inv.deadline().toString());
         }
+        if (inv.sensitivity() != null) {
+            builder.withExtension(StintEvents.EXT_SENSITIVITY, inv.sensitivity().wireName());
+        }
         return withLineage(builder, inv.lineage()).build();
     }
 
@@ -87,7 +91,24 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 input,
                 Integer.parseInt(ext(event, StintEvents.EXT_ATTEMPT)),
                 lineage(event),
-                deadline(event));
+                deadline(event),
+                sensitivity(event));
+    }
+
+    /**
+     * SDD 3a.5: the event's {@code stintsensitivity}, or {@code null} when absent; a value that isn't a level reads as
+     * {@link Sensitivity#RESTRICTED} — the safe side — and is logged without itself.
+     */
+    public static Sensitivity sensitivity(CloudEvent event) {
+        String value = optionalExt(event, StintEvents.EXT_SENSITIVITY);
+        if (value == null) {
+            return null;
+        }
+        return Sensitivity.parse(value).orElseGet(() -> {
+            LOG.log(System.Logger.Level.WARNING, "Event {0} has an unreadable {1} extension: read as restricted",
+                    event.getId(), StintEvents.EXT_SENSITIVITY);
+            return Sensitivity.RESTRICTED;
+        });
     }
 
     /**

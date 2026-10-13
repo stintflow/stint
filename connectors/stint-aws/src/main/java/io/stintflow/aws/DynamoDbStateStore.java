@@ -23,6 +23,7 @@ import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
 import io.stintflow.spi.Lineage;
 import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.RetryState;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
 import io.stintflow.spi.Wait;
@@ -181,6 +182,10 @@ public class DynamoDbStateStore implements StateStore {
         }
         if (snap.decisions() != null) {
             item.put("decisions", AttributeValue.fromS(snap.decisions().toString()));
+        }
+        // SDD 3a.5, RF1: the instance's data level (optional attribute).
+        if (snap.sensitivity() != null) {
+            item.put("sensitivity", AttributeValue.fromS(snap.sensitivity().wireName()));
         }
 
         Put.Builder builder = Put.builder().tableName(instancesTable).item(item);
@@ -367,6 +372,8 @@ public class DynamoDbStateStore implements StateStore {
         AttributeValue listenState = item.get("listenState");
         // SDD 3a.1, tolerant read: items written before SDD 3a.1 have no decision records.
         AttributeValue decisions = item.get("decisions");
+        // SDD 3a.5, tolerant read: items written before SDD 3a.5 (or of instances without a level) have none.
+        AttributeValue sensitivity = item.get("sensitivity");
         return new InstanceSnapshot(
                 item.get("instanceId").s(),
                 WorkflowRef.parse(item.get("definition").s()),
@@ -382,7 +389,8 @@ public class DynamoDbStateStore implements StateStore {
                 chainId == null ? null : chainId.s(),
                 traceparent == null ? null : Lineage.trace(traceparent.s(), tracestate == null ? null : tracestate.s()),
                 listenState == null ? null : Json.read(listenState.s().getBytes()),
-                decisions == null ? null : Json.read(decisions.s().getBytes()));
+                decisions == null ? null : Json.read(decisions.s().getBytes()),
+                sensitivity == null ? null : Sensitivity.parseOrRestricted(sensitivity.s()));
     }
 
     private static void putIfSet(Map<String, AttributeValue> item, String name, String value) {

@@ -1,0 +1,112 @@
+package io.stintflow.it;
+
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+import io.stintflow.core.WorkflowDefinition;
+import io.stintflow.core.WorkflowEngine;
+import io.stintflow.core.WorkflowRegistry;
+import io.stintflow.core.expr.JqExpressionEvaluator;
+import io.stintflow.core.interpreter.TreeInterpreter;
+import io.stintflow.dsl.DslLoader;
+import io.stintflow.dsl.LoadOptions;
+import io.stintflow.inmemory.FilesystemBlobStore;
+import io.stintflow.inmemory.InMemoryAuditLog;
+import io.stintflow.inmemory.InMemoryEventPublisher;
+import io.stintflow.inmemory.InMemoryStateStore;
+import io.stintflow.inmemory.InMemoryTimerService;
+import io.stintflow.spi.AdapterCapabilities;
+import io.stintflow.spi.BlobStore;
+import io.stintflow.spi.InstanceSnapshot;
+import io.stintflow.spi.TaskInvocation;
+import io.stintflow.spi.TaskResult;
+import io.stintflow.spi.TaskResultHandler;
+import io.stintflow.spi.TaskTransport;
+
+/**
+ * SDD 3a.5: engines loaded from YAML with a compliance policy, an in-memory audit log and publisher, and workers
+ * that are plain functions by routing key (a key without one is never answered). Synthetic data only; the clock moves
+ * only when a test says so.
+ */
+final class PolicyFixture {
+
+    static final Instant T0 = Instant.parse("2026-10-13T12:00:00Z");
+    static final String AUTHORIZATION = "https://serverlessworkflow.io/spec/1.0.0/errors/authorization";
+
+    final AtomicReference<Instant> now = new AtomicReference<>(T0);
+    final WorkflowRegistry registry = new WorkflowRegistry();
+    final InMemoryStateStore state = new InMemoryStateStore();
+    final InMemoryAuditLog audit = new InMemoryAuditLog();
+    final InMemoryEventPublisher publisher = new InMemoryEventPublisher();
+    final List<TaskInvocation> dispatched = new CopyOnWriteArrayList<>();
+    final Map<String, Function<JsonNode, JsonNode>> workers = new ConcurrentHashMap<>();
+    final BlobStore blobs;
+    final WorkflowEngine engine;
+    private volatile TaskResultHandler results;
+
+    PolicyFixture(String... yamls) throws Exception {
+        for (String yaml : yamls) {
+            registry.register(load(yaml));
+        }
+        blobs = new FilesystemBlobStore(Files.createTempDirectory("stint-sdd3a5"));
+        engine = new WorkflowEngine(registry, new Transport(), state, new InMemoryTimerService(now::get), blobs,
+                new TreeInterpreter(new JqExpressionEvaluator()), now::get, publisher, null).auditLog(audit);
+    }
+
+    static WorkflowDefinition load(String yaml) {
+        return new DslLoader().load(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)), "policy.yaml",
+                LoadOptions.STRICT);
+    }
+
+    PolicyFixture worker(String routingKey, Function<JsonNode, JsonNode> work) {
+        workers.put(routingKey, work);
+        return this;
+    }
+
+    JsonNode awaitCompleted(String id) throws Exception {
+        return engine.awaitCompletion(id, Duration.ofSeconds(10)).toCompletableFuture().get(15, TimeUnit.SECONDS);
+    }
+
+    InstanceSnapshot snapshot(String id) throws Exception {
+        return state.load(id).toCompletableFuture().get(10, TimeUnit.SECONDS).orElseThrow();
+    }
+
+    private final class Transport implements TaskTransport {
+
+        @Override
+        public CompletionStage<Void> dispatch(TaskInvocation invocation) {
+            dispatched.add(invocation);
+            Function<JsonNode, JsonNode> work = workers.get(invocation.routingKey());
+            if (work != null) {
+                CompletableFuture.runAsync(() -> results.handle(
+                        TaskResult.completed(invocation.correlationId(), work.apply(invocation.input()))));
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public void onResult(TaskResultHandler handler) {
+            results = handler;
+        }
+
+        @Override
+        public AdapterCapabilities capabilities() {
+            return new AdapterCapabilities(AdapterCapabilities.DeliveryGuarantee.AT_LEAST_ONCE, false, 256 * 1024,
+                    null, false, false);
+        }
+    }
+}
