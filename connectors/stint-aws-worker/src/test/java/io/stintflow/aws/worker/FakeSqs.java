@@ -48,6 +48,8 @@ public final class FakeSqs implements SqsClient {
     public volatile Supplier<RuntimeException> failVisibility;
     /** Thrown by every send while set. */
     public volatile RuntimeException failSend;
+    /** Runs inside every visibility change, before it is recorded — to hold a renewal in progress. */
+    public volatile Runnable duringVisibilityChange;
 
     /** Queues a message with {@code body}; returns its receipt handle. */
     public String offer(String body) {
@@ -86,6 +88,10 @@ public final class FakeSqs implements SqsClient {
         Supplier<RuntimeException> failure = failVisibility;
         if (failure != null) {
             throw failure.get();
+        }
+        Runnable during = duringVisibilityChange;
+        if (during != null && request.visibilityTimeout() > 0) {
+            during.run();
         }
         visibilityChanges.add(new VisibilityChange(request.receiptHandle(), request.visibilityTimeout()));
         return ChangeMessageVisibilityResponse.builder().build();

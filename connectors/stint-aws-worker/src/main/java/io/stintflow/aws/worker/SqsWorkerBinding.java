@@ -329,8 +329,12 @@ public final class SqsWorkerBinding implements AutoCloseable {
             return stopped;
         }
 
-        private void renew() {
-            if (stopped()) {
+        /**
+         * Holds the lease's lock through the SQS call, so {@link #stop()} waits for a renewal in progress: no extension
+         * can land after the delete of an acknowledgement or the hand-back of {@link #close()}.
+         */
+        private synchronized void renew() {
+            if (stopped) {
                 return;
             }
             Instant now = clock.instant();

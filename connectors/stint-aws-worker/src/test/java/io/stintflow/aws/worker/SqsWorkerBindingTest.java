@@ -277,6 +277,33 @@ class SqsWorkerBindingTest {
         binding = null;
     }
 
+    @Test
+    void a_renewal_in_progress_never_lands_after_the_hand_back() throws Exception {
+        start(binding(1).shutdownGrace(Duration.ZERO));
+        String receipt = offer("c-1", "hold", null);
+        awaitStarted(started, "c-1");
+        scheduler.awaitPending(1);
+        CountDownLatch renewing = new CountDownLatch(1);
+        CountDownLatch finishRenewal = new CountDownLatch(1);
+        sqs.duringVisibilityChange = () -> {
+            renewing.countDown();
+            await(finishRenewal);
+        };
+        CompletableFuture<Void> ticking = CompletableFuture.runAsync(() -> scheduler.advance(Duration.ofSeconds(10)));
+        assertThat(renewing.await(10, TimeUnit.SECONDS)).isTrue();   // a renewal is half-way through its SQS call
+
+        CompletableFuture<Void> closing = CompletableFuture.runAsync(binding::close);
+        scheduler.awaitPending(1);                                    // the grace (0 s), scheduled by close
+        CompletableFuture.runAsync(() -> scheduler.advance(Duration.ZERO));
+        assertThat(closing).isNotDone();                              // the hand-back waits for the renewal
+        finishRenewal.countDown();
+        ticking.get(10, TimeUnit.SECONDS);
+        closing.get(10, TimeUnit.SECONDS);
+
+        assertThat(sqs.visibilityOf(receipt)).containsExactly(30, 0); // the hand-back is last
+        binding = null;
+    }
+
     /** Counts what the binding reports. */
     static final class Counting implements SqsWorkerMetrics {
         final AtomicInteger acknowledged = new AtomicInteger();
