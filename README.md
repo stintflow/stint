@@ -98,6 +98,7 @@ type: io.stintflow.task.result.v1   (worker → engine)
 extensions: correlationid · workflowinstanceid · taskid · attempt · definition
             chainid · causationid · traceparent · tracestate      (SDD 2.5, optional)
             stintsensitivity (invoke, fact) · stintprovider (result)  (SDD 3a.5, optional)
+            stintrole (review events)                                   (SDD 3a.4)
 ```
 
 - `correlationid` is the correlation of an **attempt**: one dispatch of one task. It matches a result to
@@ -445,6 +446,70 @@ registry.register("summarize-meeting", ai.handler(MeetingAssistant.class,
   `maxExtension` (1 h), and `close()` waits `shutdownGrace` (30 s) then hands the unfinished back unacknowledged.
   Logs carry ids only; `SqsWorkerMetrics` counts. Give invoke queues a `maxReceiveCount` of 3 or more. Measured over
   floci with 50 tasks (10 slow): p95 22.7 s with concurrency 1, 2.7 s with 8.
+
+## Human review on `listen` (SDD 3a.4)
+
+A review asks a **role** for an answer, waits with a deadline, reminds, escalates, and resumes on the answer. Two
+Stint extensions compile to plain DSL 1.0 (`emit`, `try`/`listen` phases, `switch`), and `STRICT` rejects any key
+they don't know.
+
+An uncertain decision goes to a human and **continues on the branch of the option the human chose**:
+
+```yaml
+- meetingType:
+    call: decision
+    with: { task: decide-type, kind: choice, options: [ {ata: {then: minutes}}, {adr: {then: record}} ] }
+    onUncertain:
+      review:
+        role: business-rep
+        material: ${ $context.redactedRef }      # a pointer to the redacted material, never the material
+        deadline: { hours: 24 }
+        remind: { hours: 20 }                     # optional
+        escalate: { role: technical-rep, after: { hours: 24 } }   # optional
+        onTimeout: { value: ata }                 # or 'fail' (default): a 'timeout' error
+```
+
+A document, or each item of a batch, is approved or rejected:
+
+```yaml
+- approveSdds:
+    call: review
+    with: { kind: approval, role: technical-rep, material: ${ .batchRef }, items: ${ .sddIds },
+            deadline: { hours: 48 } }
+    onReject: revise          # any rejected item goes here; .rejectedItems names them
+    then: publish
+```
+
+`kind: choice` with `options` routes on the chosen option (e.g. the DLQ's resend / accept / cancel).
+
+- **Events** (the contract a channel implements), each with the review id as `subject`:
+  - `io.stintflow.review.requested.v1`: published by the engine. It carries the role (`stintrole`), the level
+    (`stintsensitivity`), the options, the item ids, the `materialRef` pointer and the deadline. It is inline at any
+    level, because it holds nothing but ids, declared names and pointers.
+  - `io.stintflow.review.reminder.v1`: published by the engine before the deadline.
+  - `io.stintflow.review.completed.v1`: published by the channel. It carries `stintrole` and
+    `{ value | verdict, items: [{id, verdict, noteRef?}], noteRef?, reviewer }`.
+  - The `io.stintflow.review.` prefix is reserved: an author's `emit` may not use it.
+- **No content:** the note travels by pointer (`noteRef`), and the reviewer is the channel's opaque id (no `@`, no
+  spaces). An answer with any other field is out of contract, and is never kept in the early-event inbox.
+- **Trust:** authentication is the channel's job. The Stint accepts answers only from the sources the policy lists,
+  `x-stint-policy.review.sources: [https://portal.example]`; a review step won't load without them. An answer from
+  another source, from a role the phase doesn't wait for, out of contract, or from a role asked before an escalation
+  (`late`) doesn't resume the instance. The audit trail records it (kind `review`). A duplicate answer is a no-op.
+- **Records:**
+  - The decision's own record stays as the adapter made it.
+  - The review's record sits next to it, as `decisions["<pointer>/review"]`, with the human answer, the role and the
+    reviewer.
+  - Each human answer is a `Correction` in the `CorrectionLog` port: by definition, with the decision's value,
+    confidence and provenance, the human answer, the role and the dates. It is kept in `InMemoryCorrectionLog`, or in
+    `DynamoDbCorrectionLog` (table `stint-corrections`, 400-day TTL).
+  - A default from `onTimeout` is not a correction.
+  - `CorrectionExport.write(corrections, maxLevel, writer)` writes the evaluation set as JSONL. It writes only
+    corrections at or below the level; a correction without a level counts as restricted.
+- **Timers:** reminders and deadlines are `listen` timeouts, so long ones go to the EventBridge Scheduler (SDD 2.4).
+- **Channel:** `examples/stint-example-ai-worker` has `ReviewChannel`, a JDK `HttpServer` on loopback. It serves
+  `GET /reviews` and `POST /reviews/{reviewId}` with an `X-Stint-Role` header. It has no authentication and no UI: the
+  portal with roles is the consumer's.
 
 ## Input compliance: sensitivity, redaction and the policy port (SDD 3a.5)
 
