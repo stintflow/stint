@@ -28,6 +28,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.Result;
 import io.stintflow.spi.BlobStore;
+import io.stintflow.spi.ErrorInfo.StandardType;
 import io.stintflow.spi.ExecutionTracer;
 import io.stintflow.wire.Json;
 import io.stintflow.worker.TaskContext;
@@ -69,6 +70,8 @@ public final class LangChain4jWorker {
     private static final Logger LOG = LoggerFactory.getLogger(LangChain4jWorker.class);
     /** SDD 3a.3b, 8b: a clock this far behind the conversation is worth a warning — workers' clocks disagree. */
     static final Duration CLOCK_LAG_WARNING = Duration.ofSeconds(1);
+    /** SDD 3a.3c, 8b: the default {@link Builder#commitMargin}. */
+    static final Duration DEFAULT_COMMIT_MARGIN = Duration.ofSeconds(5);
 
     private final ChatModel chatModel;
     private final ConversationStore conversations;
@@ -81,6 +84,7 @@ public final class LangChain4jWorker {
     private final Duration toolCallLimit;
     private final Function<Throwable, Optional<Duration>> retryAfter;
     private final Duration rateLimitRetryAfter;
+    private final Duration commitMargin;
 
     private LangChain4jWorker(Builder b) {
         this.chatModel = Objects.requireNonNull(b.chatModel, "chatModel is required");
@@ -94,6 +98,7 @@ public final class LangChain4jWorker {
         this.toolCallLimit = b.toolCallLimit;
         this.retryAfter = b.retryAfter;
         this.rateLimitRetryAfter = b.rateLimitRetryAfter;
+        this.commitMargin = b.commitMargin;
     }
 
     public static Builder builder() {
@@ -192,8 +197,17 @@ public final class LangChain4jWorker {
                     + "without calling the model", ctx.taskId(), ctx.instanceId(), ctx.correlationId());
             return done.get();
         }
+        Instant deadline = ctx.deadline();
+        if (deadline != null && !clock.instant().isBefore(deadline)) {
+            LOG.warn("Task {} of instance {} (correlation {}) arrived {} ms past its deadline: the engine no longer "
+                    + "waits for it, so the model is not called", ctx.taskId(), ctx.instanceId(), ctx.correlationId(),
+                    Duration.between(deadline, clock.instant()).toMillis());
+            throw new TaskFailure(StandardType.TIMEOUT.uri(), 408,
+                    "The task's deadline passed before its execution started", null);
+        }
 
-        ExecutionMemoryStore memory = new ExecutionMemoryStore(messagesOf(history));
+        ExecutionMemoryStore memory = new ExecutionMemoryStore(
+                messagesOf(withoutSupersededAttempts(history, ctx.taskId(), ctx.attempt())));
         MeteredChatModel model = new MeteredChatModel(chatModel, tracer, ctx, clock);
         ToolCallTimer tools = new ToolCallTimer(clock, toolCallLimit);
         AiServices<S> builder = AiServices.builder(service).chatModel(model)
@@ -224,6 +238,14 @@ public final class LangChain4jWorker {
         JsonNode messages = Json.read(ChatMessageSerializer.messagesToJson(memory.added())
                 .getBytes(StandardCharsets.UTF_8));
         if (key != null) {
+            if (deadline != null && clock.instant().isAfter(deadline.minus(commitMargin))) {
+                LOG.warn("Task {} of instance {} (correlation {}) ended {} ms before its deadline, inside the commit "
+                        + "margin of {} ms: the engine may discard its result, so its exchange is not committed",
+                        ctx.taskId(), ctx.instanceId(), ctx.correlationId(),
+                        Duration.between(clock.instant(), deadline).toMillis(), commitMargin.toMillis());
+                throw new TaskFailure(StandardType.TIMEOUT.uri(), 408,
+                        "The execution ended past its deadline; its exchange was not committed", null);
+            }
             Instant now = commitTime(ctx, history);
             Exchange exchange = new Exchange(key, ctx.correlationId(), ctx.taskId(), ctx.attempt(), now, messages,
                     output, now.plus(retention));
@@ -257,6 +279,42 @@ public final class LangChain4jWorker {
                     + "its exchange is committed right after it", ctx.taskId(), ctx.instanceId(), lag.toMillis());
         }
         return last.plusMillis(1);
+    }
+
+    /**
+     * SDD 3a.3c, 4.4: the history without the exchanges of attempts a later attempt of the same pass through the same
+     * task superseded — the engine applied at most the later one. A pass ends where the task's attempt starts again
+     * at 1. The execution reading the history ({@code taskId}, {@code attempt}) counts as the latest exchange: a retry
+     * doesn't read the attempts it replaces. Superseded exchanges stay stored (and are deleted with the instance); the
+     * model just never sees them.
+     */
+    static List<Exchange> withoutSupersededAttempts(List<Exchange> history, String taskId, int attempt) {
+        List<Exchange> kept = new ArrayList<>(history.size());
+        for (int i = 0; i < history.size(); i++) {
+            Exchange exchange = history.get(i);
+            Boolean superseded = null;
+            for (int j = i + 1; j < history.size() && superseded == null; j++) {
+                superseded = supersedes(exchange, history.get(j).taskId(), history.get(j).attempt());
+            }
+            if (superseded == null) {
+                superseded = supersedes(exchange, taskId, attempt);   // the reader itself, last
+            }
+            if (!Boolean.TRUE.equals(superseded)) {
+                kept.add(exchange);
+            }
+        }
+        return kept;
+    }
+
+    /** Whether a later {@code taskId}/{@code attempt} decides about {@code exchange}: true, false, or null to go on. */
+    private static Boolean supersedes(Exchange exchange, String taskId, int attempt) {
+        if (taskId == null || !taskId.equals(exchange.taskId())) {
+            return null;
+        }
+        if (attempt == 1) {
+            return false;   // a new pass through the task
+        }
+        return attempt > exchange.attempt() ? Boolean.TRUE : null;
     }
 
     private static Optional<JsonNode> outputOf(List<Exchange> history, String correlationId) {
@@ -299,6 +357,7 @@ public final class LangChain4jWorker {
         private ConversationStore conversations;
         private int memoryWindow = 20;
         private Duration retention = Duration.ofDays(30);
+        private Duration commitMargin = DEFAULT_COMMIT_MARGIN;
         private UsageSink usage = UsageSink.LOG;
         private ContentPolicy contentPolicy = ContentPolicy.NONE;
         private ExecutionTracer tracer = ExecutionTracer.NOOP;
@@ -340,6 +399,19 @@ public final class LangChain4jWorker {
                 throw new IllegalArgumentException("memoryWindow must be at least 1");
             }
             this.memoryWindow = messages;
+            return this;
+        }
+
+        /**
+         * SDD 3a.3c: an execution that ends less than this before its task's deadline doesn't commit its exchange —
+         * the engine may discard its result. Covers the result's way back to the engine and the clocks' difference.
+         * Default 5 s.
+         */
+        public Builder commitMargin(Duration margin) {
+            if (margin == null || margin.isNegative()) {
+                throw new IllegalArgumentException("commitMargin must be zero or positive");
+            }
+            this.commitMargin = margin;
             return this;
         }
 
