@@ -1,11 +1,13 @@
 package io.stintflow.worker;
 
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import org.slf4j.Logger;
@@ -49,6 +51,19 @@ public final class WorkerPool implements AutoCloseable {
     /** Deliveries that could start now: a binding asks its broker for at most this many, so none waits in memory. */
     public int available() {
         return permits.availablePermits();
+    }
+
+    /**
+     * Waits until a delivery could start, without taking the slot (SDD 3a.7): a binding with a full pool waits here
+     * instead of receiving a message it couldn't run. Returns whether a slot is free, {@code false} after
+     * {@code timeout} — so the binding can check whether it was stopped.
+     */
+    public boolean awaitAvailable(Duration timeout) throws InterruptedException {
+        if (!permits.tryAcquire(timeout.toNanos(), TimeUnit.NANOSECONDS)) {
+            return false;
+        }
+        permits.release();
+        return true;
     }
 
     /**

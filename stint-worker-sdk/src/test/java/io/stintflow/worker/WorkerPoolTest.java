@@ -3,6 +3,7 @@ package io.stintflow.worker;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -109,6 +110,30 @@ class WorkerPoolTest {
             // SDD 1.3, RF9: the runtime turns the throw into a FAILED result, which is a result like any other
             assertThat(results).singleElement().extracting(TaskResult::status).isEqualTo(TaskResult.Status.FAILED);
             assertThat(acked).containsExactly("c-1");
+        }
+    }
+
+    /** SDD 3a.7, 8b: a binding with a full pool waits for a slot without taking it. */
+    @Test
+    void a_full_pool_can_be_awaited_without_taking_the_freed_slot() throws Exception {
+        try (WorkerPool pool = new WorkerPool(runtime, 1)) {
+            CompletionStage<Void> slow = pool.submit(invoke("c-slow", "slow"), this::ship, () -> acked.add("c-slow"));
+            assertThat(slowStarted.await(10, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(pool.awaitAvailable(Duration.ZERO)).isFalse();   // full: no slot right now
+            CompletableFuture<Boolean> waiting = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return pool.awaitAvailable(Duration.ofSeconds(10));
+                } catch (InterruptedException e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+            assertThat(waiting).isNotDone();
+            releaseSlow.countDown();
+
+            assertThat(waiting.get(10, TimeUnit.SECONDS)).isTrue();
+            slow.toCompletableFuture().get(10, TimeUnit.SECONDS);
+            assertThat(pool.available()).isEqualTo(1);             // the waiter did not keep the slot
         }
     }
 

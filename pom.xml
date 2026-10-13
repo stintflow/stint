@@ -46,6 +46,7 @@
         <module>connectors/stint-inmemory</module>
         <module>connectors/stint-aws</module>
         <module>connectors/stint-aws-conversations</module>
+        <module>connectors/stint-aws-worker</module>
         <module>bundles/stint-bundle-local</module>
         <module>bundles/stint-bundle-aws</module>
         <module>examples/stint-example-build-report</module>
@@ -158,6 +159,17 @@
                 <groupId>io.github.stintflow</groupId>
                 <artifactId>stint-aws-conversations</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-aws-worker</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-aws-worker</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
             </dependency>
             <dependency>
                 <groupId>io.github.stintflow</groupId>
