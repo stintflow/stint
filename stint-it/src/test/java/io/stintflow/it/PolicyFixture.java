@@ -30,12 +30,12 @@ import io.stintflow.inmemory.InMemoryEventPublisher;
 import io.stintflow.inmemory.InMemoryStateStore;
 import io.stintflow.inmemory.InMemoryTimerService;
 import io.stintflow.spi.AdapterCapabilities;
-import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskResultHandler;
 import io.stintflow.spi.TaskTransport;
+import io.stintflow.wire.ClaimCheck;
 import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.worker.TaskHandler;
 import io.stintflow.worker.TaskHandlerRegistry;
@@ -59,7 +59,8 @@ final class PolicyFixture {
     final InMemoryEventPublisher publisher = new InMemoryEventPublisher();
     final List<TaskInvocation> dispatched = new CopyOnWriteArrayList<>();
     final Map<String, Function<TaskInvocation, TaskResult>> workers = new ConcurrentHashMap<>();
-    final BlobStore blobs;
+    final java.nio.file.Path blobDir;
+    final FilesystemBlobStore blobs;
     final WorkflowEngine engine;
     private volatile TaskResultHandler results;
 
@@ -67,7 +68,8 @@ final class PolicyFixture {
         for (String yaml : yamls) {
             registry.register(load(yaml));
         }
-        blobs = new FilesystemBlobStore(Files.createTempDirectory("stint-sdd3a5"));
+        blobDir = Files.createTempDirectory("stint-sdd3a5");
+        blobs = new FilesystemBlobStore(blobDir, now::get);
         engine = new WorkflowEngine(registry, new Transport(), state, new InMemoryTimerService(now::get), blobs,
                 new TreeInterpreter(new JqExpressionEvaluator()), now::get, publisher, null).auditLog(audit);
     }
@@ -77,9 +79,10 @@ final class PolicyFixture {
                 LoadOptions.STRICT);
     }
 
+    /** A worker as a function of its input, rehydrated past any claim-check pointer like a real worker's. */
     PolicyFixture worker(String routingKey, Function<JsonNode, JsonNode> work) {
         workers.put(routingKey, invocation -> TaskResult.completed(invocation.correlationId(),
-                work.apply(invocation.input())));
+                work.apply(ClaimCheck.rehydrate(invocation.input(), blobs).toCompletableFuture().join())));
         return this;
     }
 

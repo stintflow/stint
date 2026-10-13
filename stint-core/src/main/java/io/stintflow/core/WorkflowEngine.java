@@ -46,6 +46,8 @@ import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.core.policy.Policy;
+import io.stintflow.core.policy.RestrictedContentStateStore;
+import io.stintflow.core.policy.RestrictedPointers;
 import io.stintflow.spi.AuditLog;
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.Sensitivity;
@@ -59,6 +61,7 @@ import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
 import io.stintflow.spi.Lineage;
 import io.stintflow.spi.ModelProvider;
 import io.stintflow.spi.OutboxEntry;
+import io.stintflow.spi.RetentionClass;
 import io.stintflow.spi.RetryState;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
@@ -178,17 +181,32 @@ public final class WorkflowEngine {
                           EventPublisher publisher, BlobStore factBlob, ExecutionTracer tracer) {
         this.registry = registry;
         this.transport = transport;
-        this.state = state;
+        // SDD 3a.5, RF6 (E1): a restricted instance's content rests in blobs of its retention class, never here
+        this.state = state instanceof RestrictedContentStateStore ? state
+                : new RestrictedContentStateStore(state, blob, this::restrictedClass, clock);
         this.timer = timer;
         this.blob = blob;
         this.interpreter = interpreter;
         this.clock = clock;
         this.publisher = publisher;
         this.factBlob = factBlob;
-        this.relay = publisher == null ? null : new OutboxRelay(state, publisher, clock);
+        this.relay = publisher == null ? null : new OutboxRelay(this.state, publisher, clock);
         this.tracer = tracer;
         this.transport.onResult(this::onResult);
         this.timer.onFire(this::onTimerFire);
+    }
+
+    /** SDD 3a.5, 8e: the {@code restricted} retention class of a definition — its policy's, else 30 days. */
+    private RetentionClass restrictedClass(WorkflowRef ref) {
+        return registry.find(ref).map(WorkflowDefinition::policy)
+                .flatMap(policy -> policy.retentionOf(RetentionClass.RESTRICTED_DEFAULT.name()))
+                .map(ttl -> new RetentionClass(RetentionClass.RESTRICTED_DEFAULT.name(), ttl))
+                .orElse(RetentionClass.RESTRICTED_DEFAULT);
+    }
+
+    /** SDD 3a.5, RF6: what a restricted instance's content goes to the blob store as; {@code null} for any other. */
+    private RetentionClass contentClass(Instance inst, WorkflowRef ref) {
+        return inst.sensitivity() == Sensitivity.RESTRICTED ? restrictedClass(ref) : null;
     }
 
     /** Start an instance and return its id. The instance runs asynchronously, event by event. */
@@ -254,6 +272,25 @@ public final class WorkflowEngine {
      * {@code FAILED} and still completes normally (sec. 8d) — redelivering it would fail the same way.
      */
     public CompletionStage<String> startFromEvent(WorkflowRef target, CloudEvent trigger) {
+        return withRestrictedData(trigger).thenCompose(resolved -> startFromResolvedEvent(target, resolved));
+    }
+
+    /**
+     * SDD 3a.5, RF6: a restricted fact travels with a {@code dataref} instead of its data (see {@code prepareFacts});
+     * the instance it starts reads the data back from the blob store — in memory only: at rest, that instance's
+     * content goes to a blob again. Any other event is taken as it is.
+     */
+    private CompletionStage<CloudEvent> withRestrictedData(CloudEvent trigger) {
+        Object dataref = trigger.getExtension(FactFactory.DATAREF);
+        if (trigger.getData() != null || dataref == null || blob == null
+                || DefaultCloudEventCodec.sensitivity(trigger) != Sensitivity.RESTRICTED) {
+            return CompletableFuture.completedFuture(trigger);
+        }
+        return blob.get(java.net.URI.create(dataref.toString())).thenApply(bytes -> CloudEventBuilder.v1(trigger)
+                .withData(StintEvents.CONTENT_TYPE_JSON, bytes).withoutExtension(FactFactory.DATAREF).build());
+    }
+
+    private CompletionStage<String> startFromResolvedEvent(WorkflowRef target, CloudEvent trigger) {
         WorkflowDefinition def = registry.find(target).orElse(null);
         if (def == null) {
             return CompletableFuture.failedFuture(
@@ -823,7 +860,8 @@ public final class WorkflowEngine {
         String taskKey = WaitKeys.task(correlationId);
         String timerKey = WaitKeys.timer(correlationId);
         CallRemoteNode body = tryNode.body();
-        Optional<String> refused = policyRefusal(inst, def, body);
+        Optional<String> refused = policyRefusal(inst, def, body,
+                prior != null && prior.dispatchInput() != null ? prior.dispatchInput() : snap.context());
         if (refused.isPresent()) {
             return refuseDispatch(inst, def, body, snap.position(), snap.context(), snap.version(),
                     List.of(retryWaitKey), new RetryState(tryNode.pointer(), nextAttempt, firstAttemptAt,
@@ -845,7 +883,8 @@ public final class WorkflowEngine {
             // Keyed per attempt: with deterministic event-started ids (SDD 2.1, 8a) two racing duplicates must
             // never overwrite each other's claim-checked payload.
             wire = ClaimCheck.offload(interpreter.tryBodyArgument(tryNode, tryInput, snap.context(), wf),
-                    transport.capabilities(), blob, instanceId + "/" + body.name() + "/" + correlationId);
+                    transport.capabilities(), blob, instanceId + "/" + body.name() + "/" + correlationId,
+                    contentClass(inst, def.ref()));
         }
         return wire
                 .thenCompose(wireInput -> {
@@ -1006,7 +1045,13 @@ public final class WorkflowEngine {
                 CloudEvent inline = FactFactory.build(id, e.with(), now, inst.activation());
                 byte[] json = CeWire.toJson(inline);
                 CompletionStage<CloudEvent> fact;
-                if (json.length <= publisher.capabilities().maxPayloadBytes() || !FactFactory.hasData(e.with())) {
+                RetentionClass restricted = contentClass(inst, def.ref());
+                if (restricted != null && FactFactory.hasData(e.with())) {
+                    // SDD 3a.5, RF6: a restricted fact's data never rides the outbox or the bus — it rests in the
+                    // internal blob store, by its class, and the fact carries a dataref
+                    fact = blob.put(FactFactory.dataBytes(e.with()), FactFactory.factKey(def.ref(), id), restricted)
+                            .thenApply(ref -> FactFactory.buildWithDataref(id, e.with(), now, ref, inst.activation()));
+                } else if (json.length <= publisher.capabilities().maxPayloadBytes() || !FactFactory.hasData(e.with())) {
                     fact = CompletableFuture.completedFuture(inline);
                 } else if (factBlob == null) {
                     fact = CompletableFuture.failedFuture(new IllegalStateException("Fact " + id + " is "
@@ -1038,12 +1083,20 @@ public final class WorkflowEngine {
     }
 
     /** SDD 3a.5, RF4 (ADR 3a.5-A, engine side): why the policy refuses dispatching {@code node} now, or empty. */
-    private Optional<String> policyRefusal(Instance inst, WorkflowDefinition def, CallRemoteNode node) {
+    private Optional<String> policyRefusal(Instance inst, WorkflowDefinition def, CallRemoteNode node,
+            JsonNode dispatched) {
         Policy policy = def.policy();
         if (policy == null) {
             return Optional.empty();
         }
         Optional<String> refusal = policy.refusal(node.pointer(), node.routingKey(), inst.sensitivity());
+        // SDD 3a.5, 4.5: a pointer to restricted content only goes where restricted data may go
+        if (refusal.isEmpty() && inst.sensitivity() != Sensitivity.RESTRICTED
+                && policy.refusal(node.pointer(), node.routingKey(), Sensitivity.RESTRICTED).isPresent()
+                && RestrictedPointers.in(dispatched, restrictedClass(def.ref()))) {
+            refusal = Optional.of("the task input holds a pointer to restricted content, and route '"
+                    + node.routingKey() + "' is not allowed for restricted data");
+        }
         if (refusal.isEmpty()) {
             audit(inst, AuditLog.AuditRecord.POLICY, node.pointer(), node.routingKey(), "allowed", Map.of());
         }
@@ -1181,7 +1234,7 @@ public final class WorkflowEngine {
             String position, JsonNode dispatchInput, JsonNode context, long expectedVersion,
             List<String> consumeWaitKeys, RetryState initialRetryState, List<OutboxEntry> outbox) {
         String instanceId = inst.id();
-        Optional<String> refused = policyRefusal(inst, def, node);
+        Optional<String> refused = policyRefusal(inst, def, node, dispatchInput);
         if (refused.isPresent()) {
             return refuseDispatch(inst, def, node, position, context, expectedVersion, consumeWaitKeys,
                     initialRetryState, outbox, refused.get());
@@ -1190,8 +1243,9 @@ public final class WorkflowEngine {
         String taskKey = WaitKeys.task(correlationId);
         String timerKey = WaitKeys.timer(correlationId);
         // Keyed per attempt (see redispatchRetry): racing duplicate creates never share a blob key.
+        // SDD 3a.5, RF6: a restricted instance's task input is always claim-checked — the queue never holds it
         return ClaimCheck.offload(dispatchInput, transport.capabilities(), blob,
-                        instanceId + "/" + node.name() + "/" + correlationId)
+                        instanceId + "/" + node.name() + "/" + correlationId, contentClass(inst, def.ref()))
                 .thenCompose(wireInput -> {
                     // SDD 2.9, RF4: inside a try, attempt 1 records what it dispatched; retries send it again.
                     RetryState retryState = initialRetryState == null ? null

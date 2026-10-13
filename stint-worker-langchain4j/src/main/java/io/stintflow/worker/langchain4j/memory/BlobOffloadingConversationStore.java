@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.spi.BlobStore;
+import io.stintflow.spi.RetentionClass;
 import io.stintflow.wire.ClaimCheck;
 import io.stintflow.wire.Json;
 
@@ -30,15 +31,31 @@ public final class BlobOffloadingConversationStore implements ConversationStore 
     private final ConversationStore delegate;
     private final BlobStore blobs;
     private final int maxInlineBytes;
+    private final RetentionClass retention;
 
     public BlobOffloadingConversationStore(ConversationStore delegate, BlobStore blobs) {
         this(delegate, blobs, DEFAULT_MAX_INLINE_BYTES);
     }
 
     public BlobOffloadingConversationStore(ConversationStore delegate, BlobStore blobs, int maxInlineBytes) {
+        this(delegate, blobs, maxInlineBytes, null);
+    }
+
+    /**
+     * SDD 3a.5, RF6: with a {@code retention} class, blobs go under it (encrypted and expired by the blob store); with
+     * {@code maxInlineBytes} 0, every exchange goes by pointer — a restricted instance's memory.
+     */
+    public BlobOffloadingConversationStore(ConversationStore delegate, BlobStore blobs, int maxInlineBytes,
+            RetentionClass retention) {
         this.delegate = delegate;
         this.blobs = blobs;
         this.maxInlineBytes = maxInlineBytes;
+        this.retention = retention;
+    }
+
+    /** The same memory, every exchange by pointer under {@code retention}. */
+    public BlobOffloadingConversationStore allByPointer(RetentionClass retention) {
+        return new BlobOffloadingConversationStore(delegate, blobs, -1, retention);
     }
 
     @Override
@@ -58,7 +75,7 @@ public final class BlobOffloadingConversationStore implements ConversationStore 
         // A key of its own per commit: a concurrent commit of the same correlationId that loses deletes only its blob.
         String key = "conversations/" + exchange.memory().instanceId() + "/" + exchange.correlationId() + "-"
                 + UUID.randomUUID() + ".json";
-        return blobs.put(bytes, key).thenCompose(uri -> {
+        return (retention == null ? blobs.put(bytes, key) : blobs.put(bytes, key, retention)).thenCompose(uri -> {
             ObjectNode pointer = Json.obj();
             pointer.put(ClaimCheck.POINTER_FIELD, uri.toString());
             return delegate.commit(exchange.withPayload(pointer, null)).thenCompose(outcome ->

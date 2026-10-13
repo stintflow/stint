@@ -31,6 +31,8 @@ import dev.langchain4j.service.Result;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.ErrorInfo.StandardType;
 import io.stintflow.spi.ExecutionTracer;
+import io.stintflow.spi.RetentionClass;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.wire.Json;
 import io.stintflow.worker.TaskContext;
 import io.stintflow.worker.TaskFailure;
@@ -77,6 +79,9 @@ public final class LangChain4jWorker {
 
     private final ChatModel chatModel;
     private final ConversationStore conversations;
+    /** SDD 3a.5, RF6: the same memory with every exchange by pointer, for restricted instances; null without blobs. */
+    private final ConversationStore restrictedConversations;
+    private final RetentionClass restrictedRetention;
     private final int memoryWindow;
     private final Duration retention;
     private final UsageSink usage;
@@ -98,6 +103,9 @@ public final class LangChain4jWorker {
                 null, true);
         this.policy = b.policy;
         this.conversations = b.conversations;
+        this.restrictedRetention = b.restrictedRetention;
+        this.restrictedConversations = b.conversations instanceof BlobOffloadingConversationStore offloading
+                ? offloading.allByPointer(b.restrictedRetention) : null;
         this.memoryWindow = b.memoryWindow;
         this.retention = b.retention;
         this.usage = b.usage;
@@ -214,7 +222,15 @@ public final class LangChain4jWorker {
             case TASK -> MemoryKey.task(ctx.instanceId(), ctx.taskId());
             case NONE -> null;
         };
-        List<Exchange> history = key == null ? List.of() : join(conversations.committed(key));
+        boolean restricted = ctx.sensitivity() == Sensitivity.RESTRICTED;
+        if (key != null && restricted && restrictedConversations == null) {
+            LOG.warn("Task {} of instance {} is restricted and its memory has no blob store: the model is not called",
+                    ctx.taskId(), ctx.instanceId());
+            throw new TaskFailure(StandardType.CONFIGURATION.uri(), 500, "A restricted instance's conversation memory "
+                    + "needs a blob store (conversations(store, blobs)): its content may not rest in the store", null);
+        }
+        ConversationStore store = restricted ? restrictedConversations : conversations;
+        List<Exchange> history = key == null ? List.of() : join(store.committed(key));
         Optional<JsonNode> done = outputOf(history, ctx.correlationId());
         if (done.isPresent()) {
             LOG.info("Task {} of instance {} was delivered again (correlation {}): returning its committed output "
@@ -272,12 +288,14 @@ public final class LangChain4jWorker {
                         "The execution ended past its deadline; its exchange was not committed", null);
             }
             Instant now = commitTime(ctx, history);
+            Duration lives = restricted && restrictedRetention.ttl().compareTo(retention) < 0
+                    ? restrictedRetention.ttl() : retention;
             Exchange exchange = new Exchange(key, ctx.correlationId(), ctx.taskId(), ctx.attempt(), now, messages,
-                    output, now.plus(retention));
-            if (join(conversations.commit(exchange)) == CommitOutcome.ALREADY_COMMITTED) {
+                    output, now.plus(lives));
+            if (join(store.commit(exchange)) == CommitOutcome.ALREADY_COMMITTED) {
                 LOG.info("Task {} of instance {} was committed by a concurrent delivery (correlation {}): returning "
                         + "that delivery's output", ctx.taskId(), ctx.instanceId(), ctx.correlationId());
-                output = outputOf(join(conversations.committed(key)), ctx.correlationId()).orElseThrow(() ->
+                output = outputOf(join(store.committed(key)), ctx.correlationId()).orElseThrow(() ->
                         new IllegalStateException("Exchange " + ctx.correlationId() + " is committed but not readable"));
             }
         }
@@ -380,6 +398,7 @@ public final class LangChain4jWorker {
     public static final class Builder {
         private ChatModel chatModel;
         private ConversationStore conversations;
+        private RetentionClass restrictedRetention = RetentionClass.RESTRICTED_DEFAULT;
         private int memoryWindow = 20;
         private Duration retention = Duration.ofDays(30);
         private Duration commitMargin = DEFAULT_COMMIT_MARGIN;
@@ -411,7 +430,19 @@ public final class LangChain4jWorker {
             return this;
         }
 
-        /** Conversation memory whose big exchanges go to {@code blobs} by pointer. */
+        /**
+         * The retention class of a restricted instance's memory (SDD 3a.5, RF6): every exchange goes to the blob store by
+         * pointer under it, and expires no later than it. Default {@code restricted}, 30 days.
+         */
+        public Builder restrictedRetention(RetentionClass retention) {
+            this.restrictedRetention = Objects.requireNonNull(retention, "retention");
+            return this;
+        }
+
+        /**
+         * Conversation memory whose big exchanges go to {@code blobs} by pointer — and, for a restricted instance, every
+         * exchange (SDD 3a.5).
+         */
         public Builder conversations(ConversationStore store, BlobStore blobs) {
             this.conversations = new BlobOffloadingConversationStore(store, blobs);
             return this;

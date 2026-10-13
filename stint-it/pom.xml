@@ -126,6 +126,12 @@
             <artifactId>sns</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- SDD 3a.5: a KMS key on floci, for SSE-KMS -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kms</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>url-connection-client</artifactId>
