@@ -415,6 +415,11 @@ registry.register("summarize-meeting", ai.handler(MeetingAssistant.class,
   `DynamoDbConversationStore` (module `connectors/stint-aws-conversations`; table with `expiresAt` as TTL, 30 days by
   default). Exchanges over 64 KB go to the `BlobStore` by pointer. `ai.forget(instanceId)` deletes everything an
   instance remembers.
+- **Order and abandoned attempts** (SDD 3a.3b, 3a.3c): an exchange is committed strictly after everything its
+  execution read, so the conversation keeps the steps' order whatever the clocks say. Each dispatch carries its
+  attempt's deadline (the `stintdeadline` extension, `TaskContext.deadline()`): a delivery past it doesn't call the
+  model, and an execution ending inside `commitMargin` (5 s) of it doesn't commit — the engine discards that result
+  anyway. A step never reads an earlier attempt of the same pass through a task, if a later one exists.
 - **Provider errors** become standard errors, with a fixed `detail` that never quotes the provider's message:
   429 is `communication`/429 (with `retryAfter` from `.retryAfter(...)` or `.rateLimitRetryAfter(...)` — LangChain4j
   doesn't expose the provider's header), timeouts are `timeout`/408, 5xx and connection failures are
