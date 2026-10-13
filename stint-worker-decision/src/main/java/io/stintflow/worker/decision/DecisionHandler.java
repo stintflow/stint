@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import io.stintflow.spi.ErrorInfo.StandardType;
+import io.stintflow.spi.ModelProvider;
 import io.stintflow.wire.decision.DecisionContract;
 import io.stintflow.wire.decision.DecisionKind;
 import io.stintflow.wire.decision.DecisionRequest;
@@ -69,6 +70,9 @@ public final class DecisionHandler implements TaskHandler {
                         + refusal.get());
             }
             checkTokenCeiling(request);
+            // SDD 3a.5, RF8: on the result as stintprovider, for the audit trail's remote flag
+            ctx.report().provider(new ModelProvider(descriptor.provider() != null ? descriptor.provider()
+                    : descriptor.id(), descriptor.model(), descriptor.remote()));
             return adapter.decide(request, new DecisionTask(ctx, route.instructions()))
                     .thenApply(decision -> answer(ctx, request, descriptor, decision))
                     .exceptionallyCompose(failure -> CompletableFuture.failedFuture(standard(failure)));

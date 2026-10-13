@@ -57,6 +57,7 @@ import io.stintflow.spi.InboxEntry;
 import io.stintflow.spi.InstanceSnapshot;
 import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
 import io.stintflow.spi.Lineage;
+import io.stintflow.spi.ModelProvider;
 import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.RetryState;
 import io.stintflow.spi.SaveOutcome;
@@ -657,7 +658,9 @@ public final class WorkflowEngine {
             return ClaimCheck.rehydrate(result.output(), blob).thenCompose(rawOutput -> {
                 OutputContract contract = call.outputContract();
                 Instance applied = inst;
-                if (contract != null) {
+                if (contract == null) {
+                    auditAiCall(inst, call, null, result.provider(), "answered");
+                } else {
                     // SDD 3a.1, RF4: an output out of contract is a failure of the task, raised at it.
                     List<String> violations = contract.violations(rawOutput);
                     if (!violations.isEmpty()) {
@@ -668,9 +671,8 @@ public final class WorkflowEngine {
                     }
                     applied = inst.withDecisions(recordOutput(inst.decisions(), call, contract, rawOutput, snap,
                             correlationId));
-                    if (contract.auditKind() == null) {
-                        auditProvenance(inst, call, contract.record(rawOutput));
-                    }
+                    auditAiCall(inst, call, contract.auditKind() == null ? contract.record(rawOutput) : null,
+                            result.provider(), "answered");
                     // SDD 3a.5, RF5: a verified redaction lowers the level — never above where it is
                     Optional<Sensitivity> after = contract.sensitivityAfter(rawOutput);
                     if (after.isPresent() && applied.sensitivity() != null
@@ -688,6 +690,10 @@ public final class WorkflowEngine {
             });
         }
 
+        if (event instanceof ResumeEvent.TaskCompleted tc) {
+            auditFailure(inst, node instanceof TryNode tryNode ? tryNode.body()
+                    : node instanceof CallRemoteNode call ? call : null, tc.result());
+        }
         // SDD 2.8: the standard type, its status, and the failing component's pointer as instance.
         ErrorInfo error = (event instanceof ResumeEvent.TaskCompleted tc && tc.result().error() != null
                 ? tc.result().error()
@@ -1070,19 +1076,52 @@ public final class WorkflowEngine {
                 outbox);
     }
 
-    /** SDD 3a.5, RF8: the provider, model and adapter that answered a checked output (a decision), from its record. */
-    private void auditProvenance(Instance inst, CallRemoteNode call, JsonNode record) {
+    /**
+     * SDD 3a.5, RF8: an AI call — the provider, model and adapter of a checked output's record (a decision) and what the
+     * worker reported on the result ({@code stintprovider}): names and flags only.
+     */
+    /**
+     * SDD 3a.5, RF8: a failed task that reported a provider is a failed AI call; one that reported none and failed with
+     * {@code authorization} was refused by the worker's policy before any provider saw the data. Type and status
+     * only: an error's detail is not audited.
+     */
+    private void auditFailure(Instance inst, CallRemoteNode call, TaskResult result) {
+        if (call == null || result.error() == null) {
+            return;
+        }
+        if (result.provider() != null) {
+            auditAiCall(inst, call, null, result.provider(), "failed");
+        } else if (ErrorInfo.StandardType.AUTHORIZATION.uri().equals(result.error().type())) {
+            audit(inst, AuditLog.AuditRecord.POLICY, call.pointer(), call.routingKey(), "refused",
+                    Map.of("by", "worker", "status", String.valueOf(result.error().status())));
+        }
+    }
+
+    private void auditAiCall(Instance inst, CallRemoteNode call, JsonNode record, ModelProvider provider,
+            String outcome) {
         JsonNode provenance = record == null ? null : record.get("provenance");
-        if (provenance == null || !provenance.isObject()) {
+        boolean hasProvenance = provenance != null && provenance.isObject();
+        if (!hasProvenance && provider == null) {
             return;
         }
         Map<String, String> detail = new HashMap<>();
-        provenance.properties().forEach(e -> {
-            if (e.getValue().isTextual()) {
-                detail.put(e.getKey(), e.getValue().asText());
+        if (hasProvenance) {
+            provenance.properties().forEach(e -> {
+                if (e.getValue().isTextual()) {
+                    detail.put(e.getKey(), e.getValue().asText());
+                }
+            });
+        }
+        if (provider != null) {
+            // SDD 3a.5, RF8: what the worker reported on the result (stintprovider); the decision's provenance, when
+            // there is one, keeps its own provider and model
+            detail.putIfAbsent("provider", provider.name());
+            if (provider.model() != null) {
+                detail.putIfAbsent("model", provider.model());
             }
-        });
-        audit(inst, AuditLog.AuditRecord.AI_CALL, call.pointer(), call.routingKey(), "answered", detail);
+            detail.put("remote", String.valueOf(provider.remote()));
+        }
+        audit(inst, AuditLog.AuditRecord.AI_CALL, call.pointer(), call.routingKey(), outcome, detail);
     }
 
     /**

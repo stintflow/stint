@@ -36,9 +36,10 @@ import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskResultHandler;
 import io.stintflow.spi.TaskTransport;
-import io.stintflow.worker.TaskContext;
-import io.stintflow.worker.TaskFailure;
+import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.worker.TaskHandler;
+import io.stintflow.worker.TaskHandlerRegistry;
+import io.stintflow.worker.WorkerRuntime;
 
 /**
  * SDD 3a.5: engines loaded from YAML with a compliance policy, an in-memory audit log and publisher, and workers
@@ -49,6 +50,7 @@ final class PolicyFixture {
 
     static final Instant T0 = Instant.parse("2026-10-13T12:00:00Z");
     static final String AUTHORIZATION = "https://serverlessworkflow.io/spec/1.0.0/errors/authorization";
+    static final DefaultCloudEventCodec CODEC = new DefaultCloudEventCodec();
 
     final AtomicReference<Instant> now = new AtomicReference<>(T0);
     final WorkflowRegistry registry = new WorkflowRegistry();
@@ -81,21 +83,14 @@ final class PolicyFixture {
         return this;
     }
 
-    /** A real worker-side handler (e.g. the reference redactor), run with the invocation's ids. */
+    /**
+     * A real worker-side handler (the reference redactor, an LLM step), run by a {@link WorkerRuntime} over the real
+     * wire: the invoke carries {@code stintsensitivity}, the result {@code stintprovider}.
+     */
     PolicyFixture handler(String routingKey, TaskHandler handler) {
-        workers.put(routingKey, invocation -> {
-            TaskContext ctx = new TaskContext(invocation.taskId(), invocation.workflowInstanceId(),
-                    invocation.correlationId(), invocation.attempt(), invocation.input(), invocation.definition());
-            try {
-                return TaskResult.completed(invocation.correlationId(),
-                        handler.execute(ctx).toCompletableFuture().join());
-            } catch (java.util.concurrent.CompletionException e) {
-                if (e.getCause() instanceof TaskFailure failure) {
-                    return TaskResult.failed(invocation.correlationId(), failure.toErrorInfo());
-                }
-                throw e;
-            }
-        });
+        WorkerRuntime runtime = new WorkerRuntime(new TaskHandlerRegistry().register(routingKey, handler), blobs);
+        workers.put(routingKey, invocation -> CODEC.toResult(runtime.handle(CODEC.toEvent(invocation))
+                .toCompletableFuture().join()));
         return this;
     }
 

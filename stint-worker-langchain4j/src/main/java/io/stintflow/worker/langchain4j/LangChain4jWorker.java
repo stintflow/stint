@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.time.InstantSource;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -34,6 +35,7 @@ import io.stintflow.wire.Json;
 import io.stintflow.worker.TaskContext;
 import io.stintflow.worker.TaskFailure;
 import io.stintflow.worker.TaskHandler;
+import io.stintflow.worker.decision.SensitivityPolicy;
 import io.stintflow.worker.langchain4j.memory.BlobOffloadingConversationStore;
 import io.stintflow.worker.langchain4j.memory.CommitOutcome;
 import io.stintflow.worker.langchain4j.memory.ConversationStore;
@@ -85,9 +87,16 @@ public final class LangChain4jWorker {
     private final Function<Throwable, Optional<Duration>> retryAfter;
     private final Duration rateLimitRetryAfter;
     private final Duration commitMargin;
+    private final io.stintflow.spi.ModelProvider provider;
+    private final SensitivityPolicy policy;
 
     private LangChain4jWorker(Builder b) {
         this.chatModel = Objects.requireNonNull(b.chatModel, "chatModel is required");
+        // SDD 3a.5, 4.7: without a declared provider, the model counts as remote — the safe side
+        this.provider = b.provider != null ? b.provider : new io.stintflow.spi.ModelProvider(
+                chatModel.provider() == null ? "undeclared" : chatModel.provider().name().toLowerCase(Locale.ROOT),
+                null, true);
+        this.policy = b.policy;
         this.conversations = b.conversations;
         this.memoryWindow = b.memoryWindow;
         this.retention = b.retention;
@@ -165,11 +174,26 @@ public final class LangChain4jWorker {
     private <S> CompletionStage<JsonNode> execute(TaskContext ctx, Class<S> service, MemoryScope scope,
             Consumer<AiServices<S>> configure, OutputValidator validator, AiCall<S> call) {
         try (TaskIdentifiers ids = TaskIdentifiers.inMdc(ctx)) {
+            refuseByPolicy(ctx);
             return CompletableFuture.completedFuture(run(ctx, service, scope, configure, validator, call));
         } catch (TaskFailure failure) {
             return CompletableFuture.failedFuture(failure);
         } catch (RuntimeException e) {
             return CompletableFuture.failedFuture(failure(ctx, e));
+        }
+    }
+
+    /** SDD 3a.5, 4.7: the level the invoke carries against this worker's provider, before anything is read or called. */
+    private void refuseByPolicy(TaskContext ctx) {
+        if (policy == null) {
+            return;
+        }
+        Optional<String> refusal = policy.refusal(ctx.sensitivity(), provider);
+        if (refusal.isPresent()) {
+            LOG.warn("Task {} of instance {}: the sensitivity policy refused the model: {}", ctx.taskId(),
+                    ctx.instanceId(), refusal.get());
+            throw new TaskFailure(StandardType.AUTHORIZATION.uri(), 403,
+                    "The sensitivity policy refused the model: " + refusal.get(), null);
         }
     }
 
@@ -205,6 +229,7 @@ public final class LangChain4jWorker {
             throw new TaskFailure(StandardType.TIMEOUT.uri(), 408,
                     "The task's deadline passed before its execution started", null);
         }
+        ctx.report().provider(provider);   // SDD 3a.5, RF8: the model is about to see the input
 
         ExecutionMemoryStore memory = new ExecutionMemoryStore(
                 messagesOf(withoutSupersededAttempts(history, ctx.taskId(), ctx.attempt())));
@@ -365,6 +390,8 @@ public final class LangChain4jWorker {
         private Duration toolCallLimit = Duration.ofSeconds(5);
         private Function<Throwable, Optional<Duration>> retryAfter = t -> Optional.empty();
         private Duration rateLimitRetryAfter;
+        private io.stintflow.spi.ModelProvider provider;
+        private SensitivityPolicy policy;
 
         private Builder() {
         }
@@ -461,6 +488,29 @@ public final class LangChain4jWorker {
         /** The {@code retryAfter} of a rate limit when the extractor finds none. None by default. */
         public Builder rateLimitRetryAfter(Duration retryAfter) {
             this.rateLimitRetryAfter = retryAfter;
+            return this;
+        }
+
+        /**
+         * Who runs the chat model (SDD 3a.5, 4.7): what the sensitivity policy decides on and what the audit trail
+         * records. {@code remote}: whether the input leaves the worker's process. Undeclared, the model counts as
+         * remote, named after its LangChain4j provider.
+         */
+        public Builder provider(String name, String model, boolean remote) {
+            this.provider = new io.stintflow.spi.ModelProvider(name, model, remote);
+            return this;
+        }
+
+        public Builder provider(String name, boolean remote) {
+            return provider(name, null, remote);
+        }
+
+        /**
+         * The sensitivity policy (SDD 3a.5), checked before every execution against the level the invoke carries: a
+         * refusal is an {@code authorization} 403 without calling the model. None by default.
+         */
+        public Builder policy(SensitivityPolicy policy) {
+            this.policy = Objects.requireNonNull(policy, "policy");
             return this;
         }
 

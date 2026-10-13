@@ -89,16 +89,20 @@ public final class WorkerRuntime {
         try {
             TaskHandler handler = handlers.find(inv.routingKey())
                     .orElseThrow(() -> new IllegalStateException("No handler for routing key: " + inv.routingKey()));
+            TaskReport report = new TaskReport();
             ClaimCheck.rehydrate(inv.input(), blob).thenCompose(input -> {
                 TaskContext ctx = new TaskContext(inv.taskId(), inv.workflowInstanceId(),
                         inv.correlationId(), inv.attempt(), input, inv.definition(), lineage.chainId(), lineage,
-                        inv.deadline());
+                        inv.deadline(), inv.sensitivity(), report);
                 return handler.execute(ctx);
             }).whenComplete((output, ex) -> {
+                // SDD 3a.5, RF8: the provider a handler reported goes on the result, success or failure
                 if (ex != null) {
-                    result.complete(TaskResult.failed(inv.correlationId(), toErrorInfo(ex)));
+                    result.complete(TaskResult.failed(inv.correlationId(), toErrorInfo(ex))
+                            .withProvider(report.provider()));
                 } else {
-                    result.complete(TaskResult.completed(inv.correlationId(), output));
+                    result.complete(TaskResult.completed(inv.correlationId(), output)
+                            .withProvider(report.provider()));
                 }
             });
         } catch (Exception e) {

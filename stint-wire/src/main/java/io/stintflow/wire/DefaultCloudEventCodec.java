@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.Lineage;
+import io.stintflow.spi.ModelProvider;
 import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
@@ -76,6 +77,9 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 .withData(Json.bytes(data))
                 .withExtension(StintEvents.EXT_CORRELATION_ID, result.correlationId())
                 .withExtension(StintEvents.EXT_WORKFLOW_INSTANCE_ID, workflowInstanceId);
+        if (result.provider() != null) {
+            builder.withExtension(StintEvents.EXT_PROVIDER, result.provider().wire());
+        }
         return withLineage(builder, result.lineage()).build();
     }
 
@@ -112,6 +116,22 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
     }
 
     /**
+     * SDD 3a.5, RF8: the result's {@code stintprovider}, or {@code null} when absent; one that can't be read is logged
+     * and dropped — it only feeds the audit trail.
+     */
+    public static ModelProvider provider(CloudEvent event) {
+        String value = optionalExt(event, StintEvents.EXT_PROVIDER);
+        if (value == null) {
+            return null;
+        }
+        return ModelProvider.parse(value).orElseGet(() -> {
+            LOG.log(System.Logger.Level.WARNING, "Event {0} has an unreadable {1} extension: ignored",
+                    event.getId(), StintEvents.EXT_PROVIDER);
+            return null;
+        });
+    }
+
+    /**
      * SDD 3a.3c, tolerant read: no {@code stintdeadline}, or one that isn't an instant, is no known deadline — never
      * an error. An unreadable one is logged without its value.
      */
@@ -135,9 +155,11 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
         String correlationId = ext(event, StintEvents.EXT_CORRELATION_ID);
         TaskResult.Status status = TaskResult.Status.valueOf(data.get("status").asText());
         if (status == TaskResult.Status.FAILED) {
-            return TaskResult.failed(correlationId, errorFromJson(data.get("error"))).withLineage(lineage(event));
+            return TaskResult.failed(correlationId, errorFromJson(data.get("error"))).withLineage(lineage(event))
+                    .withProvider(provider(event));
         }
-        return TaskResult.completed(correlationId, data.get("output")).withLineage(lineage(event));
+        return TaskResult.completed(correlationId, data.get("output")).withLineage(lineage(event))
+                .withProvider(provider(event));
     }
 
     /** SDD 2.5: writes only the lineage extensions that are set. */
