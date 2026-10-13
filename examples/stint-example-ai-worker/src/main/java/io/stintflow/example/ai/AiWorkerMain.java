@@ -1,10 +1,15 @@
 package io.stintflow.example.ai;
 
 import java.io.InputStream;
+import java.io.StringWriter;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.InstantSource;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -13,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import org.eclipse.microprofile.config.ConfigProvider;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.cloudevents.CloudEvent;
 import io.quarkus.runtime.Quarkus;
@@ -23,12 +29,17 @@ import io.stintflow.core.WorkflowEngine;
 import io.stintflow.core.WorkflowRegistry;
 import io.stintflow.dsl.DslLoader;
 import io.stintflow.dsl.LoadOptions;
+import io.stintflow.core.expr.JqExpressionEvaluator;
+import io.stintflow.core.interpreter.TreeInterpreter;
 import io.stintflow.inmemory.FilesystemBlobStore;
+import io.stintflow.inmemory.InMemoryCorrectionLog;
 import io.stintflow.inmemory.InMemoryStateStore;
 import io.stintflow.inmemory.InMemoryTaskTransport;
 import io.stintflow.inmemory.InMemoryTimerService;
 import io.stintflow.spi.BlobStore;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.wire.Json;
+import io.stintflow.wire.review.CorrectionExport;
 import io.stintflow.worker.TaskHandlerRegistry;
 import io.stintflow.worker.WorkerPool;
 import io.stintflow.worker.WorkerRuntime;
@@ -53,6 +64,9 @@ import io.stintflow.worker.langchain4j.memory.InMemoryConversationStore;
  */
 @QuarkusMain
 public class AiWorkerMain implements QuarkusApplication {
+
+    /** SDD 3a.4: the source the example's workflows trust for review answers (their policy lists it). */
+    static final String REVIEW_SOURCE = "https://review-channel.example";
 
     /** A synthetic meeting: no real person, meeting or transcript. */
     static final String TRANSCRIPT = """
@@ -102,7 +116,8 @@ public class AiWorkerMain implements QuarkusApplication {
                 .register("extract-actions", ai.handler(MeetingAssistant.class,
                         (assistant, task) -> assistant.actionItems()));
 
-        try (jev; WorkerPool pool = new WorkerPool(new WorkerRuntime(handlers, blobs), 4)) {
+        try (jev; WorkerPool pool = new WorkerPool(new WorkerRuntime(handlers, blobs), 4);
+             ReviewChannel channel = new ReviewChannel(URI.create(REVIEW_SOURCE))) {
             InMemoryTaskTransport transport = new InMemoryTaskTransport();
             transport.connectWorker(invoke -> {
                 CompletableFuture<CloudEvent> result = new CompletableFuture<>();
@@ -119,14 +134,17 @@ public class AiWorkerMain implements QuarkusApplication {
             });
 
             WorkflowRegistry registry = new WorkflowRegistry();
-            WorkflowDefinition def;
-            try (InputStream yaml = AiWorkerMain.class.getClassLoader()
-                    .getResourceAsStream("stint/workflows/meeting-notes.yaml")) {
-                def = new DslLoader().load(yaml, "meeting-notes.yaml", LoadOptions.STRICT);
-            }
+            WorkflowDefinition def = load("meeting-notes.yaml");
+            WorkflowDefinition review = load("meeting-review.yaml");
             registry.register(def);
+            registry.register(review);
             InMemoryStateStore states = new InMemoryStateStore();
-            WorkflowEngine engine = new WorkflowEngine(registry, transport, states, new InMemoryTimerService(), blobs);
+            InMemoryCorrectionLog corrections = new InMemoryCorrectionLog();
+            // SDD 3a.4: the review channel is the engine's publisher (it sees the requests) and answers through it
+            WorkflowEngine engine = new WorkflowEngine(registry, transport, states, new InMemoryTimerService(), blobs,
+                    new TreeInterpreter(new JqExpressionEvaluator()), InstantSource.system(), channel, null)
+                    .correctionLog(corrections);
+            channel.answersTo(engine);
 
             String id = engine.start(def.ref(), Json.obj().put("transcript", TRANSCRIPT));
             JsonNode context = engine.awaitCompletion(id, Duration.ofSeconds(30)).toCompletableFuture()
@@ -145,9 +163,51 @@ public class AiWorkerMain implements QuarkusApplication {
                     && context.path("actions").path("items").size() == 2
                     // the request of step 2: step 1's user and AI messages, from memory, plus its own question
                     && context.path("actions").path("contextMessages").asInt() == 3;
-            System.out.println(ok ? "AI-WORKER OK" : "AI-WORKER FAILED");
-            return ok ? 0 : 1;
+            boolean reviewOk = reviewThroughTheChannel(engine, channel, review, corrections);
+            System.out.println(ok && reviewOk ? "AI-WORKER OK" : "AI-WORKER FAILED");
+            return ok && reviewOk ? 0 : 1;
         }
+    }
+
+    private static WorkflowDefinition load(String name) throws java.io.IOException {
+        try (InputStream yaml = AiWorkerMain.class.getClassLoader().getResourceAsStream("stint/workflows/" + name)) {
+            return new DslLoader().load(yaml, name, LoadOptions.STRICT);
+        }
+    }
+
+    /**
+     * SDD 3a.4: the business representative rejects one of the minutes' two items through the review channel's HTTP
+     * endpoint; the flow goes back for revision, and the correction is exported as JSONL. Synthetic pointers only.
+     */
+    private static boolean reviewThroughTheChannel(WorkflowEngine engine, ReviewChannel channel,
+            WorkflowDefinition review, InMemoryCorrectionLog corrections) throws Exception {
+        String id = engine.start(review.ref(), Json.obj().put("minutesRef", "file:///synthetic/minutes-1.md")
+                .set("itemIds", Json.MAPPER.createArrayNode().add("item-1").add("item-2")), Sensitivity.INTERNAL);
+        HttpClient http = HttpClient.newHttpClient();
+        JsonNode open = Json.MAPPER.createArrayNode();
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (open.isEmpty() && System.nanoTime() < until) {
+            open = Json.read(http.send(HttpRequest.newBuilder(channel.baseUri().resolve("/reviews")).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray()).body());
+        }
+        System.out.println("AI-WORKER open reviews=" + open);
+        String reviewId = open.path(0).path("reviewId").asText();
+        ObjectNode answer = Json.obj().put("reviewer", "rev-demo").put("noteRef", "file:///synthetic/note-1.md");
+        answer.putArray("items").add(Json.obj().put("id", "item-1").put("verdict", "approved"))
+                .add(Json.obj().put("id", "item-2").put("verdict", "rejected"));
+        int status = http.send(HttpRequest.newBuilder(channel.baseUri().resolve("/reviews/" + reviewId))
+                .header(ReviewChannel.ROLE_HEADER, "business-rep")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(Json.bytes(answer))).build(),
+                HttpResponse.BodyHandlers.discarding()).statusCode();
+        JsonNode reviewed = engine.awaitCompletion(id, Duration.ofSeconds(30)).toCompletableFuture()
+                .get(60, TimeUnit.SECONDS);
+        System.out.println("AI-WORKER review answer status=" + status + " result=" + reviewed);
+        StringWriter jsonl = new StringWriter();
+        int lines = CorrectionExport.write(corrections.of(review.ref()).toCompletableFuture().get(),
+                Sensitivity.INTERNAL, jsonl);
+        System.out.print("AI-WORKER corrections.jsonl=" + jsonl);
+        return status == 202 && reviewed.path("revise").asBoolean()
+                && "[\"item-2\"]".equals(reviewed.path("rejected").toString()) && lines == 1;
     }
 
     /** SDD 3a.2b: the Jev adapter's local profile — no key; refused by the adapter if {@code baseUri} isn't loopback. */
