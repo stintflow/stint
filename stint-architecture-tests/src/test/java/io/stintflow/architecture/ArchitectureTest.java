@@ -34,7 +34,7 @@ class ArchitectureTest {
         for (String pkg : new String[] {"io.stintflow.spi", "io.stintflow.wire", "io.stintflow.core",
                 "io.stintflow.dsl", "io.stintflow.worker", "io.stintflow.worker.langchain4j",
                 "io.stintflow.worker.langchain4j.memory", "io.stintflow.aws.conversations",
-                "io.stintflow.worker.decision", "io.stintflow.worker.decision.jev"}) {
+                "io.stintflow.worker.decision", "io.stintflow.worker.decision.jev", "io.stintflow.aws.worker"}) {
             assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))
                     .as("classes imported from %s", pkg).isNotEmpty();
         }
@@ -49,6 +49,17 @@ class ArchitectureTest {
                     "com.azure..",         // Azure
                     "com.google.cloud..",  // GCP
                     "io.fabric8..");       // Kubernetes
+
+    /**
+     * SDD 3a.7, 4.1: the wire and the plain worker SDK are cloud-blind too — transports live in connectors (the SQS
+     * worker binding is {@code io.stintflow.aws.worker}). {@code io.stintflow.worker} is matched as a single package:
+     * the worker modules under it (LLM, decision) have rules of their own.
+     */
+    @ArchTest
+    static final ArchRule wire_and_worker_sdk_are_cloud_blind = noClasses()
+            .that().resideInAnyPackage("io.stintflow.wire..", "io.stintflow.worker")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "software.amazon..", "com.amazonaws..", "com.azure..", "com.google.cloud..", "io.fabric8..");
 
     /**
      * SDD 3a.1, RF9: the decision contract lives in {@code stint-wire} and {@code call: decision} compiles in
