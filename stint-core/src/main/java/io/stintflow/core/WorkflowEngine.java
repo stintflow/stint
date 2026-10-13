@@ -42,9 +42,11 @@ import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.OutputContract;
 import io.stintflow.core.model.RetryPolicy;
+import io.stintflow.core.model.ReviewSpec;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
 import io.stintflow.spi.BlobStore;
+import io.stintflow.spi.CorrectionLog;
 import io.stintflow.core.policy.Policy;
 import io.stintflow.core.policy.RestrictedContentStateStore;
 import io.stintflow.core.policy.RestrictedPointers;
@@ -138,6 +140,10 @@ public final class WorkflowEngine {
     private final ExecutionTracer tracer;
     /** SDD 3a.5, RF8. */
     private volatile AuditLog audit = AuditLog.NONE;
+    /** SDD 3a.4, 4.9: the audit kind of a review's steps and of the answers it ignores. */
+    static final String REVIEW_AUDIT = "review";
+    /** SDD 3a.4, RF7: where human corrections go. Default {@link CorrectionLog#NONE}. */
+    private volatile CorrectionLog corrections = CorrectionLog.NONE;
 
     /** SDD 2.2, sec. 8c: the outbox shares the activation's transaction (100 items max in DynamoDB). */
     static final int MAX_FACTS_PER_ACTIVATION = 25;
@@ -973,12 +979,25 @@ public final class WorkflowEngine {
 
     // --- persisting an InterpretResult: Suspend / SuspendInTry / Complete / Failed ------------------
 
-    private CompletionStage<SaveOutcome> commit(Instance inst, WorkflowDefinition def, InterpretResult interpreted,
+    private CompletionStage<SaveOutcome> commit(Instance before, WorkflowDefinition def, InterpretResult interpreted,
             long expectedVersion, List<String> consumeWaitKeys) {
-        String instanceId = inst.id();
+        String instanceId = before.id();
         InterpretResult result = checkEmits(interpreted);
-        return prepareFacts(inst, def, result.emitted(), expectedVersion).thenCompose(outbox -> {
-            CompletionStage<SaveOutcome> saved = switch (result) {
+        // SDD 3a.4: a review's events get their id, deadline and fields from its record, kept in the decisions
+        ReviewSupport.Prepared reviews = ReviewSupport.prepare(instanceId, def.ref(), before.decisions(),
+                result.emitted(), clock.instant());
+        if (reviews.problem() != null) {
+            result = failedLike(result, reviews.problem());
+        } else {
+            result = result.withEmitted(reviews.emitted());
+        }
+        Instance inst = reviews.problem() == null ? before.withDecisions(reviews.decisions()) : before;
+        reviews.audits().forEach(a -> audit(inst, REVIEW_AUDIT, a.path("pointer").asText(), null,
+                a.path("outcome").asText(), Map.of("reviewId", a.path("reviewId").asText(),
+                        "role", a.path("role").asText())));
+        InterpretResult committed = result;
+        return prepareFacts(inst, def, committed.emitted(), expectedVersion).thenCompose(outbox -> {
+            CompletionStage<SaveOutcome> saved = switch (committed) {
                 case InterpretResult.Suspend s -> commitSuspend(inst, def, s.node(), s.pointer(), s.dispatchInput(),
                         s.context(), expectedVersion, consumeWaitKeys, null, outbox);
                 case InterpretResult.SuspendInTry s -> commitSuspend(inst, def, s.tryNode().body(),
@@ -1046,7 +1065,9 @@ public final class WorkflowEngine {
                 byte[] json = CeWire.toJson(inline);
                 CompletionStage<CloudEvent> fact;
                 RetentionClass restricted = contentClass(inst, def.ref());
-                if (restricted != null && FactFactory.hasData(e.with())) {
+                // SDD 3a.4, 4.2: review events carry ids, declared names and pointers only — inline at any level
+                boolean review = e.with().path("type").asText("").startsWith(StintEvents.REVIEW_TYPE_PREFIX);
+                if (restricted != null && FactFactory.hasData(e.with()) && !review) {
                     // SDD 3a.5, RF6: a restricted fact's data never rides the outbox or the bus — it rests in the
                     // internal blob store, by its class, and the fact carries a dataref
                     fact = blob.put(FactFactory.dataBytes(e.with()), FactFactory.factKey(def.ref(), id), restricted)
@@ -1077,6 +1098,11 @@ public final class WorkflowEngine {
      * SDD 3a.5, RF8: where the engine records what its policy allowed or refused, what a redaction found and which
      * provider answered a decision. Default {@link AuditLog#NONE}.
      */
+    public WorkflowEngine correctionLog(CorrectionLog corrections) {
+        this.corrections = Objects.requireNonNull(corrections, "corrections");
+        return this;
+    }
+
     public WorkflowEngine auditLog(AuditLog audit) {
         this.audit = Objects.requireNonNull(audit, "audit");
         return this;
@@ -1206,6 +1232,19 @@ public final class WorkflowEngine {
     }
 
     /** Best effort, never failing a transition; ids, levels and counts only. */
+    /** SDD 3a.4, RF7: best effort, like the audit trail; a failure is a WARN with ids. */
+    private void record(CorrectionLog.Correction correction) {
+        try {
+            corrections.append(correction).exceptionally(t -> {
+                LOG.log(Level.WARNING, "Correction {0} not recorded ({1})", correction.reviewId(),
+                        t.getClass().getName());
+                return null;
+            });
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "Correction {0} not recorded ({1})", correction.reviewId(), e.getClass().getName());
+        }
+    }
+
     private void audit(Instance inst, String kind, String pointer, String route, String outcome,
             Map<String, String> detail) {
         AuditLog log = audit;
@@ -1290,7 +1329,7 @@ public final class WorkflowEngine {
         ListenNode listen = s.listen();
         List<String> keys;
         try {
-            keys = listenKeys(listen, s.input(), s.context(), inst.descriptor(def.ref()));
+            keys = listenKeys(listen, s.input(), s.context(), inst.descriptor(def.ref()), inst.decisions());
         } catch (RuntimeException e) {
             return commitTerminal(inst, def.ref(), s.pointer(), s.context(), InstanceStatus.FAILED, expectedVersion,
                     consumeWaitKeys, () -> completeExceptionally(instanceId, e), outbox);
@@ -1324,12 +1363,20 @@ public final class WorkflowEngine {
     }
 
     /** One key per filter, in filter order. */
-    private List<String> listenKeys(ListenNode listen, JsonNode input, JsonNode context, WorkflowDescriptor wf) {
+    private List<String> listenKeys(ListenNode listen, JsonNode input, JsonNode context, WorkflowDescriptor wf,
+            JsonNode decisions) {
+        // SDD 3a.4 (8c): a review phase correlates on the review's id, which only the engine knows
+        String reviewId = listen.review() == null ? null
+                : ReviewSupport.reviewId(decisions, listen.review().reviewPointer());
+        if (listen.review() != null && reviewId == null) {
+            throw new IllegalStateException("listen at " + listen.pointer() + ": no review was asked");
+        }
         List<String> keys = new ArrayList<>();
         for (ListenNode.Filter filter : listen.filters()) {
             SortedMap<String, JsonNode> values = new TreeMap<>();
             for (Map.Entry<String, ListenNode.Correlation> c : filter.correlate().entrySet()) {
-                JsonNode value = interpreter.evaluator().eval(c.getValue().expect(), input, new EvalScope(context, wf));
+                JsonNode value = reviewId != null ? Json.MAPPER.getNodeFactory().textNode(reviewId)
+                        : interpreter.evaluator().eval(c.getValue().expect(), input, new EvalScope(context, wf));
                 if (value == null || value.isNull() || value.isMissingNode()) {
                     throw new IllegalStateException("listen at " + listen.pointer() + ": correlate." + c.getKey()
                             + ".expect evaluated to null");
@@ -1441,6 +1488,20 @@ public final class WorkflowEngine {
         }
 
         CloudEvent ce = arrived.event();
+        ReviewSpec review = listen.review();
+        JsonNode reviewRecord = review == null || inst.decisions() == null ? null
+                : inst.decisions().get(review.reviewPointer());
+        if (review != null) {
+            String refused = reviewRecord == null ? "out-of-contract" : ReviewSupport.refusal(review, ce, reviewRecord);
+            if (refused != null) {
+                Object role = ce.getExtension(StintEvents.EXT_ROLE);
+                LOG.log(Level.INFO, "Instance {0}: answer {1} to review {2} ignored ({3})", inst.id(), ce.getId(),
+                        review.reviewPointer(), refused);
+                audit(inst, REVIEW_AUDIT, review.reviewPointer(), null, refused, Map.of("eventId", ce.getId(),
+                        "role", role == null ? "" : role.toString(), "source", String.valueOf(ce.getSource())));
+                return CompletableFuture.completedFuture(SaveOutcome.OK);
+            }
+        }
         int filterIndex = ListenState.strings(active.get("keys")).indexOf(waitKey);
         if (filterIndex < 0 || !matchesWith(listen.filters().get(filterIndex), ce)
                 || ListenState.alreadyConsumed(snap.listenState(), ce)) {
@@ -1461,13 +1522,44 @@ public final class WorkflowEngine {
         }
 
         ArrayNode consumed = (ArrayNode) after.get("active").get("events");
-        Instance next = inst.withListenState(ListenState.carried(after));
-        WorkflowDescriptor wf = next.descriptor(snap.definition());
-        return readEvents(listen.read(), consumed).thenCompose(output -> {
+        Instance carried = inst.withListenState(ListenState.carried(after));
+        Instant now = clock.instant();
+        CompletionStage<JsonNode> read;
+        Runnable afterSave = () -> { };
+        Instance next = carried;
+        if (review != null) {
+            // SDD 3a.4 (8b): the flow continues with the human answer; the decision's record stays as it was
+            JsonNode decision = review.decisionPointer() == null ? null
+                    : inst.decisions().get(review.decisionPointer());
+            ObjectNode human = ReviewSupport.human(review, ce);
+            String role = String.valueOf(ce.getExtension(StintEvents.EXT_ROLE));
+            String reviewer = ReviewSupport.data(ce).path("reviewer").asText();
+            next = carried.withDecisions(ReviewSupport.answered(inst.decisions(), review.reviewPointer(), human,
+                    role, reviewer, now));
+            read = CompletableFuture.completedFuture(ReviewSupport.result(review, ce, reviewRecord, decision, now));
+            CorrectionLog.Correction correction = ReviewSupport.correction(def.ref(), inst.id(), review,
+                    reviewRecord, decision, human, ce, inst.sensitivity(), now);
+            afterSave = () -> {
+                audit(inst, REVIEW_AUDIT, review.reviewPointer(), null, "answered",
+                        Map.of("reviewId", correction.reviewId(), "role", role));
+                record(correction);
+            };
+        } else {
+            read = readEvents(listen.read(), consumed);
+        }
+        Instance resumed = next;
+        WorkflowDescriptor wf = resumed.descriptor(snap.definition());
+        Runnable recorded = afterSave;
+        return read.thenCompose(output -> {
             InterpretResult result = tryNode != null
                     ? interpreter.resumeTry(def, wf, tryNode, output, snap.context())
                     : interpreter.resume(def, wf, snap.position(), listen, output, snap.context());
-            return commit(next, def, result, snap.version(), consumeAll);
+            return commit(resumed, def, result, snap.version(), consumeAll);
+        }).thenApply(outcome -> {
+            if (outcome == SaveOutcome.OK) {
+                recorded.run();
+            }
+            return outcome;
         }).thenCompose(outcome -> outcome != SaveOutcome.OK || timerKey == null
                 ? CompletableFuture.completedFuture(outcome)
                 : timer.cancel(timerKey).handle((v, ex) -> outcome)); // best-effort: a late fire finds no wait

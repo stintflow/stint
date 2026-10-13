@@ -22,6 +22,7 @@ import io.stintflow.core.expr.Expr;
  *
  * @param timeout {@code timeout.after}, or {@code null} to wait indefinitely; validated against the
  *                timer's max delay when the definition is registered (sec. 8d)
+ * @param review  SDD 3a.4: set when this {@code listen} is a phase of a review, else {@code null}
  */
 public record ListenNode(
         String name,
@@ -31,11 +32,18 @@ public record ListenNode(
         Strategy strategy,
         List<Filter> filters,
         Read read,
-        Duration timeout) implements TaskNode {
+        Duration timeout,
+        ReviewSpec review) implements TaskNode {
 
     public ListenNode {
         filters = List.copyOf(filters);
         read = read == null ? Read.DATA : read;
+    }
+
+    /** A {@code listen} that is not a review (the pre-SDD-3a.4 shape). */
+    public ListenNode(String name, String pointer, DataFlow dataFlow, FlowDirective then, Strategy strategy,
+            List<Filter> filters, Read read, Duration timeout) {
+        this(name, pointer, dataFlow, then, strategy, filters, read, timeout, null);
     }
 
     /** DSL 1.0 Event Consumption Strategy; {@code until} is not supported (sec. 8f). */

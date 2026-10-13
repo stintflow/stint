@@ -58,6 +58,8 @@ final class PolicyFixture {
     final WorkflowRegistry registry = new WorkflowRegistry();
     final InMemoryStateStore state = new InMemoryStateStore();
     final InMemoryAuditLog audit = new InMemoryAuditLog();
+    final io.stintflow.inmemory.InMemoryCorrectionLog corrections = new io.stintflow.inmemory.InMemoryCorrectionLog();
+    final InMemoryTimerService timer = new InMemoryTimerService(now::get);
     final InMemoryEventPublisher publisher = new InMemoryEventPublisher();
     final List<TaskInvocation> dispatched = new CopyOnWriteArrayList<>();
     final Map<String, Function<TaskInvocation, TaskResult>> workers = new ConcurrentHashMap<>();
@@ -80,8 +82,9 @@ final class PolicyFixture {
         }
         blobDir = Files.createTempDirectory("stint-sdd3a5");
         blobs = new FilesystemBlobStore(blobDir, now::get);
-        engine = new WorkflowEngine(registry, new Transport(), state, new InMemoryTimerService(now::get), blobs,
-                new TreeInterpreter(new JqExpressionEvaluator()), now::get, publisher, null, tracer).auditLog(audit);
+        engine = new WorkflowEngine(registry, new Transport(), state, timer, blobs,
+                new TreeInterpreter(new JqExpressionEvaluator()), now::get, publisher, null, tracer).auditLog(audit)
+                .correctionLog(corrections);
     }
 
     static WorkflowDefinition load(String yaml) {

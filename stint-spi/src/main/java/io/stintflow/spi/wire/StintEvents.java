@@ -57,6 +57,20 @@ public final class StintEvents {
     public static final String EXT_SENSITIVITY = "stintsensitivity";
     /** SDD 3a.5, RF8: on a task result, the AI provider that produced it (for the audit trail), if the worker says. */
     public static final String EXT_PROVIDER = "stintprovider";
+    /**
+     * SDD 3a.4, RF2: the role a review is asked of ({@code requested}, {@code reminder}) or the role of whoever answered
+     * ({@code completed}).
+     */
+    public static final String EXT_ROLE = "stintrole";
+
+    /** SDD 3a.4: the prefix of the review events; only a review step may emit them, never an author's {@code emit}. */
+    public static final String REVIEW_TYPE_PREFIX = "io.stintflow.review.";
+    /** SDD 3a.4: a review asked of a role; {@code subject} is the review id. Ids, declared names and pointers only. */
+    public static final String TYPE_REVIEW_REQUESTED = REVIEW_TYPE_PREFIX + "requested.v1";
+    /** SDD 3a.4: a reminder that a review is still open, before its deadline. */
+    public static final String TYPE_REVIEW_REMINDER = REVIEW_TYPE_PREFIX + "reminder.v1";
+    /** SDD 3a.4: a role's answer, published by the review channel; {@code subject} is the review id. */
+    public static final String TYPE_REVIEW_COMPLETED = REVIEW_TYPE_PREFIX + "completed.v1";
 
     public static final String CONTENT_TYPE_JSON = "application/json";
 
