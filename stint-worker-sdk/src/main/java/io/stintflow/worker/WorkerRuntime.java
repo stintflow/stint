@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import io.stintflow.wire.ClaimCheck;
 import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.spi.BlobStore;
@@ -13,6 +15,8 @@ import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.ExecutionSpan;
 import io.stintflow.spi.ExecutionTracer;
 import io.stintflow.spi.Lineage;
+import io.stintflow.spi.RetentionClass;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TraceAttributes;
@@ -95,7 +99,7 @@ public final class WorkerRuntime {
                         inv.correlationId(), inv.attempt(), input, inv.definition(), lineage.chainId(), lineage,
                         inv.deadline(), inv.sensitivity(), report);
                 return handler.execute(ctx);
-            }).whenComplete((output, ex) -> {
+            }).thenCompose(output -> restrictedOutput(inv, output)).whenComplete((output, ex) -> {
                 // SDD 3a.5, RF8: the provider a handler reported goes on the result, success or failure
                 if (ex != null) {
                     result.complete(TaskResult.failed(inv.correlationId(), toErrorInfo(ex))
@@ -111,6 +115,24 @@ public final class WorkerRuntime {
             result.complete(TaskResult.failed(inv.correlationId(), toErrorInfo(e)));
         }
         return result;
+    }
+
+    /**
+     * SDD 3a.5, RF6: a restricted task's output never rides the result queue — it goes to the blob store under the
+     * {@code restricted} class (the worker doesn't know the policy's TTL: the default 30 days), and the engine
+     * rehydrates it. Without a blob store, the task fails closed.
+     */
+    private CompletionStage<JsonNode> restrictedOutput(TaskInvocation inv, JsonNode output) {
+        if (inv.sensitivity() != Sensitivity.RESTRICTED || output == null || ClaimCheck.isPointer(output)) {
+            return CompletableFuture.completedFuture(output);
+        }
+        if (blob == null) {
+            return CompletableFuture.failedFuture(new TaskFailure(ErrorInfo.StandardType.CONFIGURATION.uri(), 500,
+                    "A restricted task's output must be claim-checked and the worker has no blob store", null));
+        }
+        return ClaimCheck.offload(output, null, blob,
+                inv.workflowInstanceId() + "/" + inv.taskId().replace('/', '_') + "/" + inv.correlationId() + ".out",
+                RetentionClass.RESTRICTED_DEFAULT);
     }
 
     private static ErrorInfo toErrorInfo(Throwable t) {

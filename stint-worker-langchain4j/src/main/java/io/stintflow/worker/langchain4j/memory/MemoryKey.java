@@ -9,6 +9,8 @@ package io.stintflow.worker.langchain4j.memory;
 public record MemoryKey(String instanceId, String scope) {
 
     public static final String INSTANCE_SCOPE = "";
+    /** SDD 3a.5, RF6: the suffix of the scope a restricted step's exchanges go to. */
+    public static final String RESTRICTED_SUFFIX = "@restricted";
 
     public MemoryKey {
         if (instanceId == null || instanceId.isBlank()) {
@@ -23,5 +25,13 @@ public record MemoryKey(String instanceId, String scope) {
 
     public static MemoryKey task(String instanceId, String taskId) {
         return new MemoryKey(instanceId, taskId);
+    }
+
+    /**
+     * SDD 3a.5, RF6: the same conversation's restricted part — what a step said while the instance was restricted. A
+     * restricted step reads both parts; a step at a lower level, after a redaction, never reads this one.
+     */
+    public MemoryKey restricted() {
+        return scope.endsWith(RESTRICTED_SUFFIX) ? this : new MemoryKey(instanceId, scope + RESTRICTED_SUFFIX);
     }
 }

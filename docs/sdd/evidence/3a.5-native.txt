@@ -1,0 +1,17 @@
+SDD 3a.5 — native build and run of examples/stint-example-ai-worker with the 3a.5 engine (RestrictedContentStateStore around every state store), worker runtime (TaskReport, stintprovider, restricted output claim-check) and LangChain4j worker (provider descriptor, restricted memory partition) (13/10/2026)
+
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-ai-worker
+[INFO] [io.quarkus.deployment.pkg.steps.NativeImageBuildStep] Running Quarkus native-image plugin on MANDREL 25.0.4.1 JDK 25.0.4.1+1-LTS
+                        5,4s (8,5% of total time) in 821 GCs | Peak RSS: 2,49GB | CPU load: 8,96
+Finished generating 'stint-example-ai-worker-0.1.0-SNAPSHOT-runner' in 1m 3s.
+[INFO] BUILD SUCCESS
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0), exit code 0. The example declares no policy: it shows the changed paths compile and run native; the compliance flow itself is proven in the JVM tests (section 9.2).
+2026-10-13 14:58:22,828 INFO  [io.quarkus] (main) stint-example-ai-worker 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.011s. 
+2026-10-13 14:58:22,845 INFO  [io.stintflow.worker.decision.DecisionUsageSink] () Decision usage of task /do/1/classify in instance 25b8284a-a939-414f-8064-ca935b98bea9 (chain chn-347701ab-76e3-3361-9766-0acf5c5863f7, attempt 1): adapter=llm, provider=fake, model=fake-meeting-rules, calls=1, inputTokens=41, outputTokens=8, latencyMs=0, estimatedCost=null
+2026-10-13 14:58:22,852 INFO  [io.stintflow.worker.decision.DecisionUsageSink] (ForkJoinPool.commonPool-worker-1) Decision usage of task /do/2/urgent in instance 25b8284a-a939-414f-8064-ca935b98bea9 (chain chn-347701ab-76e3-3361-9766-0acf5c5863f7, attempt 1): adapter=litjev, provider=litjev, model=synthetic/qwen-checkpoint, calls=1, inputTokens=0, outputTokens=0, latencyMs=4, estimatedCost=null
+2026-10-13 14:58:22,855 INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/3/summarize in instance 25b8284a-a939-414f-8064-ca935b98bea9 (chain chn-347701ab-76e3-3361-9766-0acf5c5863f7, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=73, outputTokens=10, toolCalls=0, latencyMs=0, finishReason=STOP
+2026-10-13 14:58:22,859 INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/4/extract in instance 25b8284a-a939-414f-8064-ca935b98bea9 (chain chn-347701ab-76e3-3361-9766-0acf5c5863f7, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=119, outputTokens=29, toolCalls=0, latencyMs=0, finishReason=STOP
+AI-WORKER result={"transcript":"Topic: quarterly planning\nSpeaker A: the release slips one week.\nSpeaker B: I will update the roadmap.\nSpeaker A: and I will tell the support team.","doc":"ata","urgent":false,"summary":{"topic":"quarterly planning","speakers":2},"actions":{"items":["Speaker B: I will update the roadmap.","Speaker A: and I will tell the support team."],"contextMessages":3}}
+AI-WORKER urgent decision={"kind":"boolean","value":false,"confidence":0.8,"uncertain":false,"provenance":{"adapter":"litjev","provider":"litjev","model":"synthetic/qwen-checkpoint","version":"jev-adapter/1;server=litjev"},"attempt":1,"correlationId":"7fb70a83-7e50-45dc-90e0-05e3c77f3fcd","decidedAt":"2026-10-13T14:58:22.852572664Z","count":1}
+AI-WORKER OK

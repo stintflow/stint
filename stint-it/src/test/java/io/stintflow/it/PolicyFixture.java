@@ -35,6 +35,8 @@ import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskResultHandler;
 import io.stintflow.spi.TaskTransport;
+import io.stintflow.spi.ExecutionTracer;
+import io.stintflow.wire.CeWire;
 import io.stintflow.wire.ClaimCheck;
 import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.worker.TaskHandler;
@@ -62,16 +64,24 @@ final class PolicyFixture {
     final java.nio.file.Path blobDir;
     final FilesystemBlobStore blobs;
     final WorkflowEngine engine;
+    /** Every invoke and result as it crossed the queue: the wire JSON (SDD 3a.5 scanner). */
+    final List<String> wire = new CopyOnWriteArrayList<>();
+    private final ExecutionTracer tracer;
     private volatile TaskResultHandler results;
 
     PolicyFixture(String... yamls) throws Exception {
+        this(ExecutionTracer.NOOP, yamls);
+    }
+
+    PolicyFixture(ExecutionTracer tracer, String... yamls) throws Exception {
+        this.tracer = tracer;
         for (String yaml : yamls) {
             registry.register(load(yaml));
         }
         blobDir = Files.createTempDirectory("stint-sdd3a5");
         blobs = new FilesystemBlobStore(blobDir, now::get);
         engine = new WorkflowEngine(registry, new Transport(), state, new InMemoryTimerService(now::get), blobs,
-                new TreeInterpreter(new JqExpressionEvaluator()), now::get, publisher, null).auditLog(audit);
+                new TreeInterpreter(new JqExpressionEvaluator()), now::get, publisher, null, tracer).auditLog(audit);
     }
 
     static WorkflowDefinition load(String yaml) {
@@ -91,9 +101,15 @@ final class PolicyFixture {
      * wire: the invoke carries {@code stintsensitivity}, the result {@code stintprovider}.
      */
     PolicyFixture handler(String routingKey, TaskHandler handler) {
-        WorkerRuntime runtime = new WorkerRuntime(new TaskHandlerRegistry().register(routingKey, handler), blobs);
-        workers.put(routingKey, invocation -> CODEC.toResult(runtime.handle(CODEC.toEvent(invocation))
-                .toCompletableFuture().join()));
+        WorkerRuntime runtime = new WorkerRuntime(new TaskHandlerRegistry().register(routingKey, handler), blobs,
+                tracer);
+        workers.put(routingKey, invocation -> {
+            io.cloudevents.CloudEvent invoke = CODEC.toEvent(invocation);
+            wire.add(new String(CeWire.toJson(invoke), StandardCharsets.UTF_8));
+            io.cloudevents.CloudEvent result = runtime.handle(invoke).toCompletableFuture().join();
+            wire.add(new String(CeWire.toJson(result), StandardCharsets.UTF_8));
+            return CODEC.toResult(result);
+        });
         return this;
     }
 

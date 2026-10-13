@@ -229,8 +229,12 @@ public final class LangChain4jWorker {
             throw new TaskFailure(StandardType.CONFIGURATION.uri(), 500, "A restricted instance's conversation memory "
                     + "needs a blob store (conversations(store, blobs)): its content may not rest in the store", null);
         }
+        // SDD 3a.5, RF6: what a restricted step says rests apart, by pointer; a lower step never reads it back
         ConversationStore store = restricted ? restrictedConversations : conversations;
-        List<Exchange> history = key == null ? List.of() : join(store.committed(key));
+        MemoryKey commitKey = key == null ? null : restricted ? key.restricted() : key;
+        List<Exchange> history = key == null ? List.of() : restricted
+                ? merged(join(conversations.committed(key)), join(store.committed(commitKey)))
+                : join(conversations.committed(key));
         Optional<JsonNode> done = outputOf(history, ctx.correlationId());
         if (done.isPresent()) {
             LOG.info("Task {} of instance {} was delivered again (correlation {}): returning its committed output "
@@ -290,12 +294,12 @@ public final class LangChain4jWorker {
             Instant now = commitTime(ctx, history);
             Duration lives = restricted && restrictedRetention.ttl().compareTo(retention) < 0
                     ? restrictedRetention.ttl() : retention;
-            Exchange exchange = new Exchange(key, ctx.correlationId(), ctx.taskId(), ctx.attempt(), now, messages,
-                    output, now.plus(lives));
+            Exchange exchange = new Exchange(commitKey, ctx.correlationId(), ctx.taskId(), ctx.attempt(), now,
+                    messages, output, now.plus(lives));
             if (join(store.commit(exchange)) == CommitOutcome.ALREADY_COMMITTED) {
                 LOG.info("Task {} of instance {} was committed by a concurrent delivery (correlation {}): returning "
                         + "that delivery's output", ctx.taskId(), ctx.instanceId(), ctx.correlationId());
-                output = outputOf(join(store.committed(key)), ctx.correlationId()).orElseThrow(() ->
+                output = outputOf(join(store.committed(commitKey)), ctx.correlationId()).orElseThrow(() ->
                         new IllegalStateException("Exchange " + ctx.correlationId() + " is committed but not readable"));
             }
         }
@@ -358,6 +362,14 @@ public final class LangChain4jWorker {
             return false;   // a new pass through the task
         }
         return attempt > exchange.attempt() ? Boolean.TRUE : null;
+    }
+
+    /** Two parts of one conversation, in the store's order: by commit time, then correlationId. */
+    private static List<Exchange> merged(List<Exchange> open, List<Exchange> restricted) {
+        List<Exchange> all = new ArrayList<>(open);
+        all.addAll(restricted);
+        all.sort(java.util.Comparator.comparing(Exchange::committedAt).thenComparing(Exchange::correlationId));
+        return all;
     }
 
     private static Optional<JsonNode> outputOf(List<Exchange> history, String correlationId) {

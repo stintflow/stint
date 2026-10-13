@@ -78,7 +78,7 @@ class RestrictedMemoryTest {
     }
 
     private List<Exchange> stored() {
-        return store.committed(MemoryKey.instance("i-R")).toCompletableFuture().join();
+        return store.exchangesOf("i-R").toCompletableFuture().join();
     }
 
     @Test
@@ -91,6 +91,7 @@ class RestrictedMemoryTest {
         run(step(worker), task("c-2", Sensitivity.RESTRICTED));
 
         assertThat(stored()).hasSize(2).allSatisfy(exchange -> {
+            assertThat(exchange.memory()).isEqualTo(MemoryKey.instance("i-R").restricted());
             assertThat(ClaimCheck.isPointer(exchange.messages())).isTrue();
             assertThat(exchange.toString()).doesNotContain(MARKER);
             assertThat(exchange.expiresAt()).isEqualTo(exchange.committedAt().plus(Duration.ofDays(2)));
@@ -98,6 +99,24 @@ class RestrictedMemoryTest {
         assertThat(blobs.data.keySet()).allSatisfy(uri -> assertThat(uri.toString())
                 .startsWith("mem://retention/restricted/conversations/i-R/"));
         assertThat(model.lastMessages().toString()).contains(MARKER);   // the second step read the first back
+    }
+
+    @Test
+    void a_step_after_a_redaction_lowered_the_instance_never_reads_what_was_said_while_restricted() {
+        ScriptedModel model = ScriptedModel.echoing();
+        LangChain4jWorker worker = LangChain4jWorker.builder().chatModel(model).conversations(store, blobs)
+                .clock(clock).build();
+
+        run(step(worker), task("c-1", Sensitivity.CONFIDENTIAL));   // said before it was restricted
+        run(step(worker), task("c-2", Sensitivity.RESTRICTED));     // reads both parts
+        assertThat(model.lastMessages()).hasSize(3);   // c-1's question and answer, and its own question
+        run(step(worker), new TaskContext("/do/2/ask", "i-R", "c-3", 1, Json.obj().put("text", "redacted"),
+                new WorkflowRef("test", "ai", "1.0.0"), "chn-i-R", Lineage.NONE, null, Sensitivity.CONFIDENTIAL,
+                new TaskReport()));
+
+        assertThat(model.lastMessages()).hasSize(3);   // c-1's question and answer, and its own question
+        assertThat(model.requests.get(2).messages().toString()).contains("1:SYNTH-PII-0201")
+                .doesNotContain("3:SYNTH-PII-0201");   // never c-2's answer, said while restricted
     }
 
     @Test

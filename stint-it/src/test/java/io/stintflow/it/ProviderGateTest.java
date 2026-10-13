@@ -75,7 +75,7 @@ class ProviderGateTest {
                       export:
                         as: '${ . }'
                 """).handler("summarize-local", summarizer(LangChain4jWorker.builder().chatModel(model)
-                .policy(WORKER_POLICY).build()));   // misconfigured: undeclared, so remote
+                .policy(WORKER_POLICY).clock(() -> PolicyFixture.T0).build()));   // misconfigured: undeclared, so remote
 
         String id = f.engine.start(REF, Json.obj().put("transcript", TRANSCRIPT));
 
@@ -109,7 +109,7 @@ class ProviderGateTest {
                 .handler("redactor", new RedactionHandler(LayeredRedactor.reference(),
                         new Pseudonyms("synthetic-secret-0123456789".getBytes(StandardCharsets.UTF_8))))
                 .handler("summarize-remote", summarizer(LangChain4jWorker.builder().chatModel(model)
-                        .provider("approved-cloud", "rule-model", true).policy(WORKER_POLICY).build()));
+                        .provider("approved-cloud", "rule-model", true).policy(WORKER_POLICY).clock(() -> PolicyFixture.T0).build()));
 
         String id = f.engine.start(REF, Json.obj().put("transcript", TRANSCRIPT));
 

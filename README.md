@@ -37,6 +37,7 @@ stint-core               the cloud-blind orchestrator: dispatch / suspend / resu
 stint-dsl                YAML/JSON front-end: compiles the CNCF DSL 1.0 into stint-core's tree model
 stint-worker-sdk         uniform TaskHandler programming model (depends on stint-wire, not stint-core)
 stint-otel               OpenTelemetry implementation of the tracing port (the only module using OTel)
+stint-worker-redaction   reference redactor for `call: redact`: layered, deterministic, no AI library (SDD 3a.5)
 connectors/
   stint-inmemory         single-JVM transport/state/timer/blob/domain-event bus — the local dev+test path
   stint-aws              S3 (blob) · DynamoDB (state) · SQS/SNS/EventBridge (transport) · SQS-delay (timer)
@@ -96,6 +97,7 @@ type: io.stintflow.task.invoke.v1   (engine → worker)
 type: io.stintflow.task.result.v1   (worker → engine)
 extensions: correlationid · workflowinstanceid · taskid · attempt · definition
             chainid · causationid · traceparent · tracestate      (SDD 2.5, optional)
+            stintsensitivity (invoke, fact) · stintprovider (result)  (SDD 3a.5, optional)
 ```
 
 - `correlationid` is the correlation of an **attempt**: one dispatch of one task. It matches a result to
@@ -443,6 +445,71 @@ registry.register("summarize-meeting", ai.handler(MeetingAssistant.class,
   `maxExtension` (1 h), and `close()` waits `shutdownGrace` (30 s) then hands the unfinished back unacknowledged.
   Logs carry ids only; `SqsWorkerMetrics` counts. Give invoke queues a `maxReceiveCount` of 3 or more. Measured over
   floci with 50 tasks (10 slow): p95 22.7 s with concurrency 1, 2.7 s with 8.
+
+## Input compliance: sensitivity, redaction and the policy port (SDD 3a.5)
+
+> **A technical design, not legal advice. No real data — no real meeting, transcript or personal data — goes into a
+> Stint workflow before this design is validated with the DPO and legal (LGPD: legal bases, retention per class,
+> approved providers per level, data region, data subjects' rights).** See SDD 3a.5, section 10.
+
+Every instance has a **sensitivity level**, `internal < confidential < restricted`, that only rises. It comes from
+the trigger's `stintsensitivity` extension, else the policy's `sensitivity.from` expression, else `restricted`. It
+travels on every invoke and on every fact the instance emits, so whatever a fact starts inherits it. An event of a
+higher level raises it. Only a `call: redact` without doubt lowers it, and only to its `lowersTo`.
+
+The policy is a Stint extension in the document's metadata, so the document stays valid CNCF DSL 1.0. `STRICT`
+rejects any key it doesn't know:
+
+```yaml
+document:
+  metadata:
+    x-stint-policy:
+      sensitivity: { from: '${ .[0].data.label }' }
+      routes:
+        restricted: [redactor, summarize-local]
+        confidential: [redactor, summarize-local, summarize-remote]
+        internal: ['*']
+      retention:
+        restricted: { days: 30 }
+do:
+  - redact:
+      call: redact
+      with: { task: redactor, input: '${ .transcript }', lowersTo: confidential }
+      onDoubt: local                       # optional: a doubtful result goes here, still restricted
+      export: { as: '${ {transcript: .output} }' }   # keep only the redacted text from here on
+```
+
+- **Two gates (ADR 3a.5-A).** The engine refuses a route the level doesn't allow, before anything is dispatched.
+  The worker refuses a provider the level doesn't allow, before the model is called: `SensitivityPolicy` allows
+  `restricted` (and no level at all) only to a local provider (`remote = false`), `confidential` to a local one or one
+  on `stint.policy.confidential.providers`, and `internal` to any. Both refusals are `authorization` (403), which a
+  `catch` handles. A task may lower its own ceiling with `metadata.x-stint-policy.maxSensitivity`. The engine never
+  sees a provider, and the worker never sees a route table.
+- **LLM workers** declare their provider: `.provider("litjev", false)` or `.provider("openai", "gpt-x", true)`, and
+  `.policy(SensitivityPolicy.fromProperties(props))`. Undeclared, a model counts as remote. Restricted data with low
+  confidence goes to a human (SDD 3a.4), **never to a remote provider**: the policy would refuse that too.
+- **Redaction** (`stint-worker-redaction`, no AI library): `RedactionHandler` over a `LayeredRedactor` answers the
+  redaction contract (`output`, `counts` by type, `doubt`, `provenance`). The reference `PatternLayer` finds e-mail,
+  card (Luhn), CPF/CNPJ, IP, phone and address; a `TermListLayer` adds a list of names; your pipeline adds its own
+  layers. A value becomes a stable per-instance pseudonym (`EMAIL_3f9a2c`, an HMAC of a worker secret), with no map
+  back. Digits it can't classify are doubt, and doubt or a failure keeps the instance restricted.
+- **Restricted content at rest** (decision 8e, E1). A restricted instance's context, listen state and try input rest
+  in a blob of the `restricted` retention class, and the snapshot keeps a pointer. Its raw input rests in a blob of
+  its own for the whole life of the instance. Invokes and results are always claim-checked, restricted facts travel
+  by `dataref`, and a restricted step's conversation goes by pointer into a part of the memory that steps at a lower
+  level never read. A pointer to restricted content is refused on a route restricted data may not take. Content gone
+  past its retention fails the instance; it is never resumed on anything else.
+- **Retention and encryption**: `BlobStore.put(data, key, RetentionClass)` puts a blob under `retention/<class>/`.
+  `FilesystemBlobStore` expires it by its clock. `S3BlobStore` encrypts every object (SSE-KMS with
+  `stint.aws.s3.kms-key-id`, else SSE-S3), tags it `stint-retention=<class>`, and `applyLifecycle(classes)` sets the
+  bucket's expiration rules by prefix (floci accepts and returns them; their effect runs on AWS).
+- **Audit trail**: the `AuditLog` port records each policy decision (`policy`: allowed or refused, by the engine or
+  the worker), each redaction (`redaction`: counts, doubt, lowered or kept) and each AI call (`ai-call`: route,
+  provider, model, `remote`, from the decision's provenance or the result's additive `stintprovider` extension).
+  Ids, levels and counts only, never a value. `InMemoryAuditLog`, and `DynamoDbAuditLog` (table `stint-audit`,
+  `instanceId` + `entry`, `expiresAt` TTL of 400 days). Wire it with `engine.auditLog(...)`.
+- Without a policy, a definition behaves as before 3a.5. `WorkflowRegistry.requirePolicy()` makes the policy
+  mandatory: do that for agentic workflows.
 
 ## Honest MVP cuts (deliberate, documented)
 
