@@ -152,6 +152,9 @@ public final class DslLoader {
         /** SDD 3a.1: {@code call: decision} (Stint extension) — its own task key, {@code with} keys and option keys. */
         private static final Set<String> DECISION_WITH_KEYS = Set.of("task", "kind", "input", "options");
         private static final Set<String> DECISION_OPTION_KEYS = Set.of("description", "then");
+        /** SDD 3a.5: {@code call: redact} (Stint extension) — its {@code with} keys and where a doubtful one goes. */
+        private static final Set<String> REDACT_WITH_KEYS = Set.of("task", "input", "lowersTo", "types");
+        private static final String ON_DOUBT = "onDoubt";
         private static final Set<String> TIMEOUT_KEYS = Set.of("after");
         private static final Set<String> DURATION_KEYS = Set.of("days", "hours", "minutes", "seconds", "milliseconds");
         private static final Set<String> INPUT_KEYS = Set.of("from");
@@ -445,6 +448,9 @@ public final class DslLoader {
                 if (isDecision(body)) {
                     checkTaskKeys(body, pointer);
                     compiled = compileDecision(taskName, body, pointer, null);
+                } else if (isRedact(body)) {
+                    checkTaskKeys(body, pointer);
+                    compiled = compileRedact(taskName, body, pointer);
                 } else if (isDecisionTry(body)) {
                     compiled = compileTryDecision(taskName, body, pointer);
                 } else {
@@ -460,6 +466,79 @@ public final class DslLoader {
 
         private static boolean isDecision(JsonNode body) {
             return body != null && body.isObject() && "decision".equals(body.path("call").asText(null));
+        }
+
+        private static boolean isRedact(JsonNode body) {
+            return body != null && body.isObject() && "redact".equals(body.path("call").asText(null));
+        }
+
+        /**
+         * SDD 3a.5, RF5: {@code call: redact} (Stint extension) — a {@code call: remote} to {@code with.task}, the
+         * redactor, whose argument is {@code {input, types}} and whose output is checked against the redaction contract
+         * of {@code stint-wire}. A valid result without doubt lowers the instance's level to {@code with.lowersTo}; with
+         * {@code onDoubt}, a generated {@code <task>/route} switch sends a doubtful result there (the author's
+         * {@code output.as}/{@code export.as} then go on the switch, as for a decision). Only directly in a flow, not as
+         * a try's body.
+         */
+        private List<TaskNode> compileRedact(String name, JsonNode body, String pointer) {
+            JsonNode with = body.get("with");
+            if (with == null || !with.isObject()) {
+                hardError(pointer + "/with", "'call: redact' requires 'with' (task, input, lowersTo)", null);
+                return List.of();
+            }
+            checkKeys(with, pointer + "/with", REDACT_WITH_KEYS);
+            if (!with.hasNonNull("task") || with.get("task").asText().isBlank()) {
+                hardError(pointer + "/with/task", "'call: redact' requires 'with.task' (the routing key)", null);
+                return List.of();
+            }
+            Sensitivity lowersTo = null;
+            if (with.has("lowersTo")) {
+                lowersTo = Sensitivity.parse(with.get("lowersTo").asText()).orElse(null);
+                if (lowersTo == null) {
+                    hardError(pointer + "/with/lowersTo", "'" + with.get("lowersTo").asText()
+                            + "' is not a level (internal, confidential, restricted)", null);
+                    return List.of();
+                }
+            }
+            StringBuilder types = new StringBuilder("[");
+            JsonNode typesNode = with.get("types");
+            if (typesNode != null) {
+                if (!typesNode.isArray()) {
+                    hardError(pointer + "/with/types", "'with.types' is a list of data types (email, phone, ...)", null);
+                    return List.of();
+                }
+                for (int i = 0; i < typesNode.size(); i++) {
+                    types.append(i == 0 ? "" : ", ").append(com.fasterxml.jackson.databind.node.TextNode
+                            .valueOf(typesNode.get(i).asText()));
+                }
+            }
+            types.append(']');
+            JsonNode onDoubt = body.get(ON_DOUBT);
+            if (onDoubt != null && !onDoubt.isTextual()) {
+                hardError(pointer + "/" + ON_DOUBT, "'onDoubt' is a task name or a flow directive, like 'then'", null);
+                return List.of();
+            }
+            String input = with.has("input") ? TemplateCompiler.compileTemplate(with.get("input")) : ".";
+            Expr request = compileAndValidate("{\"" + io.stintflow.wire.redaction.RedactionContract.INPUT + "\": ("
+                    + input + "), \"" + io.stintflow.wire.redaction.RedactionContract.TYPES + "\": " + types + "}",
+                    pointer + "/with");
+            DataFlow authored = compileDataFlow(body, pointer, null, null);
+            RedactionOutputContract contract = new RedactionOutputContract(lowersTo);
+            String routingKey = with.path("task").asText();
+            Duration timeout = compileTimeout(body, pointer);
+            if (onDoubt == null) {
+                return List.of(new CallRemoteNode(name, pointer, authored, compileThen(body), routingKey, timeout,
+                        request, contract));
+            }
+            CallRemoteNode call = new CallRemoteNode(name, pointer, new DataFlow(authored.inputFrom(), null, null),
+                    FlowDirective.CONTINUE, routingKey, timeout, request, contract);
+            SwitchNode route = new SwitchNode(name + DecisionExpansion.ROUTE_SUFFIX,
+                    pointer + DecisionExpansion.ROUTE_SUFFIX, new DataFlow(null, authored.outputAs(),
+                            authored.exportAs()), FlowDirective.CONTINUE, List.of(
+                            new SwitchNode.Case("doubt", Expr.jq("." + io.stintflow.wire.redaction.RedactionContract
+                                    .DOUBT + " == true"), directive(onDoubt.asText())),
+                            new SwitchNode.Case("default", null, compileThen(body))));
+            return List.of(call, route);
         }
 
         private static boolean isDecisionTry(JsonNode body) {
@@ -1160,6 +1239,9 @@ public final class DslLoader {
             allowed.addAll(specific);
             if (isDecision(body)) {
                 allowed.add(DecisionExpansion.ON_UNCERTAIN); // SDD 3a.1: a Stint extension key, only on 'call: decision'
+            }
+            if (isRedact(body)) {
+                allowed.add(ON_DOUBT); // SDD 3a.5: a Stint extension key, only on 'call: redact'
             }
             checkKeys(body, pointer, allowed);
         }

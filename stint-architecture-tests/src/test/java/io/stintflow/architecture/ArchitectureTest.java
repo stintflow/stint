@@ -34,7 +34,8 @@ class ArchitectureTest {
         for (String pkg : new String[] {"io.stintflow.spi", "io.stintflow.wire", "io.stintflow.core",
                 "io.stintflow.dsl", "io.stintflow.worker", "io.stintflow.worker.langchain4j",
                 "io.stintflow.worker.langchain4j.memory", "io.stintflow.aws.conversations",
-                "io.stintflow.worker.decision", "io.stintflow.worker.decision.jev", "io.stintflow.aws.worker"}) {
+                "io.stintflow.worker.decision", "io.stintflow.worker.decision.jev", "io.stintflow.aws.worker",
+                "io.stintflow.worker.redaction"}) {
             assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))
                     .as("classes imported from %s", pkg).isNotEmpty();
         }
@@ -111,6 +112,23 @@ class ArchitectureTest {
             .that().resideInAnyPackage("io.stintflow.worker.decision..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     "dev.langchain4j..", "io.quarkiverse.langchain4j..", "software.amazon..", "com.amazonaws..");
+
+    /**
+     * SDD 3a.5, RF5: the reference redactor is deterministic and runs where the data is — no AI library, no cloud SDK,
+     * no OpenTelemetry; and nothing of the engine side depends on it.
+     */
+    @ArchTest
+    static final ArchRule redactor_has_no_ai_libs_or_cloud_sdks = noClasses()
+            .that().resideInAnyPackage("io.stintflow.worker.redaction..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "dev.langchain4j..", "io.quarkiverse.langchain4j..", "software.amazon..", "com.amazonaws..",
+                    "com.azure..", "com.google.cloud..", "io.opentelemetry..");
+
+    @ArchTest
+    static final ArchRule engine_side_and_worker_sdk_do_not_depend_on_the_redactor = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.dsl..", "io.stintflow.worker")
+            .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.worker.redaction..");
 
     /**
      * SDD 1.5, RF1/RF2: reactivated once {@code Json}, {@code CeWire}, {@code DefaultCloudEventCodec}

@@ -668,7 +668,18 @@ public final class WorkflowEngine {
                     }
                     applied = inst.withDecisions(recordOutput(inst.decisions(), call, contract, rawOutput, snap,
                             correlationId));
-                    auditProvenance(inst, call, contract.record(rawOutput));
+                    if (contract.auditKind() == null) {
+                        auditProvenance(inst, call, contract.record(rawOutput));
+                    }
+                    // SDD 3a.5, RF5: a verified redaction lowers the level — never above where it is
+                    Optional<Sensitivity> after = contract.sensitivityAfter(rawOutput);
+                    if (after.isPresent() && applied.sensitivity() != null
+                            && applied.sensitivity().compareTo(after.get()) > 0) {
+                        applied = applied.withSensitivity(after.get());
+                    }
+                    if (contract.auditKind() != null) {
+                        auditOutput(inst, applied, call, contract, rawOutput);
+                    }
                 }
                 InterpretResult next = node instanceof TryNode tryNode
                         ? interpreter.resumeTry(def, wf, tryNode, rawOutput, snap.context())
@@ -1072,6 +1083,34 @@ public final class WorkflowEngine {
             }
         });
         audit(inst, AuditLog.AuditRecord.AI_CALL, call.pointer(), call.routingKey(), "answered", detail);
+    }
+
+    /**
+     * SDD 3a.5, RF8: an audited output (a redaction): its record's numbers and flags — never the output itself — and
+     * whether the level went down.
+     */
+    private void auditOutput(Instance before, Instance after, CallRemoteNode call, OutputContract contract,
+            JsonNode output) {
+        JsonNode record = contract.record(output);
+        Map<String, String> detail = new HashMap<>();
+        if (record != null) {
+            record.properties().forEach(e -> {
+                if (e.getValue().isObject()) {
+                    e.getValue().properties().forEach(inner -> {
+                        if (inner.getValue().isValueNode()) {
+                            detail.put(e.getKey() + "." + inner.getKey(), inner.getValue().asText());
+                        }
+                    });
+                } else if (e.getValue().isValueNode()) {
+                    detail.put(e.getKey(), e.getValue().asText());
+                }
+            });
+        }
+        boolean lowered = before.sensitivity() != null && after.sensitivity() != before.sensitivity();
+        if (lowered) {
+            detail.put("from", before.sensitivity().wireName());
+        }
+        audit(after, contract.auditKind(), call.pointer(), call.routingKey(), lowered ? "lowered" : "kept", detail);
     }
 
     /** Best effort, never failing a transition; ids, levels and counts only. */

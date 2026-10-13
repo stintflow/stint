@@ -40,6 +40,11 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-aws-conversations</artifactId>
         </dependency>
+        <!-- SDD 3a.5: the reference redactor end to end -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-redaction</artifactId>
+        </dependency>
         <!-- SDD 3a.2: decision adapters end to end (fake adapter, LLM over a fake model, Jev over a fake server) -->
         <dependency>
             <groupId>io.github.stintflow</groupId>

@@ -36,6 +36,9 @@ import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.TaskResultHandler;
 import io.stintflow.spi.TaskTransport;
+import io.stintflow.worker.TaskContext;
+import io.stintflow.worker.TaskFailure;
+import io.stintflow.worker.TaskHandler;
 
 /**
  * SDD 3a.5: engines loaded from YAML with a compliance policy, an in-memory audit log and publisher, and workers
@@ -53,7 +56,7 @@ final class PolicyFixture {
     final InMemoryAuditLog audit = new InMemoryAuditLog();
     final InMemoryEventPublisher publisher = new InMemoryEventPublisher();
     final List<TaskInvocation> dispatched = new CopyOnWriteArrayList<>();
-    final Map<String, Function<JsonNode, JsonNode>> workers = new ConcurrentHashMap<>();
+    final Map<String, Function<TaskInvocation, TaskResult>> workers = new ConcurrentHashMap<>();
     final BlobStore blobs;
     final WorkflowEngine engine;
     private volatile TaskResultHandler results;
@@ -73,7 +76,26 @@ final class PolicyFixture {
     }
 
     PolicyFixture worker(String routingKey, Function<JsonNode, JsonNode> work) {
-        workers.put(routingKey, work);
+        workers.put(routingKey, invocation -> TaskResult.completed(invocation.correlationId(),
+                work.apply(invocation.input())));
+        return this;
+    }
+
+    /** A real worker-side handler (e.g. the reference redactor), run with the invocation's ids. */
+    PolicyFixture handler(String routingKey, TaskHandler handler) {
+        workers.put(routingKey, invocation -> {
+            TaskContext ctx = new TaskContext(invocation.taskId(), invocation.workflowInstanceId(),
+                    invocation.correlationId(), invocation.attempt(), invocation.input(), invocation.definition());
+            try {
+                return TaskResult.completed(invocation.correlationId(),
+                        handler.execute(ctx).toCompletableFuture().join());
+            } catch (java.util.concurrent.CompletionException e) {
+                if (e.getCause() instanceof TaskFailure failure) {
+                    return TaskResult.failed(invocation.correlationId(), failure.toErrorInfo());
+                }
+                throw e;
+            }
+        });
         return this;
     }
 
@@ -90,10 +112,9 @@ final class PolicyFixture {
         @Override
         public CompletionStage<Void> dispatch(TaskInvocation invocation) {
             dispatched.add(invocation);
-            Function<JsonNode, JsonNode> work = workers.get(invocation.routingKey());
+            Function<TaskInvocation, TaskResult> work = workers.get(invocation.routingKey());
             if (work != null) {
-                CompletableFuture.runAsync(() -> results.handle(
-                        TaskResult.completed(invocation.correlationId(), work.apply(invocation.input()))));
+                CompletableFuture.runAsync(() -> results.handle(work.apply(invocation)));
             }
             return CompletableFuture.completedFuture(null);
         }
