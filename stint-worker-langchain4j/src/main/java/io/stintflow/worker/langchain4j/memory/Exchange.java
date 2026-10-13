@@ -13,7 +13,8 @@ import com.fasterxml.jackson.databind.JsonNode;
  * @param correlationId the dispatch that produced it
  * @param taskId        the task's position, for diagnosis
  * @param attempt       the dispatch's attempt, for diagnosis
- * @param committedAt   when the worker committed it; orders the conversation
+ * @param committedAt   when the worker committed it, strictly after every exchange its execution read (SDD 3a.3b):
+ *                      orders the conversation
  * @param messages      the messages the execution added, as LangChain4j serializes them (a JSON array) — or a
  *                      claim-check pointer to them, see {@link BlobOffloadingConversationStore}
  * @param output        the output the execution returned, so a redelivery returns it without calling the model

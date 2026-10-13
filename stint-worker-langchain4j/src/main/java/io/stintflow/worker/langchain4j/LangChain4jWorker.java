@@ -67,6 +67,8 @@ import io.stintflow.worker.langchain4j.memory.MemoryKey;
 public final class LangChain4jWorker {
 
     private static final Logger LOG = LoggerFactory.getLogger(LangChain4jWorker.class);
+    /** SDD 3a.3b, 8b: a clock this far behind the conversation is worth a warning — workers' clocks disagree. */
+    static final Duration CLOCK_LAG_WARNING = Duration.ofSeconds(1);
 
     private final ChatModel chatModel;
     private final ConversationStore conversations;
@@ -222,7 +224,7 @@ public final class LangChain4jWorker {
         JsonNode messages = Json.read(ChatMessageSerializer.messagesToJson(memory.added())
                 .getBytes(StandardCharsets.UTF_8));
         if (key != null) {
-            Instant now = clock.instant();
+            Instant now = commitTime(ctx, history);
             Exchange exchange = new Exchange(key, ctx.correlationId(), ctx.taskId(), ctx.attempt(), now, messages,
                     output, now.plus(retention));
             if (join(conversations.commit(exchange)) == CommitOutcome.ALREADY_COMMITTED) {
@@ -235,6 +237,26 @@ public final class LangChain4jWorker {
         JsonNode recorded = output;
         contentPolicy.sinkFor(ctx).ifPresent(sink -> sink.record(ctx, messages, recorded));
         return output;
+    }
+
+    /**
+     * SDD 3a.3b: the clock, but strictly after every exchange this execution read — one millisecond, the resolution a
+     * store may keep — so the memory's order (committedAt, then correlationId) is the causal one even when the clock
+     * ties (a fast step, a fixed test clock) or lags (another worker's clock). A lag over {@link #CLOCK_LAG_WARNING} is
+     * logged with the ids only.
+     */
+    private Instant commitTime(TaskContext ctx, List<Exchange> history) {
+        Instant now = clock.instant();
+        Instant last = history.stream().map(Exchange::committedAt).max(Instant::compareTo).orElse(null);
+        if (last == null || !now.isBefore(last.plusMillis(1))) {
+            return now;
+        }
+        Duration lag = Duration.between(now, last);
+        if (lag.compareTo(CLOCK_LAG_WARNING) > 0) {
+            LOG.warn("Task {} of instance {}: the worker's clock is {} ms behind the conversation it continues; "
+                    + "its exchange is committed right after it", ctx.taskId(), ctx.instanceId(), lag.toMillis());
+        }
+        return last.plusMillis(1);
     }
 
     private static Optional<JsonNode> outputOf(List<Exchange> history, String correlationId) {
