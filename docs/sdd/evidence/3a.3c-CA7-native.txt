@@ -1,0 +1,15 @@
+SDD 3a.3c, CA7 — native build and run of examples/stint-example-ai-worker with deadlines on every dispatch (12/10/2026)
+
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-ai-worker
+[INFO] [io.quarkus.deployment.pkg.steps.NativeImageBuildStep] Running Quarkus native-image plugin on MANDREL 25.0.4.1 JDK 25.0.4.1+1-LTS
+                        5,4s (8,6% of total time) in 850 GCs | Peak RSS: 2,47GB | CPU load: 9,00
+Finished generating 'stint-example-ai-worker-0.1.0-SNAPSHOT-runner' in 1m 1s.
+[INFO] BUILD SUCCESS
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0), exit code 0. Every invoke goes through the CloudEvents codec of the in-memory transport, now with the stintdeadline extension (5 min default timeout, never reached): the two LLM steps commit and the second reads the first (contextMessages 3).
+INFO  [io.quarkus] (main) stint-example-ai-worker 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.011s. 
+INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/3/summarize in instance 63d30e1b-6985-4012-9dc3-412b90ea65f7 (chain chn-9e9184ce-0617-3cae-9404-3e54764a1444, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=73, outputTokens=10, toolCalls=0, latencyMs=0, finishReason=STOP
+INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/4/extract in instance 63d30e1b-6985-4012-9dc3-412b90ea65f7 (chain chn-9e9184ce-0617-3cae-9404-3e54764a1444, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=119, outputTokens=29, toolCalls=0, latencyMs=0, finishReason=STOP
+AI-WORKER result={"transcript":"Topic: quarterly planning\nSpeaker A: the release slips one week.\nSpeaker B: I will update the roadmap.\nSpeaker A: and I will tell the support team.","doc":"ata","urgent":false,"summary":{"topic":"quarterly planning","speakers":2},"actions":{"items":["Speaker B: I will update the roadmap.","Speaker A: and I will tell the support team."],"contextMessages":3}}
+AI-WORKER urgent decision={"kind":"boolean","value":false,"confidence":0.8,"uncertain":false,"provenance":{"adapter":"litjev","provider":"litjev","model":"synthetic/qwen-checkpoint","version":"jev-adapter/1;server=litjev"},"attempt":1,"correlationId":"94ceb1ea-4b5b-4b28-88d6-aa5a75aac365","decidedAt":"2026-10-13T00:51:52.794678685Z","count":1}
+AI-WORKER OK
