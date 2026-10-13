@@ -82,6 +82,7 @@ import io.stintflow.wire.CeWire;
 import io.stintflow.wire.ClaimCheck;
 import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.wire.Json;
+import io.stintflow.wire.review.ReviewContract;
 
 /**
  * The cloud-blind orchestrator.
@@ -1678,6 +1679,13 @@ public final class WorkflowEngine {
         return state.findWait(key).thenCompose(wait -> {
             if (wait.isPresent()) {
                 return resumeWithRetry(key, new ResumeEvent.EventArrived(event, false), 1);
+            }
+            // SDD 3a.4, 4.6: an answer to a review rests in the inbox only if it carries no content
+            if (StintEvents.TYPE_REVIEW_COMPLETED.equals(event.getType())
+                    && !ReviewContract.isContentFree(ReviewSupport.data(event))) {
+                LOG.log(Level.INFO, "Answer {0} arrived before any wait on {1} and is out of the review contract; "
+                        + "dropped, not kept", event.getId(), key);
+                return done();
             }
             CompletionStage<Void> kept;
             try {

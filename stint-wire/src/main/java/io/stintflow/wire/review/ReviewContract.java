@@ -131,6 +131,54 @@ public final class ReviewContract {
         return problems;
     }
 
+    /**
+     * Whether an answer carries nothing but the contract's fields, ids, declared names and pointers — what may rest,
+     * before it is matched to a review, in the early-event inbox. Checked without the review: no options, no items.
+     */
+    public static boolean isContentFree(JsonNode data) {
+        if (data == null || !data.isObject() || !isOpaqueId(data.get(REVIEWER))) {
+            return false;
+        }
+        for (Iterator<String> names = data.fieldNames(); names.hasNext(); ) {
+            String name = names.next();
+            JsonNode field = data.get(name);
+            boolean ok = switch (name) {
+                case REVIEWER -> true;
+                case VALUE -> field.isBoolean() || field.isNumber() || isName(field);
+                case VERDICT -> isVerdict(field);
+                case NOTE_REF -> isPointer(field);
+                case ITEMS -> field.isArray() && itemsFree(field);
+                default -> false;
+            };
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean itemsFree(JsonNode items) {
+        for (JsonNode item : items) {
+            if (!item.isObject() || !isName(item.get(ID)) || !isVerdict(item.get(VERDICT))) {
+                return false;
+            }
+            for (Iterator<String> names = item.fieldNames(); names.hasNext(); ) {
+                String name = names.next();
+                if (!ITEM_KEYS.contains(name) || (NOTE_REF.equals(name) && !isPointer(item.get(name)))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** A declared name or an id: short text, no spaces. */
+    private static boolean isName(JsonNode node) {
+        return node != null && node.isTextual() && !node.textValue().isBlank()
+                && node.textValue().length() <= MAX_REVIEWER && node.textValue().chars()
+                        .noneMatch(Character::isWhitespace);
+    }
+
     /** The overall verdict of a valid approval: rejected if it, or any of its items, is. */
     public static String verdictOf(JsonNode data) {
         if (REJECTED.equals(data.path(VERDICT).asText())) {

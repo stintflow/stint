@@ -60,6 +60,8 @@ final class PolicyFixture {
     final InMemoryAuditLog audit = new InMemoryAuditLog();
     final io.stintflow.inmemory.InMemoryCorrectionLog corrections = new io.stintflow.inmemory.InMemoryCorrectionLog();
     final InMemoryTimerService timer = new InMemoryTimerService(now::get);
+    /** What the engine put in the early-event inbox (SDD 3a.4 scanner). */
+    final InboxSpy inbox = new InboxSpy(state);
     final InMemoryEventPublisher publisher = new InMemoryEventPublisher();
     final List<TaskInvocation> dispatched = new CopyOnWriteArrayList<>();
     final Map<String, Function<TaskInvocation, TaskResult>> workers = new ConcurrentHashMap<>();
@@ -82,7 +84,7 @@ final class PolicyFixture {
         }
         blobDir = Files.createTempDirectory("stint-sdd3a5");
         blobs = new FilesystemBlobStore(blobDir, now::get);
-        engine = new WorkflowEngine(registry, new Transport(), state, timer, blobs,
+        engine = new WorkflowEngine(registry, new Transport(), inbox, timer, blobs,
                 new TreeInterpreter(new JqExpressionEvaluator()), now::get, publisher, null, tracer).auditLog(audit)
                 .correctionLog(corrections);
     }
