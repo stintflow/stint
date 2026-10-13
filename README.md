@@ -436,6 +436,13 @@ registry.register("summarize-meeting", ai.handler(MeetingAssistant.class,
   `examples/stint-example-ai-worker` runs two steps sharing the memory, as a jar and as a native image.
 - **Concurrency**: `WorkerPool` (in `stint-worker-sdk`) runs up to N deliveries at once on virtual threads and
   acknowledges each one only after its result was shipped, so a slow task doesn't hold the others.
+- **SQS binding** (SDD 3a.7, module `connectors/stint-aws-worker`, plain SQS client, no Quarkus):
+  `SqsWorkerBinding.builder().sqs(client).invokeQueueUrl(..).resultQueueUrl(..).runtime(runtime).concurrency(8)
+  .build().start()`. It asks SQS for at most `min(10, free slots)` messages (long polling, 20 s), renews a running
+  task's visibility every `extendEvery` (half the visibility) until it ends, its `stintdeadline` passes or
+  `maxExtension` (1 h), and `close()` waits `shutdownGrace` (30 s) then hands the unfinished back unacknowledged.
+  Logs carry ids only; `SqsWorkerMetrics` counts. Give invoke queues a `maxReceiveCount` of 3 or more. Measured over
+  floci with 50 tasks (10 slow): p95 22.7 s with concurrency 1, 2.7 s with 8.
 
 ## Honest MVP cuts (deliberate, documented)
 
