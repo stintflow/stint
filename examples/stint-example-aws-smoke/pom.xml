@@ -29,6 +29,11 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-worker-sdk</artifactId>
         </dependency>
+        <!-- SDD 3a.7: the in-process worker runs on the SQS worker binding -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-aws-worker</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>
