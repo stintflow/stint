@@ -52,6 +52,17 @@
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>
+        <!-- SDD 3a.7: the SQS worker binding, and its manual scheduler for the floci ITs -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-aws-worker</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-aws-worker</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-otel</artifactId>
