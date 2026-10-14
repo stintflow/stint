@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "language": "en",
+  "meetings": [
+    {
+      "id": "m-001",
+      "script": "meetings/m-001.yaml",
+      "scriptSha256": "192a5f357c9ee9b918804277ae795f6b0989b40cc10bdfecc70a09d545c55b10",
+      "audio": null
+    },
+    {
+      "id": "m-002",
+      "script": "meetings/m-002.yaml",
+      "scriptSha256": "96c6593d9229f20bcb8a4d766b56e8c5a23efc99eda2a98ac414069c0b703c68",
+      "audio": null
+    },
+    {
+      "id": "m-003",
+      "script": "meetings/m-003.yaml",
+      "scriptSha256": "543b58fd6f7b35bdf1cd064f7906aac6456504324e69179a38c323b7df6525ec",
+      "audio": null
+    },
+    {
+      "id": "m-004",
+      "script": "meetings/m-004.yaml",
+      "scriptSha256": "39baf2bbaf8261570153fcc216efdce072309f5d902cdd8e7a9be1e401d37906",
+      "audio": null
+    },
+    {
+      "id": "m-005",
+      "script": "meetings/m-005.yaml",
+      "scriptSha256": "755a5e5ceabb49281d1a35dbc60b1bff95f51bedec09082d1f39780f993b77cb",
+      "audio": null
+    },
+    {
+      "id": "m-006",
+      "script": "meetings/m-006.yaml",
+      "scriptSha256": "615875ec44344020ad785ebd6b3ef77f30a1556ed580198f1ef355fb9bcbbf73",
+      "audio": null
+    },
+    {
+      "id": "m-007",
+      "script": "meetings/m-007.yaml",
+      "scriptSha256": "22c2062818ff2bb92b9c46062123d7023813991470a9aa5340bea9b7ef81bfda",
+      "audio": null
+    },
+    {
+      "id": "m-008",
+      "script": "meetings/m-008.yaml",
+      "scriptSha256": "75f22d7e8c933a88f19dec8045d554a4ae3cb4d865939f8870ddaac731eba796",
+      "audio": null
+    }
+  ]
+}

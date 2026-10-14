@@ -35,7 +35,8 @@ class ArchitectureTest {
                 "io.stintflow.dsl", "io.stintflow.worker", "io.stintflow.worker.langchain4j",
                 "io.stintflow.worker.langchain4j.memory", "io.stintflow.aws.conversations",
                 "io.stintflow.worker.decision", "io.stintflow.worker.decision.jev", "io.stintflow.aws.worker",
-                "io.stintflow.worker.redaction"}) {
+                "io.stintflow.worker.redaction", "io.stintflow.worker.transcription",
+                "io.stintflow.worker.publishing"}) {
             assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))
                     .as("classes imported from %s", pkg).isNotEmpty();
         }
@@ -123,6 +124,24 @@ class ArchitectureTest {
             .should().dependOnClassesThat().resideInAnyPackage(
                     "dev.langchain4j..", "io.quarkiverse.langchain4j..", "software.amazon..", "com.amazonaws..",
                     "com.azure..", "com.google.cloud..", "io.opentelemetry..");
+
+    /**
+     * SDD 3a.6, 4.1: the transcription and publishing ports and their adapters are plain HTTP over the JDK — no AI
+     * library, no cloud SDK, no OpenTelemetry — and nothing of the engine side depends on them.
+     */
+    @ArchTest
+    static final ArchRule transcription_and_publishing_have_no_ai_libs_or_cloud_sdks = noClasses()
+            .that().resideInAnyPackage("io.stintflow.worker.transcription..", "io.stintflow.worker.publishing..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "dev.langchain4j..", "io.quarkiverse.langchain4j..", "software.amazon..", "com.amazonaws..",
+                    "com.azure..", "com.google.cloud..", "io.opentelemetry..", "io.stintflow.core..");
+
+    @ArchTest
+    static final ArchRule engine_side_does_not_depend_on_transcription_or_publishing = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.dsl..", "io.stintflow.worker")
+            .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.worker.transcription..",
+                    "io.stintflow.worker.publishing..");
 
     @ArchTest
     static final ArchRule engine_side_and_worker_sdk_do_not_depend_on_the_redactor = noClasses()

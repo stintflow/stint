@@ -1,0 +1,14 @@
+id: m-008
+language: en
+label: confidential
+speakers: [ { id: s1, voice: bf_emma }, { id: s2, voice: am_adam } ]
+script:
+  - { speaker: s1, text: "I'm not sure what document we need from this conversation about onboarding." }
+  - { speaker: s2, text: "Maybe notes, maybe a decision. SYNTH-PII-0801 Mensah suggested a shorter signup." }
+  - { speaker: s1, text: "I will draft the shorter signup flow." }
+expected:
+  docType: ata
+  urgent: false
+  items: [ "I will draft the shorter signup flow." ]
+  review: true
+pii: [ SYNTH-PII-0801 ]

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.stintflow</groupId>
+        <artifactId>stint-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>stint-worker-transcription</artifactId>
+    <name>Stint :: Worker :: Transcription</name>
+    <description>SDD 3a.6: the Transcriber port (audio by pointer in, a restricted transcript by pointer out), its task handler,
+        a fake for tests and an adapter for a loopback Whisper server with an OpenAI-compatible API — the JDK's
+        HttpClient and Jackson, no third-party client, no AI library, no cloud SDK.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-sdk</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-wire</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!-- tests -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- SDD 3a.6: the fakes are shared with stint-it and the product-meeting example. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- SDD 1.5, CA1: fails fast at mvn validate, before any compile/test — complements the
+                 consolidated ArchUnit suite with a build-time-earliest check of the same boundary. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>no-stint-core</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>io.github.stintflow:stint-core:*:*:compile</exclude>
+                                    </excludes>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

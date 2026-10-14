@@ -1,5 +1,6 @@
 package io.stintflow.worker.redaction;
 
+import java.net.URI;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -16,7 +17,9 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
 
+import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.ErrorInfo.StandardType;
+import io.stintflow.wire.ClaimCheck;
 import io.stintflow.wire.Json;
 import io.stintflow.wire.redaction.RedactionContract;
 import io.stintflow.worker.TaskContext;
@@ -37,10 +40,21 @@ public final class RedactionHandler implements TaskHandler {
 
     private final LayeredRedactor redactor;
     private final Pseudonyms pseudonyms;
+    private final BlobStore blobs;
 
     public RedactionHandler(LayeredRedactor redactor, Pseudonyms pseudonyms) {
+        this(redactor, pseudonyms, null);
+    }
+
+    /**
+     * SDD 3a.6, 4.6: with a {@code blobs} store, an {@code input} that is a claim-check pointer — a raw transcript that
+     * rests in a restricted blob — is read from it. A transcript ({@code transcript.v1}, with {@code segments}) is
+     * redacted as its segments' text, one segment per line; any other JSON as it is.
+     */
+    public RedactionHandler(LayeredRedactor redactor, Pseudonyms pseudonyms, BlobStore blobs) {
         this.redactor = Objects.requireNonNull(redactor, "redactor");
         this.pseudonyms = Objects.requireNonNull(pseudonyms, "pseudonyms");
+        this.blobs = blobs;
     }
 
     @Override
@@ -52,7 +66,7 @@ public final class RedactionHandler implements TaskHandler {
             RedactionLayer.Scope scope = new RedactionLayer.Scope(ctx.instanceId(), types, pseudonyms);
             Map<String, Integer> counts = new LinkedHashMap<>();
             boolean[] doubt = {false};
-            JsonNode redacted = redact(request.get(RedactionContract.INPUT), scope, counts, doubt);
+            JsonNode redacted = redact(resolve(request.get(RedactionContract.INPUT)), scope, counts, doubt);
 
             ObjectNode result = Json.obj();
             result.set(RedactionContract.OUTPUT, redacted == null ? Json.MAPPER.nullNode() : redacted);
@@ -73,6 +87,23 @@ public final class RedactionHandler implements TaskHandler {
             return CompletableFuture.failedFuture(new TaskFailure(StandardType.RUNTIME.uri(), 500,
                     "The redaction failed (" + e.getClass().getSimpleName() + ")", null));
         }
+    }
+
+    /** The input itself, or what its pointer points at (a transcript as its text). */
+    private JsonNode resolve(JsonNode input) {
+        if (blobs == null || !ClaimCheck.isPointer(input)) {
+            return input;
+        }
+        URI ref = URI.create(input.get(ClaimCheck.POINTER_FIELD).asText());
+        JsonNode pointed = Json.read(blobs.get(ref).toCompletableFuture().join());
+        if (pointed.has("segments") && pointed.get("segments").isArray()) {
+            StringBuilder text = new StringBuilder();
+            for (JsonNode segment : pointed.get("segments")) {
+                text.append(text.isEmpty() ? "" : "\n").append(segment.path("text").asText().strip());
+            }
+            return TextNode.valueOf(text.toString());
+        }
+        return pointed;
     }
 
     private JsonNode redact(JsonNode node, RedactionLayer.Scope scope, Map<String, Integer> counts, boolean[] doubt) {
