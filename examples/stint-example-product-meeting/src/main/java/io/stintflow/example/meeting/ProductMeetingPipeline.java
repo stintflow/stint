@@ -230,7 +230,7 @@ public final class ProductMeetingPipeline implements AutoCloseable {
             for (JsonNode request : channel.openFor(id)) {
                 String reviewId = request.path("reviewId").asText();
                 if (seen.add(reviewId)) {
-                    answer(meeting, request);
+                    answerAsTheKey(http, channel, meeting, request);
                     answered.add(request.path("kind").asText());
                 }
             }
@@ -252,7 +252,8 @@ public final class ProductMeetingPipeline implements AutoCloseable {
     }
 
     /** The scripted reviewer: the key's document type for a decision, every item approved for the minutes. */
-    private void answer(Meeting meeting, JsonNode request) throws Exception {
+    public static void answerAsTheKey(HttpClient http, ReviewChannel channel, Meeting meeting, JsonNode request)
+            throws Exception {
         ObjectNode answer = Json.obj().put("reviewer", "rev-scripted");
         if ("choice".equals(request.path("kind").asText())) {
             answer.put("value", meeting.expected().docType());

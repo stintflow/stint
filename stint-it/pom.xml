@@ -45,6 +45,12 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-worker-redaction</artifactId>
         </dependency>
+        <!-- SDD 3a.6: the milestone's workers and corpus, on floci with the SQS binding -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-example-product-meeting</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <!-- SDD 3a.2: decision adapters end to end (fake adapter, LLM over a fake model, Jev over a fake server) -->
         <dependency>
             <groupId>io.github.stintflow</groupId>
