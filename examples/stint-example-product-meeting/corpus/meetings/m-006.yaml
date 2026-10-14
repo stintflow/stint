@@ -1,6 +1,6 @@
 id: m-006
 language: en
-label: confidential
+label: restricted                   # a raw recording is restricted; the redaction lowers it
 speakers: [ { id: s1, voice: am_michael }, { id: s2, voice: af_bella } ]
 script:
   - { speaker: s1, text: "Let's write the runbook for restarting the search cluster, step by step." }

@@ -1,6 +1,6 @@
 id: m-005
 language: en
-label: confidential
+label: restricted                   # a raw recording is restricted; the redaction lowers it
 speakers: [ { id: s1, voice: bm_george }, { id: s2, voice: bf_emma } ]
 script:
   - { speaker: s1, text: "This decision record covers the database for reports. We decided to keep the managed database." }

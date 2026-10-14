@@ -1,6 +1,6 @@
 id: m-003
 language: en
-label: confidential
+label: restricted                   # a raw recording is restricted; the redaction lowers it
 speakers: [ { id: s1, voice: af_bella }, { id: s2, voice: bm_george } ]
 script:
   - { speaker: s1, text: "Quick recap: the payment outage affects customers today, so this is urgent." }

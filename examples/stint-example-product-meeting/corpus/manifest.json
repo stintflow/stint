@@ -5,49 +5,49 @@
     {
       "id": "m-001",
       "script": "meetings/m-001.yaml",
-      "scriptSha256": "192a5f357c9ee9b918804277ae795f6b0989b40cc10bdfecc70a09d545c55b10",
+      "scriptSha256": "e705bf3be04ba97d5252e36c10c8523c22c87ba8bae865f17ff5371ea28352ba",
       "audio": null
     },
     {
       "id": "m-002",
       "script": "meetings/m-002.yaml",
-      "scriptSha256": "96c6593d9229f20bcb8a4d766b56e8c5a23efc99eda2a98ac414069c0b703c68",
+      "scriptSha256": "61d335b8da9a2659a4db5c9fba82a6cb974a19842aa8667cd0ff0f5a4533b044",
       "audio": null
     },
     {
       "id": "m-003",
       "script": "meetings/m-003.yaml",
-      "scriptSha256": "543b58fd6f7b35bdf1cd064f7906aac6456504324e69179a38c323b7df6525ec",
+      "scriptSha256": "5037cc351cedcb097d1596eee555723751c0bae843649025293db272c6721fa5",
       "audio": null
     },
     {
       "id": "m-004",
       "script": "meetings/m-004.yaml",
-      "scriptSha256": "39baf2bbaf8261570153fcc216efdce072309f5d902cdd8e7a9be1e401d37906",
+      "scriptSha256": "c7ff107a4ec40c29d73ac81a4c04387c0eb782a03ed57844a07158a6b29694ec",
       "audio": null
     },
     {
       "id": "m-005",
       "script": "meetings/m-005.yaml",
-      "scriptSha256": "755a5e5ceabb49281d1a35dbc60b1bff95f51bedec09082d1f39780f993b77cb",
+      "scriptSha256": "b51517915ddbbd464a547d91bb67588162416919fec469ff83e2419bac7a65fe",
       "audio": null
     },
     {
       "id": "m-006",
       "script": "meetings/m-006.yaml",
-      "scriptSha256": "615875ec44344020ad785ebd6b3ef77f30a1556ed580198f1ef355fb9bcbbf73",
+      "scriptSha256": "49388a60845cd4bfad8f74047207ed0f8240110cd363b1b152a3bfce87e71516",
       "audio": null
     },
     {
       "id": "m-007",
       "script": "meetings/m-007.yaml",
-      "scriptSha256": "22c2062818ff2bb92b9c46062123d7023813991470a9aa5340bea9b7ef81bfda",
+      "scriptSha256": "55a8ad9f27e6fde5c0cdd43d4a2717e8cce49358396b0e73902c35d152c2b23d",
       "audio": null
     },
     {
       "id": "m-008",
       "script": "meetings/m-008.yaml",
-      "scriptSha256": "75f22d7e8c933a88f19dec8045d554a4ae3cb4d865939f8870ddaac731eba796",
+      "scriptSha256": "71403505ac6b45034b08972948f417fbc7207ce1dd0a7ce38e026fd2476af4ed",
       "audio": null
     }
   ]

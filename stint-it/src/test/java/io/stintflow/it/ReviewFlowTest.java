@@ -236,6 +236,40 @@ class ReviewFlowTest {
         assertThat(correction.role()).isEqualTo("technical-rep");
     }
 
+    /** SDD 3a.6 found it: options without a 'then' must route, not fall into the review that follows them. */
+    @Test
+    void a_certain_decision_whose_options_have_no_then_skips_the_review_and_exports_once() throws Exception {
+        PolicyFixture f = new PolicyFixture(SensitivityPolicyTest.header("triage", POLICY) + """
+                do:
+                  - kind:
+                      call: decision
+                      with:
+                        task: decide-type
+                        kind: choice
+                        input: ${ . }
+                        options:
+                          - ata: {}
+                          - adr: {}
+                      onUncertain:
+                        review:
+                          role: business-rep
+                          material: ${ $context.ref }
+                          deadline: { hours: 1 }
+                      export: { as: '${ $context + {type: .value, count: (($context.count // 0) + 1)} }' }
+                  - after:
+                      set: '${ {done: "after"} }'
+                      export: { as: '${ $context + . }' }
+                """).worker("decide-type", in -> Json.obj().put("value", "adr").put("confidence", 0.95)
+                .put("uncertain", false).set("provenance", Json.obj().put("adapter", "litjev").put("version", "1")));
+
+        JsonNode done = f.awaitCompleted(f.engine.start(TRIAGE, Json.obj().put("ref", MATERIAL), Sensitivity.INTERNAL));
+
+        assertThat(done.path("type").asText()).isEqualTo("adr");
+        assertThat(done.path("count").asInt()).isEqualTo(1);   // the author's export ran once
+        assertThat(done.path("done").asText()).isEqualTo("after");
+        assertThat(published(f, StintEvents.TYPE_REVIEW_REQUESTED)).isEmpty();
+    }
+
     @Test
     void wrong_role_untrusted_source_and_out_of_contract_answers_never_resume() throws Exception {
         PolicyFixture f = triage();

@@ -1,6 +1,6 @@
 id: m-004
 language: en
-label: confidential
+label: restricted                   # a raw recording is restricted; the redaction lowers it
 speakers: [ { id: s1, voice: am_adam }, { id: s2, voice: af_heart } ]
 script:
   - { speaker: s1, text: "We need a decision record for the event bus. The options were a queue per service or one shared topic." }

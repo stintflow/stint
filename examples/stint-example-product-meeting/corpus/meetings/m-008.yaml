@@ -1,6 +1,6 @@
 id: m-008
 language: en
-label: confidential
+label: restricted                   # a raw recording is restricted; the redaction lowers it
 speakers: [ { id: s1, voice: bf_emma }, { id: s2, voice: am_adam } ]
 script:
   - { speaker: s1, text: "I'm not sure what document we need from this conversation about onboarding." }

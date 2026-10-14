@@ -17,7 +17,7 @@ Scripts are stored with LF line endings (`.gitattributes`), so their hashes are 
 ```yaml
 id: m-001                       # unique, also the meetingId of meeting-recorded.v1
 language: en
-label: confidential             # the sensitivity label the recorder puts on the event
+label: restricted               # the level the recorder puts on the event: a raw recording is restricted
 speakers: [ { id: s1, voice: af_heart } ]       # synthetic speakers and their Kokoro voices
 script:                         # in order; one turn per line
   - { speaker: s1, text: "..." }

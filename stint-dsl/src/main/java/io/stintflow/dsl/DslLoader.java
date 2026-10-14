@@ -872,8 +872,16 @@ public final class DslLoader {
             FlowDirective otherwise = defaultThen != null ? defaultThen : compileThen(body);
             FlowDirective uncertainThen = reviewSettings != null ? FlowDirective.goTo(name + "/review")
                     : onUncertain == null ? null : directive(onUncertain.asText());
-            List<TaskNode> expanded = DecisionExpansion.expand(name, pointer, shape, with.path("task").asText(),
-                    compileTimeout(body, pointer), request, authored, otherwise, uncertainThen, optionThens);
+            // SDD 3a.4 (8b): with a review, the decision's switch only dispatches — uncertain to the review, anything
+            // else to the review's route, which holds the options' branches and the author's output.as/export.as, so
+            // both paths route alike and the export runs once
+            List<TaskNode> expanded = reviewSettings == null
+                    ? DecisionExpansion.expand(name, pointer, shape, with.path("task").asText(),
+                            compileTimeout(body, pointer), request, authored, otherwise, uncertainThen, optionThens)
+                    : DecisionExpansion.expand(name, pointer, shape, with.path("task").asText(),
+                            compileTimeout(body, pointer), request, new DataFlow(authored.inputFrom(), null, null),
+                            FlowDirective.goTo(name + "/review" + ReviewExpansion.ROUTE_SUFFIX), uncertainThen,
+                            java.util.Collections.nCopies(optionThens.size(), null));
             if (reviewSettings != null) {
                 // SDD 3a.4 (8b): the review follows the decision's own branches with the human answer
                 List<DecisionOption> reviewOptions = options.isEmpty()
