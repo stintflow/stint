@@ -1,0 +1,22 @@
+SDD 3a.6 — native build and run of examples/stint-example-product-meeting (14/10/2026)
+
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-product-meeting
+First attempt: Fatal error UnsupportedFeatureException: an instance of java.util.Random in the image heap, held by dev.langchain4j.internal.RetryUtils (pulled in by langchain4j-open-ai, the manual run's provider). Fixed with quarkus.native.additional-build-args=--initialize-at-run-time=dev.langchain4j.internal.RetryUtils.
+[INFO] [io.quarkus.deployment.pkg.steps.NativeImageBuildStep] Running Quarkus native-image plugin on MANDREL 25.0.4.1 JDK 25.0.4.1+1-LTS
+                        6,4s (8,5% of total time) in 952 GCs | Peak RSS: 2,57GB | CPU load: 8,94
+Finished generating 'stint-example-product-meeting-0.1.0-SNAPSHOT-runner' in 1m 14s.
+[INFO] BUILD SUCCESS
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0), exit code 0:
+2026-10-14 01:08:04,707 INFO  [io.quarkus] (main) stint-example-product-meeting 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.008s. 
+PRODUCT-MEETING m-001 COMPLETED docType=ata urgent=false items=2 reviewed=false page=10001 ms=46 answered=[approval]
+PRODUCT-MEETING m-002 COMPLETED docType=ata urgent=false items=1 reviewed=false page=10002 ms=43 answered=[approval]
+PRODUCT-MEETING m-003 COMPLETED docType=ata urgent=true items=2 reviewed=false page=10003 ms=44 answered=[approval]
+PRODUCT-MEETING m-004 COMPLETED docType=adr urgent=false items=1 reviewed=false page=10004 ms=44 answered=[approval]
+PRODUCT-MEETING m-005 COMPLETED docType=adr urgent=false items=1 reviewed=false page=10005 ms=43 answered=[approval]
+PRODUCT-MEETING m-006 COMPLETED docType=runbook urgent=false items=1 reviewed=false page=10006 ms=43 answered=[approval]
+PRODUCT-MEETING m-007 COMPLETED docType=runbook urgent=true items=1 reviewed=false page=10007 ms=43 answered=[approval]
+PRODUCT-MEETING m-008 COMPLETED docType=ata urgent=false items=1 reviewed=true page=10008 ms=66 answered=[choice, approval]
+PRODUCT-MEETING report=target/product-meeting-report/ci-2026-10-14T01-08-05.106867086Z.json summary={"meetings":8,"completed":8,"docTypeAccuracy":1.0,"docTypeAccuracyOfTheAdapterAlone":0.875,"urgencyAccuracy":1.0,"itemsMatchingTheKey":1.0,"humanReviewRate":0.125,"uncertainRate":0.125,"rejectedItems":0,"inputTokens":1733,"outputTokens":580,"estimatedCost":0,"latencyP50Ms":44,"latencyMaxMs":66,"meanWer":0.0}
+PRODUCT-MEETING pages=8 facts=8
+PRODUCT-MEETING OK

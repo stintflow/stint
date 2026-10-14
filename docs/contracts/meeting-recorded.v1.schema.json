@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stintflow.io/contracts/meeting-recorded.v1.schema.json",
+  "title": "io.stintflow.examples.meeting-recorded.v1 — data (SDD 3a.6, 4.6)",
+  "description": "A meeting was recorded. The CloudEvent's type is io.stintflow.examples.meeting-recorded.v1 and its subject is the meetingId. Ids, a pointer and a label only: never a title, a description or any content of the meeting. Changes are additive only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["meetingId", "audioRef", "language", "label"],
+  "properties": {
+    "meetingId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$", "description": "The meeting's id; also the idempotency key of its publication" },
+    "audioRef": { "type": "string", "format": "uri", "description": "Pointer to the raw audio, in a blob of a restricted retention class (e.g. s3://bucket/retention/raw-audio/m-001.wav)" },
+    "language": { "type": "string", "pattern": "^[a-z]{2}$", "description": "ISO 639-1 spoken language, e.g. en" },
+    "durationSeconds": { "type": "number", "minimum": 0 },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "label": { "enum": ["internal", "confidential", "restricted"], "description": "The recording's sensitivity (SDD 3a.5): a raw recording is restricted; absent or unknown reads as restricted" }
+  }
+}
