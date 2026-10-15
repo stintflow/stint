@@ -1,0 +1,18 @@
+SDD 3a.3, CA4 — native build and run of examples/stint-example-ai-worker (12/10/2026, final code of the SDD)
+
+Versions: Quarkus 3.33.2, dev.langchain4j:langchain4j 1.11.7 (quarkus-langchain4j-bom 3.33.2), JDK 25.0.3 (build), Mandrel 25.0.4.1 (native)
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-ai-worker
+[io.quarkus.deployment.pkg.steps.NativeImageBuildStep] Running Quarkus native-image plugin on MANDREL 25.0.4.1 JDK 25.0.4.1+1-LTS
+                        5,8s (8,7% of total time) in 850 GCs | Peak RSS: 2,39GB | CPU load: 9,05
+Finished generating 'stint-example-ai-worker-0.1.0-SNAPSHOT-runner' in 1m 6s.
+BUILD SUCCESS
+
+Without the module's reachability-metadata.json (an earlier build in this session), step 2 failed reading the memory:
+  WARN ... failed with an error that is not a known provider error: java.lang.RuntimeException <- com.fasterxml.jackson.databind.exc.InvalidTypeIdException at com.fasterxml.jackson.databind.DeserializationContext.missingTypeIdException(DeserializationContext.java:2098)
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0), exit code 0:
+INFO  [io.quarkus] (main) stint-example-ai-worker 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.004s. 
+INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/0/summarize in instance 1ee94943-958f-4a1a-bdf2-083281b27341 (chain chn-404e7a86-0925-3de4-9520-1d66381c1ef5, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=73, outputTokens=10, toolCalls=0, latencyMs=0, finishReason=STOP
+INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/1/extract in instance 1ee94943-958f-4a1a-bdf2-083281b27341 (chain chn-404e7a86-0925-3de4-9520-1d66381c1ef5, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=119, outputTokens=29, toolCalls=0, latencyMs=0, finishReason=STOP
+AI-WORKER result={"summary":{"topic":"quarterly planning","speakers":2},"actions":{"items":["Speaker B: I will update the roadmap.","Speaker A: and I will tell the support team."],"contextMessages":3}}
+AI-WORKER OK

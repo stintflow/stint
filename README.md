@@ -37,6 +37,9 @@ stint-core               the cloud-blind orchestrator: dispatch / suspend / resu
 stint-dsl                YAML/JSON front-end: compiles the CNCF DSL 1.0 into stint-core's tree model
 stint-worker-sdk         uniform TaskHandler programming model (depends on stint-wire, not stint-core)
 stint-otel               OpenTelemetry implementation of the tracing port (the only module using OTel)
+stint-worker-redaction   reference redactor for `call: redact`: layered, deterministic, no AI library (SDD 3a.5)
+stint-worker-transcription  Transcriber port, transcribe handler, Whisper (OpenAI-compatible) adapter (SDD 3a.6)
+stint-worker-publishing  PagePublisher port, publish-page handler, Confluence REST adapter and fake (SDD 3a.6)
 connectors/
   stint-inmemory         single-JVM transport/state/timer/blob/domain-event bus — the local dev+test path
   stint-aws              S3 (blob) · DynamoDB (state) · SQS/SNS/EventBridge (transport) · SQS-delay (timer)
@@ -48,6 +51,7 @@ examples/
   stint-example-build-report   "query → stage S3 pointer → format", loaded from build-report.yaml
   stint-example-send-report    schedule.cron + emit + call:remote — publishes report-sent (SDD 2.6 milestone)
   stint-example-archive-report schedule.on report-sent → archive record; independent of send-report (SDD 2.6)
+  stint-example-product-meeting the Phase 3a milestone: a meeting from its audio to published minutes (SDD 3a.6)
 stint-architecture-tests   the single consolidated ArchUnit suite for the whole reactor (test-only)
 stint-it                 floci (local AWS emulator) integration tests
 ```
@@ -96,6 +100,8 @@ type: io.stintflow.task.invoke.v1   (engine → worker)
 type: io.stintflow.task.result.v1   (worker → engine)
 extensions: correlationid · workflowinstanceid · taskid · attempt · definition
             chainid · causationid · traceparent · tracestate      (SDD 2.5, optional)
+            stintsensitivity (invoke, fact) · stintprovider (result)  (SDD 3a.5, optional)
+            stintrole (review events)                                   (SDD 3a.4)
 ```
 
 - `correlationid` is the correlation of an **attempt**: one dispatch of one task. It matches a result to
@@ -294,6 +300,320 @@ Errors raised by Stint follow DSL 1.0:
 Workers get the same from `stint-worker-sdk`; a worker's own `status`/`instance` is kept. The `stint://errors/*`
 types of earlier versions are still accepted as **aliases**: on the wire, from older workers, and in `catch`
 filters written in YAML. That compatibility is temporary.
+
+## Decisions with `call: decision` (SDD 3a.1)
+
+A decision (classify, score, yes/no) is a **remote task** answered by a decision worker; the engine never talks to
+a model provider. `call: decision` is a Stint extension, compiled to a `call: remote` followed by a `switch`:
+
+```yaml
+- classifyItem:
+    call: decision
+    with:
+      task: decide-minute-item           # routing key of the decision worker
+      kind: choice                       # choice | score | boolean
+      input: ${ { text: .redactedText } }
+      options:
+        - approve: { description: "Approved in the meeting", then: recordApproval }
+        - reject:  { description: "Rejected in the meeting" }   # no then: the task's then
+    onUncertain: humanReview             # optional; without it, an uncertain decision follows its value
+    timeout: { after: { seconds: 60 } }
+```
+
+- The contract (`io.stintflow.wire.decision`): the worker receives `{kind, options, input}` and returns
+  `{value, confidence, uncertain, provenance: {adapter, provider, model, version}}`.
+- An output out of contract is the standard `validation` error (400), raised at the task and catchable in a `try`.
+- The provenance of the first result applied is kept in the snapshot (`InstanceSnapshot.decisions`, by pointer);
+  a duplicate or late result never replaces it. Nothing of the decision's input goes to logs, spans or the record.
+- The expansion is logged at DEBUG by `DslLoader`; `DefinitionPrinter` prints any compiled definition as YAML.
+
+## Decision adapters (SDD 3a.2)
+
+A `call: decision` names a routing key (`with.task`); the worker's configuration says which **adapter** answers it, with
+which question and threshold. The workflow never names a provider, a threshold or a credential.
+
+```java
+DecisionHandlers.builder(DecisionConfig.fromProperties(props))   // fails on any invalid key, at startup
+        .adapter(LlmDecisionAdapter.builder().id("llm").chatModel(model).build())
+        .adapter(JevDecisionAdapter.builder().id("jev").apiKey(secrets::jevKey).build())
+        .build()
+        .registerAll(registry);
+```
+
+```properties
+stint.decision.routes.classify-meeting.adapter=llm
+stint.decision.routes.classify-meeting.instructions=Which document does this meeting produce?
+stint.decision.adapters.llm.threshold=0.8              # default 0.7; also threshold.<choice|score|boolean>
+stint.decision.adapters.llm.max-input-tokens=20000     # optional ceiling, checked before the call
+stint.decision.adapters.llm.price.input-per-million=0.15   # optional, for the estimated cost in the usage line
+```
+
+- **`uncertain`** is computed by the handler, never by the adapter: no confidence, a tie at the top of the adapter's
+  distribution, or a (calibrated) confidence below the threshold. Equal to the threshold is certain. A
+  `ConfidenceCalibration` per adapter maps the raw confidence before the threshold.
+- **Errors**: a malformed answer — not JSON, the wrong type, a confidence outside [0, 1], or a value that is not one of
+  the options — is a `validation` error (400) a `catch` can handle. A low confidence is never an error. Provider
+  failures map as for every LLM worker (429 with `retryAfter`, `timeout`, `communication`, `authentication`).
+- **Adapters**:
+  - `FakeDecisionAdapter` (module `stint-worker-decision`): rules for tests and CI;
+  - `LlmDecisionAdapter` (`stint-worker-langchain4j`): one call, the model's own confidence (not calibrated, valid only
+    for that adapter, model and prompt version, which goes into the provenance), a JSON Schema with the options as an
+    enum when the model supports it;
+  - `JevDecisionAdapter` (`stint-worker-decision-jev`): TypeSafe AI's Jev over its HTTP API with the JDK's
+    `HttpClient`; `Retry-After` of a 429 is honoured. **Tested only against a fake server.**
+- **Usage**: one `Decision usage` line per decision (adapter, provider, model, tokens, latency, estimated cost), with
+  the task's ids and no content. A `DecisionPolicy` (SDD 3a.5) is consulted before every call; it allows all by default.
+- **No real providers in tests**: every test JVM runs with `-Djdk.net.hosts.file=build/test-hosts`, which resolves only
+  `localhost`; `NoRealProvidersTest` fails if a provider key is set.
+
+### Local decisions with LitJev (SDD 3a.2b)
+
+The same `JevDecisionAdapter` serves a local [LitJev](https://github.com/zhengxuyu/litjev) server — an independent,
+Apache-2.0 reproduction of Jev's API over Qwen checkpoints — so a decision's input never leaves the machine:
+
+```java
+JevDecisionAdapter.builder().server(JevDecisionAdapter.Server.LITJEV)   // http://127.0.0.1:8000, id and model "litjev"
+        .model("Qwen/Qwen3.5-2B").serverVersion("2cd915a").readout("content")   // optional, for the provenance
+        .build();
+```
+
+```properties
+stint.decision.adapters.litjev.threshold=0.7                 # its own threshold: never the hosted Jev's
+stint.decision.adapters.litjev.calibration.temperature=1.5   # optional temperature scaling, any adapter
+```
+
+- **Profile**: no key and no `Authorization`; on a loopback address the descriptor is `remote = false` and
+  `provider = litjev`, for the sensitivity policy (SDD 3a.5). A non-loopback address fails at build time unless
+  `allowRemote(true)`, which logs a warning and makes the adapter remote. The default stays the hosted Jev, with a key.
+- **Confidence**: `ConfidenceSource.MAX_PROBABILITY` by default for LitJev — the chance of the chosen option — rather
+  than its `confidence`, a Gini concentration that depends on the number of options; `SERVER` takes the latter (and is
+  the hosted Jev's default). A boolean is always `max(p, 1 − p)`. LitJev is not calibrated: tune its threshold, or a
+  temperature, on its own data.
+- **No input**: `null`, blank text, `{}` or `[]` is a `validation` error before any call, for both servers.
+- **Booleans**: without declared options, the local profile asks a plain `Yes`/`No` (LitJev needs both descriptions);
+  declared `true`/`false` options send their own descriptions.
+- **Provenance**: `provider` `litjev`, the checkpoint the server reports as `model`, and a version like
+  `jev-adapter/1;server=litjev@2cd915a;readout=content`.
+- **Manual run**: [`docs/manual/local-decision.md`](docs/manual/local-decision.md) runs the example's `triage` mode
+  against a real LitJev with 15 synthetic pt-BR meetings. The build never needs a LitJev or a model.
+
+## LLM workers with `stint-worker-langchain4j` (SDD 3a.3)
+
+An LLM task is an ordinary worker task: the engine dispatches it, retries it and routes its errors like any other,
+and never sees a model. `stint-worker-langchain4j` builds the `TaskHandler` from a LangChain4j AI Service (plain
+LangChain4j, version from the platform's `quarkus-langchain4j-bom`: 1.11.7 on Quarkus 3.33.2):
+
+```java
+LangChain4jWorker ai = LangChain4jWorker.builder()
+        .chatModel(model)                       // the provider, built by the worker — with maxRetries(0)
+        .conversations(store, blobs)            // optional: the instance's conversation memory
+        .build();
+registry.register("summarize-meeting", ai.handler(MeetingAssistant.class,
+        (assistant, task) -> assistant.summarize(task.input().path("transcript").asText())));
+```
+
+- **Output**: a record or POJO becomes an object in the task's output; a `String`, a string. An answer that
+  doesn't fit the type, or fails `.validate(...)`, is a `validation` error (400) a `catch` can handle.
+- **Memory**: every task of an instance sees the instance's conversation (`MemoryScope.TASK` gives a task its own,
+  `NONE` none). Each execution commits its messages once, when it succeeds, keyed by its correlationId: a
+  redelivered message gets the committed output back without calling the model, and a retry sees only what
+  earlier executions committed. The port is `ConversationStore`: `InMemoryConversationStore` for tests, and
+  `DynamoDbConversationStore` (module `connectors/stint-aws-conversations`; table with `expiresAt` as TTL, 30 days by
+  default). Exchanges over 64 KB go to the `BlobStore` by pointer. `ai.forget(instanceId)` deletes everything an
+  instance remembers.
+- **Order and abandoned attempts** (SDD 3a.3b, 3a.3c): an exchange is committed strictly after everything its
+  execution read, so the conversation keeps the steps' order whatever the clocks say. Each dispatch carries its
+  attempt's deadline (the `stintdeadline` extension, `TaskContext.deadline()`): a delivery past it doesn't call the
+  model, and an execution ending inside `commitMargin` (5 s) of it doesn't commit — the engine discards that result
+  anyway. A step never reads an earlier attempt of the same pass through a task, if a later one exists.
+- **Provider errors** become standard errors, with a fixed `detail` that never quotes the provider's message:
+  429 is `communication`/429 (with `retryAfter` from `.retryAfter(...)` or `.rateLimitRetryAfter(...)` — LangChain4j
+  doesn't expose the provider's header), timeouts are `timeout`/408, 5xx and connection failures are
+  `communication`, bad credentials are `authentication`/401, a bad request is `configuration`. Retrying is the
+  workflow's `catch.retry`: catch `communication` and `timeout`, not `authentication`.
+- **No content in telemetry**: each execution logs one `LLM usage` line (model, tokens, calls, tool calls, latency)
+  with the task's ids, and each model call is a `stint.llm` span with ids only. Prompts and answers are never logged
+  or traced; a `ContentPolicy` (SDD 3a.5) is the only way to hand them to a sink. Keep the providers'
+  `logRequests`/`logResponses` off.
+- **Tools**: a tool that may take long (over `toolCallLimit`, 5 s by default, logged as a WARN), needs approval or has
+  external effects with their own retries is a task of the workflow, not a tool call.
+- **Native**: annotate each AI Service interface with `@RegisterForProxy` and `@RegisterForReflection(methods = true)`
+  and its output records with `@RegisterForReflection`; the module registers LangChain4j's message types itself.
+  `examples/stint-example-ai-worker` runs two steps sharing the memory, as a jar and as a native image.
+- **Concurrency**: `WorkerPool` (in `stint-worker-sdk`) runs up to N deliveries at once on virtual threads and
+  acknowledges each one only after its result was shipped, so a slow task doesn't hold the others.
+- **SQS binding** (SDD 3a.7, module `connectors/stint-aws-worker`, plain SQS client, no Quarkus):
+  `SqsWorkerBinding.builder().sqs(client).invokeQueueUrl(..).resultQueueUrl(..).runtime(runtime).concurrency(8)
+  .build().start()`. It asks SQS for at most `min(10, free slots)` messages (long polling, 20 s), renews a running
+  task's visibility every `extendEvery` (half the visibility) until it ends, its `stintdeadline` passes or
+  `maxExtension` (1 h), and `close()` waits `shutdownGrace` (30 s) then hands the unfinished back unacknowledged.
+  Logs carry ids only; `SqsWorkerMetrics` counts. Give invoke queues a `maxReceiveCount` of 3 or more. Measured over
+  floci with 50 tasks (10 slow): p95 22.7 s with concurrency 1, 2.7 s with 8.
+
+## The Phase 3a milestone: a meeting, end to end (SDD 3a.6)
+
+`examples/stint-example-product-meeting` takes a synthetic English meeting from its recording to approved, published
+minutes on the local engine. Every step is something the earlier SDDs built:
+
+```
+meeting-recorded.v1 (audio by pointer, restricted) → transcribe → call: redact (lowers to confidential)
+  → call: decision doc type (onUncertain.review) → call: decision urgency → structure-minutes (LLM, structured)
+  → call: review approval, item by item → publish-page (one allowed space) → emit minutes-published.v1
+```
+
+- **Two new worker modules**, plain Java over the JDK's HttpClient: no AI library, no cloud SDK, and nothing of the
+  engine side depends on them (ArchUnit).
+  - `stint-worker-transcription`: the `Transcriber` port and the `transcribe` handler. Audio comes in by pointer; the
+    transcript, with its language, duration and timed segments, goes to a `raw-transcript` blob, and the output holds
+    only its pointer. The module has a `FakeTranscriber` and an `OpenAiCompatibleTranscriber` for a loopback Whisper
+    server (speaches, LocalAI, or whisper.cpp on `/inference`). Server errors become standard errors that never quote
+    the server.
+  - `stint-worker-publishing`: the `PagePublisher` port and the `publish-page` handler. A space other than the
+    configured one is refused before anything is read or called (`authorization` 403). Pages are idempotent by key and
+    labelled with the data's level. It ships an `InMemoryPagePublisher`, a `ConfluencePagePublisher` (REST, basic
+    auth) and a `FakeConfluenceServer` to test against.
+- **The redactor reads a pointer:** `call: redact` over a raw transcript's pointer redacts its segments' text. The
+  restricted transcript never leaves its blob.
+- **Corpus:** eight scripted meetings in `corpus/`, each with an answer key (document type, urgency, action items,
+  review branch) and planted `SYNTH-PII-*` markers. The manifest holds the hashes, and `scripts/generate-audio.py`
+  (Kokoro-82M, Apache-2.0) makes the audio, which never goes into the repository. This is the seed of the sandbox's
+  corpus.
+- **Metrics report** (`target/product-meeting-report/`, JSON and Markdown): latency per step and in total, tokens and
+  estimated cost (zero for local providers), human review and `uncertain` rates, accuracy against the key, rejected
+  items, the transcription's WER and the GPU's peak memory. It holds ids and numbers only.
+- **Runs:** the build runs every meeting with fake models (`ProductMeetingMainIT`, also native), and
+  `FlociProductMeetingIT` runs it on SQS, DynamoDB and S3 with the SQS worker binding. The manual run (`manual`)
+  uses Whisper, LitJev and llama.cpp on loopback; see `LOCAL-STACK.md`.
+- **Contracts for consumers:** `docs/contracts/meeting-recorded.v1.schema.json` and `transcript.v1.schema.json`.
+
+## Human review on `listen` (SDD 3a.4)
+
+A review asks a **role** for an answer, waits with a deadline, reminds, escalates, and resumes on the answer. Two
+Stint extensions compile to plain DSL 1.0 (`emit`, `try`/`listen` phases, `switch`), and `STRICT` rejects any key
+they don't know.
+
+An uncertain decision goes to a human and **continues on the branch of the option the human chose**:
+
+```yaml
+- meetingType:
+    call: decision
+    with: { task: decide-type, kind: choice, options: [ {ata: {then: minutes}}, {adr: {then: record}} ] }
+    onUncertain:
+      review:
+        role: business-rep
+        material: ${ $context.redactedRef }      # a pointer to the redacted material, never the material
+        deadline: { hours: 24 }
+        remind: { hours: 20 }                     # optional
+        escalate: { role: technical-rep, after: { hours: 24 } }   # optional
+        onTimeout: { value: ata }                 # or 'fail' (default): a 'timeout' error
+```
+
+A document, or each item of a batch, is approved or rejected:
+
+```yaml
+- approveSdds:
+    call: review
+    with: { kind: approval, role: technical-rep, material: ${ .batchRef }, items: ${ .sddIds },
+            deadline: { hours: 48 } }
+    onReject: revise          # any rejected item goes here; .rejectedItems names them
+    then: publish
+```
+
+`kind: choice` with `options` routes on the chosen option (e.g. the DLQ's resend / accept / cancel).
+
+- **Events** (the contract a channel implements), each with the review id as `subject`:
+  - `io.stintflow.review.requested.v1`: published by the engine. It carries the role (`stintrole`), the level
+    (`stintsensitivity`), the options, the item ids, the `materialRef` pointer and the deadline. It is inline at any
+    level, because it holds nothing but ids, declared names and pointers.
+  - `io.stintflow.review.reminder.v1`: published by the engine before the deadline.
+  - `io.stintflow.review.completed.v1`: published by the channel. It carries `stintrole` and
+    `{ value | verdict, items: [{id, verdict, noteRef?}], noteRef?, reviewer }`.
+  - The `io.stintflow.review.` prefix is reserved: an author's `emit` may not use it.
+- **No content:** the note travels by pointer (`noteRef`), and the reviewer is the channel's opaque id (no `@`, no
+  spaces). An answer with any other field is out of contract, and is never kept in the early-event inbox.
+- **Trust:** authentication is the channel's job. The Stint accepts answers only from the sources the policy lists,
+  `x-stint-policy.review.sources: [https://portal.example]`; a review step won't load without them. An answer from
+  another source, from a role the phase doesn't wait for, out of contract, or from a role asked before an escalation
+  (`late`) doesn't resume the instance. The audit trail records it (kind `review`). A duplicate answer is a no-op.
+- **Records:**
+  - The decision's own record stays as the adapter made it.
+  - The review's record sits next to it, as `decisions["<pointer>/review"]`, with the human answer, the role and the
+    reviewer.
+  - Each human answer is a `Correction` in the `CorrectionLog` port: by definition, with the decision's value,
+    confidence and provenance, the human answer, the role and the dates. It is kept in `InMemoryCorrectionLog`, or in
+    `DynamoDbCorrectionLog` (table `stint-corrections`, 400-day TTL).
+  - A default from `onTimeout` is not a correction.
+  - `CorrectionExport.write(corrections, maxLevel, writer)` writes the evaluation set as JSONL. It writes only
+    corrections at or below the level; a correction without a level counts as restricted.
+- **Timers:** reminders and deadlines are `listen` timeouts, so long ones go to the EventBridge Scheduler (SDD 2.4).
+- **Channel:** `examples/stint-example-ai-worker` has `ReviewChannel`, a JDK `HttpServer` on loopback. It serves
+  `GET /reviews` and `POST /reviews/{reviewId}` with an `X-Stint-Role` header. It has no authentication and no UI: the
+  portal with roles is the consumer's.
+
+## Input compliance: sensitivity, redaction and the policy port (SDD 3a.5)
+
+> **A technical design, not legal advice. No real data — no real meeting, transcript or personal data — goes into a
+> Stint workflow before this design is validated with the DPO and legal (LGPD: legal bases, retention per class,
+> approved providers per level, data region, data subjects' rights).** See SDD 3a.5, section 10.
+
+Every instance has a **sensitivity level**, `internal < confidential < restricted`, that only rises. It comes from
+the trigger's `stintsensitivity` extension, else the policy's `sensitivity.from` expression, else `restricted`. It
+travels on every invoke and on every fact the instance emits, so whatever a fact starts inherits it. An event of a
+higher level raises it. Only a `call: redact` without doubt lowers it, and only to its `lowersTo`.
+
+The policy is a Stint extension in the document's metadata, so the document stays valid CNCF DSL 1.0. `STRICT`
+rejects any key it doesn't know:
+
+```yaml
+document:
+  metadata:
+    x-stint-policy:
+      sensitivity: { from: '${ .[0].data.label }' }
+      routes:
+        restricted: [redactor, summarize-local]
+        confidential: [redactor, summarize-local, summarize-remote]
+        internal: ['*']
+      retention:
+        restricted: { days: 30 }
+do:
+  - redact:
+      call: redact
+      with: { task: redactor, input: '${ .transcript }', lowersTo: confidential }
+      onDoubt: local                       # optional: a doubtful result goes here, still restricted
+      export: { as: '${ {transcript: .output} }' }   # keep only the redacted text from here on
+```
+
+- **Two gates (ADR 3a.5-A).** The engine refuses a route the level doesn't allow, before anything is dispatched.
+  The worker refuses a provider the level doesn't allow, before the model is called: `SensitivityPolicy` allows
+  `restricted` (and no level at all) only to a local provider (`remote = false`), `confidential` to a local one or one
+  on `stint.policy.confidential.providers`, and `internal` to any. Both refusals are `authorization` (403), which a
+  `catch` handles. A task may lower its own ceiling with `metadata.x-stint-policy.maxSensitivity`. The engine never
+  sees a provider, and the worker never sees a route table.
+- **LLM workers** declare their provider: `.provider("litjev", false)` or `.provider("openai", "gpt-x", true)`, and
+  `.policy(SensitivityPolicy.fromProperties(props))`. Undeclared, a model counts as remote. Restricted data with low
+  confidence goes to a human (SDD 3a.4), **never to a remote provider**: the policy would refuse that too.
+- **Redaction** (`stint-worker-redaction`, no AI library): `RedactionHandler` over a `LayeredRedactor` answers the
+  redaction contract (`output`, `counts` by type, `doubt`, `provenance`). The reference `PatternLayer` finds e-mail,
+  card (Luhn), CPF/CNPJ, IP, phone and address; a `TermListLayer` adds a list of names; your pipeline adds its own
+  layers. A value becomes a stable per-instance pseudonym (`EMAIL_3f9a2c`, an HMAC of a worker secret), with no map
+  back. Digits it can't classify are doubt, and doubt or a failure keeps the instance restricted.
+- **Restricted content at rest** (decision 8e, E1). A restricted instance's context, listen state and try input rest
+  in a blob of the `restricted` retention class, and the snapshot keeps a pointer. Its raw input rests in a blob of
+  its own for the whole life of the instance. Invokes and results are always claim-checked, restricted facts travel
+  by `dataref`, and a restricted step's conversation goes by pointer into a part of the memory that steps at a lower
+  level never read. A pointer to restricted content is refused on a route restricted data may not take. Content gone
+  past its retention fails the instance; it is never resumed on anything else.
+- **Retention and encryption**: `BlobStore.put(data, key, RetentionClass)` puts a blob under `retention/<class>/`.
+  `FilesystemBlobStore` expires it by its clock. `S3BlobStore` encrypts every object (SSE-KMS with
+  `stint.aws.s3.kms-key-id`, else SSE-S3), tags it `stint-retention=<class>`, and `applyLifecycle(classes)` sets the
+  bucket's expiration rules by prefix (floci accepts and returns them; their effect runs on AWS).
+- **Audit trail**: the `AuditLog` port records each policy decision (`policy`: allowed or refused, by the engine or
+  the worker), each redaction (`redaction`: counts, doubt, lowered or kept) and each AI call (`ai-call`: route,
+  provider, model, `remote`, from the decision's provenance or the result's additive `stintprovider` extension).
+  Ids, levels and counts only, never a value. `InMemoryAuditLog`, and `DynamoDbAuditLog` (table `stint-audit`,
+  `instanceId` + `entry`, `expiresAt` TTL of 400 days). Wire it with `engine.auditLog(...)`.
+- Without a policy, a definition behaves as before 3a.5. `WorkflowRegistry.requirePolicy()` makes the policy
+  mandatory: do that for agentic workflows.
 
 ## Honest MVP cuts (deliberate, documented)
 

@@ -1,0 +1,30 @@
+# SDD 3a.4: the business representative approves a meeting's minutes item by item, through the example review
+# channel (ReviewChannel). The request carries the minutes' pointer and the item ids, never the minutes; a rejected
+# item sends the minutes back for revision with the reviewer's note, by pointer.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: meeting-review
+  version: '1.0.0'
+  metadata:
+    x-stint-policy:
+      routes:
+        internal: ['*']
+      review:
+        sources: [https://review-channel.example]
+do:
+  - approveMinutes:
+      call: review
+      with:
+        kind: approval
+        role: business-rep
+        material: ${ .minutesRef }
+        items: ${ .itemIds }
+        deadline: { hours: 24 }
+        remind: { hours: 20 }
+      onReject: revise
+      export: { as: '${ {verdict: .verdict, rejected: .rejectedItems, noteRef: .noteRef} }' }
+      then: end
+  - revise:
+      set: '${ $context + {revise: true} }'
+      export: { as: '${ . }' }

@@ -1,0 +1,37 @@
+SDD 3a.3b, CA4 — AiWorkflowTest.the_steps_of_an_instance_share_its_memory_and_instances_do_not, unchanged, 30 runs in a row (12/10/2026)
+
+Before the fix (HEAD 78e727e), 6 isolated runs: 3 failed — the memory came back as ["/do/1/second", "/do/0/first"].
+After the fix (HEAD 3fa11f0), each run: mvn -o -q test -pl stint-it -Dtest='AiWorkflowTest#the_steps_of_an_instance_share_its_memory_and_instances_do_not'
+git diff 4364255 HEAD -- AiWorkflowTest.java AiFixture.java: empty (the test and its fixture are untouched).
+
+run 1 pass
+run 2 pass
+run 3 pass
+run 4 pass
+run 5 pass
+run 6 pass
+run 7 pass
+run 8 pass
+run 9 pass
+run 10 pass
+run 11 pass
+run 12 pass
+run 13 pass
+run 14 pass
+run 15 pass
+run 16 pass
+run 17 pass
+run 18 pass
+run 19 pass
+run 20 pass
+run 21 pass
+run 22 pass
+run 23 pass
+run 24 pass
+run 25 pass
+run 26 pass
+run 27 pass
+run 28 pass
+run 29 pass
+run 30 pass
+passed 30 of 30, failed 0

@@ -44,6 +44,33 @@ public final class StintEvents {
     /** CloudEvents Distributed Tracing extension (W3C Trace Context). */
     public static final String EXT_TRACEPARENT = "traceparent";
     public static final String EXT_TRACESTATE = "tracestate";
+    /**
+     * SDD 3a.3c, on a task invoke only: when the attempt's timeout fires, as an RFC 3339 instant in UTC. Optional: an
+     * invoke without it (or with an unreadable one) has no known deadline.
+     */
+    public static final String EXT_DEADLINE = "stintdeadline";
+    /**
+     * SDD 3a.5, RF2: the level of the data ({@code internal}, {@code confidential}, {@code restricted}) — on a task
+     * invoke, on the events an instance emits, and read on the events that start or resume one. Optional; a value
+     * that isn't a level reads as {@code restricted}.
+     */
+    public static final String EXT_SENSITIVITY = "stintsensitivity";
+    /** SDD 3a.5, RF8: on a task result, the AI provider that produced it (for the audit trail), if the worker says. */
+    public static final String EXT_PROVIDER = "stintprovider";
+    /**
+     * SDD 3a.4, RF2: the role a review is asked of ({@code requested}, {@code reminder}) or the role of whoever answered
+     * ({@code completed}).
+     */
+    public static final String EXT_ROLE = "stintrole";
+
+    /** SDD 3a.4: the prefix of the review events; only a review step may emit them, never an author's {@code emit}. */
+    public static final String REVIEW_TYPE_PREFIX = "io.stintflow.review.";
+    /** SDD 3a.4: a review asked of a role; {@code subject} is the review id. Ids, declared names and pointers only. */
+    public static final String TYPE_REVIEW_REQUESTED = REVIEW_TYPE_PREFIX + "requested.v1";
+    /** SDD 3a.4: a reminder that a review is still open, before its deadline. */
+    public static final String TYPE_REVIEW_REMINDER = REVIEW_TYPE_PREFIX + "reminder.v1";
+    /** SDD 3a.4: a role's answer, published by the review channel; {@code subject} is the review id. */
+    public static final String TYPE_REVIEW_COMPLETED = REVIEW_TYPE_PREFIX + "completed.v1";
 
     public static final String CONTENT_TYPE_JSON = "application/json";
 

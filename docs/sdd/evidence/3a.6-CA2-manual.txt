@@ -1,0 +1,63 @@
+SDD 3a.6, CA2 — manual run of examples/stint-example-product-meeting against the local stack (15/10/2026)
+
+Hardware: AMD Ryzen 5 3600 (6c/12t), 32 GB RAM (WSL2 sees 15 GB), NVIDIA GeForce RTX 2060 SUPER 8 GB (driver 610.88), Windows 11 Pro + WSL2 Ubuntu
+Docker Desktop did not start that day (its VM hung at boot; C: was 98% full), so the speaches and llama.cpp containers of LOCAL-STACK.md were replaced by the same engines run directly in WSL2:
+- Audio: Kokoro-82M (Apache-2.0) via kokoro-onnx 0.4.9 (MIT), onnxruntime 1.31.0, CPU; 8 files, 13.8-22.1 s each, generated in 1 min 2 s (10 min of CPU time); model hashes:
+    -rwxrwxrwx 1 kayan kayan 325532387 Oct 13 22:10 kokoro-v1.0.onnx
+    -rwxrwxrwx 1 kayan kayan  28214398 Oct 13 22:10 voices-v1.0.bin
+    7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5  /mnt/e/stint-3a6/tts/kokoro-v1.0.onnx
+    bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d  /mnt/e/stint-3a6/tts/voices-v1.0.bin
+- Transcription: faster-whisper 1.1.1 (MIT), ctranslate2 4.8.3, model Systran/faster-distil-whisper-small.en (MIT), CPU int8, 6 threads, behind scripts/whisper-server.py (OpenAI-compatible); loaded in 6.4 s; 18.2 s of audio in 2.6 s
+- Decisions: LitJev 2cd915a (Apache-2.0), Qwen/Qwen3.5-2B @ 15852e8 (Apache-2.0), float16 on the GPU; both routes (doc type: choice; urgency: boolean with true/false criteria)
+- Minutes: llama.cpp b11658 (MIT), llama-server CPU build, Qwen3-4B-Instruct-2507 Q4_K_M (Apache-2.0, unsloth GGUF, sha256 3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597), CPU, 6 threads, ctx 8192: 10.6 tokens/s; through langchain4j-open-ai 1.11.7 with the dummy key 'local'
+- GPU: 2,471 MiB before (desktop); 7,332 MiB with LitJev loaded; peak during the run 7,849 MiB (nvidia-smi). Whisper and the generator on CPU (strategy 3 of 4.4)
+
+Run: java -Dstint.example.corpus-dir=examples/stint-example-product-meeting/corpus -jar examples/stint-example-product-meeting/target/quarkus-app/quarkus-run.jar manual (exit 0)
+PRODUCT-MEETING m-001 COMPLETED docType=ata urgent=false items=4 reviewed=true page=10001 ms=52962 answered=[choice, approval]
+PRODUCT-MEETING m-002 COMPLETED docType=ata urgent=false items=3 reviewed=true page=10002 ms=40775 answered=[choice, approval]
+PRODUCT-MEETING m-003 COMPLETED docType=ata urgent=false items=4 reviewed=true page=10003 ms=61918 answered=[choice, approval]
+PRODUCT-MEETING m-004 COMPLETED docType=adr urgent=false items=5 reviewed=false page=10004 ms=51591 answered=[approval]
+PRODUCT-MEETING m-005 COMPLETED docType=adr urgent=false items=3 reviewed=false page=10005 ms=37995 answered=[approval]
+PRODUCT-MEETING m-006 COMPLETED docType=runbook urgent=false items=5 reviewed=true page=10006 ms=60460 answered=[choice, approval]
+PRODUCT-MEETING m-007 COMPLETED docType=runbook urgent=true items=4 reviewed=true page=10007 ms=59434 answered=[choice, approval]
+PRODUCT-MEETING m-008 COMPLETED docType=ata urgent=false items=2 reviewed=true page=10008 ms=44787 answered=[choice, approval]
+PRODUCT-MEETING report=target\product-meeting-report\manual-2026-10-15T14-22-17.890451400Z.json summary={"meetings":8,"completed":8,"docTypeAccuracy":1.0,"docTypeAccuracyOfTheAdapterAlone":0.25,"urgencyAccuracy":0.875,"itemsMatchingTheKey":0.0,"humanReviewRate":0.75,"uncertainRate":0.75,"rejectedItems":0,"inputTokens":1862,"outputTokens":3046,"estimatedCost":0,"latencyP50Ms":52962,"latencyMaxMs":61918,"meanWer":0.1605,"gpuPeakMiB":7849}
+
+Report (target/product-meeting-report/manual-2026-10-15T14-22-17.890451400Z.md):
+# Product meeting run (SDD 3a.6)
+
+Stack: local
+
+| Metric | Value |
+|---|---|
+| meetings | 8 |
+| completed | 8 |
+| docTypeAccuracy | 1.0 |
+| docTypeAccuracyOfTheAdapterAlone | 0.25 |
+| urgencyAccuracy | 0.875 |
+| itemsMatchingTheKey | 0.0 |
+| humanReviewRate | 0.75 |
+| uncertainRate | 0.75 |
+| rejectedItems | 0 |
+| inputTokens | 1862 |
+| outputTokens | 3046 |
+| estimatedCost | 0 |
+| latencyP50Ms | 52962 |
+| latencyMaxMs | 61918 |
+| meanWer | 0.1605 |
+| gpuPeakMiB | 7849 |
+
+| Meeting | Status | Doc type (adapter → final, key) | Reviewed | Urgent (key) | Items (key) | Total ms | WER |
+|---|---|---|---|---|---|---|---|
+| m-001 | COMPLETED | ata → ata (ata) | true | false (false) | 4 (2) | 52962 | 0.1136 |
+| m-002 | COMPLETED | ata → ata (ata) | true | false (false) | 3 (1) | 40775 | 0.1714 |
+| m-003 | COMPLETED | ata → ata (ata) | true | false (true) | 4 (2) | 61918 | 0.2 |
+| m-004 | COMPLETED | adr → adr (adr) | false | false (false) | 5 (1) | 51591 | 0.093 |
+| m-005 | COMPLETED | adr → adr (adr) | false | false (false) | 3 (1) | 37995 | 0.1389 |
+| m-006 | COMPLETED | runbook → runbook (runbook) | true | false (false) | 5 (1) | 60460 | 0.1622 |
+| m-007 | COMPLETED | runbook → runbook (runbook) | true | true (true) | 4 (1) | 59434 | 0.1714 |
+| m-008 | COMPLETED | adr → ata (ata) | true | false (false) | 2 (1) | 44787 | 0.2333 |
+
+Spoken PII as Whisper heard it (synthetic markers; the reference redactor did not catch these forms):
+  m-001: '... Sinthe-I-01-01 Rivera shared the new mockups. Send questions to Sinthe-P-I-I-0-1-0-2 at Example. Calm. ...'
+  m-002: '... Call me at plus 551198,765-4, if anything is unclear. Since PII, 021, Chen, will own ...'

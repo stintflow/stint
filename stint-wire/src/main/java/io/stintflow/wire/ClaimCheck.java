@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.spi.AdapterCapabilities;
 import io.stintflow.spi.BlobStore;
+import io.stintflow.spi.RetentionClass;
 
 /**
  * Transparent claim-check: when a payload exceeds the transport's {@link AdapterCapabilities#maxPayloadBytes()},
@@ -32,6 +33,34 @@ public final class ClaimCheck {
             pointer.put(POINTER_FIELD, uri.toString());
             return pointer;
         });
+    }
+
+    /**
+     * SDD 3a.5, RF6: with a {@code forced} class (a restricted instance's content), the payload always goes to the
+     * blob store under that class, whatever its size — the queue never holds it; without one, as {@link #offload}.
+     */
+    public static CompletionStage<JsonNode> offload(JsonNode payload, AdapterCapabilities caps, BlobStore blob,
+            String key, RetentionClass forced) {
+        if (forced == null) {
+            return offload(payload, caps, blob, key);
+        }
+        if (blob == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "Content of class " + forced.name() + " must be claim-checked and there is no blob store"));
+        }
+        return blob.put(Json.bytes(payload), key, forced).thenApply(ClaimCheck::pointer);
+    }
+
+    /** The pointer that stands for the blob at {@code uri}. */
+    public static JsonNode pointer(URI uri) {
+        ObjectNode pointer = Json.obj();
+        pointer.put(POINTER_FIELD, uri.toString());
+        return pointer;
+    }
+
+    /** Whether {@code payload} is a claim-check pointer. */
+    public static boolean isPointer(JsonNode payload) {
+        return payload != null && payload.isObject() && payload.size() == 1 && payload.hasNonNull(POINTER_FIELD);
     }
 
     public static CompletionStage<JsonNode> rehydrate(JsonNode payload, BlobStore blob) {

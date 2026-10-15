@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "runbook",
+    "urgent": true
+  },
+  "transcript": "Tema: o que fazer quando a fila de pedidos trava\nPessoa A: a fila travou de novo há dez minutos e os pedidos estão parados.\nPessoa B: passos: verificar o consumidor, liberar as mensagens envenenadas, reiniciar o consumidor.\nPessoa C: depois, reprocessar as mensagens da fila de erro na ordem de chegada.\nPessoa A: vamos deixar esses passos escritos para o plantão."
+}

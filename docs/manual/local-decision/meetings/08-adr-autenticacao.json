@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "adr",
+    "urgent": true
+  },
+  "transcript": "Tema: autenticação entre serviços\nPessoa A: o certificado atual expira amanhã e a renovação manual não é mais possível.\nPessoa B: decidimos hoje adotar tokens de curta duração emitidos pelo provedor de identidade.\nPessoa C: a consequência é que todos os serviços precisam do novo cliente ainda esta semana.\nPessoa A: a decisão e as alternativas consideradas ficam registradas."
+}

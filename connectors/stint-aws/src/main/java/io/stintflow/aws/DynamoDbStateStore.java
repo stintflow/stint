@@ -23,6 +23,7 @@ import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
 import io.stintflow.spi.Lineage;
 import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.RetryState;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
 import io.stintflow.spi.Wait;
@@ -62,7 +63,8 @@ import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledExcepti
  * {@code eventId}, numeric {@code expiresAt} in epoch seconds usable as the table's native TTL attribute).
  * Reads are strongly consistent and ignore expired entries — the native TTL deletes lazily and only cleans
  * up. A save deletes the entries it consumed in its transaction. The instance item keeps the engine's
- * {@code listen} bookkeeping as the optional {@code listenState} attribute (JSON).
+ * {@code listen} bookkeeping as the optional {@code listenState} attribute (JSON), and (SDD 3a.1) the decision
+ * records as the optional {@code decisions} attribute (JSON).
  */
 @ApplicationScoped
 public class DynamoDbStateStore implements StateStore {
@@ -177,6 +179,13 @@ public class DynamoDbStateStore implements StateStore {
         }
         if (snap.listenState() != null) {
             item.put("listenState", AttributeValue.fromS(snap.listenState().toString()));
+        }
+        if (snap.decisions() != null) {
+            item.put("decisions", AttributeValue.fromS(snap.decisions().toString()));
+        }
+        // SDD 3a.5, RF1: the instance's data level (optional attribute).
+        if (snap.sensitivity() != null) {
+            item.put("sensitivity", AttributeValue.fromS(snap.sensitivity().wireName()));
         }
 
         Put.Builder builder = Put.builder().tableName(instancesTable).item(item);
@@ -361,6 +370,10 @@ public class DynamoDbStateStore implements StateStore {
         AttributeValue tracestate = item.get("suspendedTracestate");
         // SDD 2.3, tolerant read: items written before SDD 2.3 have no listen bookkeeping.
         AttributeValue listenState = item.get("listenState");
+        // SDD 3a.1, tolerant read: items written before SDD 3a.1 have no decision records.
+        AttributeValue decisions = item.get("decisions");
+        // SDD 3a.5, tolerant read: items written before SDD 3a.5 (or of instances without a level) have none.
+        AttributeValue sensitivity = item.get("sensitivity");
         return new InstanceSnapshot(
                 item.get("instanceId").s(),
                 WorkflowRef.parse(item.get("definition").s()),
@@ -375,7 +388,9 @@ public class DynamoDbStateStore implements StateStore {
                 startedAt == null ? null : Instant.ofEpochMilli(Long.parseLong(startedAt.n())),
                 chainId == null ? null : chainId.s(),
                 traceparent == null ? null : Lineage.trace(traceparent.s(), tracestate == null ? null : tracestate.s()),
-                listenState == null ? null : Json.read(listenState.s().getBytes()));
+                listenState == null ? null : Json.read(listenState.s().getBytes()),
+                decisions == null ? null : Json.read(decisions.s().getBytes()),
+                sensitivity == null ? null : Sensitivity.parseOrRestricted(sensitivity.s()));
     }
 
     private static void putIfSet(Map<String, AttributeValue> item, String name, String value) {

@@ -21,6 +21,10 @@
             <artifactId>stint-core</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-wire</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-yaml</artifactId>
         </dependency>

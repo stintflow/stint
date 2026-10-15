@@ -3,6 +3,8 @@ package io.stintflow.wire;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -10,6 +12,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.spi.ErrorInfo;
 import io.stintflow.spi.Lineage;
+import io.stintflow.spi.ModelProvider;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.TaskInvocation;
 import io.stintflow.spi.TaskResult;
 import io.stintflow.spi.WorkflowRef;
@@ -30,6 +34,7 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
     private static final URI SOURCE_ENGINE = URI.create("stint://engine");
     private static final URI SOURCE_WORKER = URI.create("stint://worker");
     private static final String LEGACY_TYPE_PREFIX = "urn:legacy:";
+    private static final System.Logger LOG = System.getLogger(DefaultCloudEventCodec.class.getName());
 
     @Override
     public CloudEvent toEvent(TaskInvocation inv) {
@@ -45,6 +50,12 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 .withExtension(StintEvents.EXT_TASK_ID, inv.taskId())
                 .withExtension(StintEvents.EXT_ATTEMPT, String.valueOf(inv.attempt()))
                 .withExtension(StintEvents.EXT_DEFINITION, inv.definition().canonical());
+        if (inv.deadline() != null) {
+            builder.withExtension(StintEvents.EXT_DEADLINE, inv.deadline().toString());
+        }
+        if (inv.sensitivity() != null) {
+            builder.withExtension(StintEvents.EXT_SENSITIVITY, inv.sensitivity().wireName());
+        }
         return withLineage(builder, inv.lineage()).build();
     }
 
@@ -66,6 +77,9 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 .withData(Json.bytes(data))
                 .withExtension(StintEvents.EXT_CORRELATION_ID, result.correlationId())
                 .withExtension(StintEvents.EXT_WORKFLOW_INSTANCE_ID, workflowInstanceId);
+        if (result.provider() != null) {
+            builder.withExtension(StintEvents.EXT_PROVIDER, result.provider().wire());
+        }
         return withLineage(builder, result.lineage()).build();
     }
 
@@ -80,7 +94,59 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
                 event.getSubject(),
                 input,
                 Integer.parseInt(ext(event, StintEvents.EXT_ATTEMPT)),
-                lineage(event));
+                lineage(event),
+                deadline(event),
+                sensitivity(event));
+    }
+
+    /**
+     * SDD 3a.5: the event's {@code stintsensitivity}, or {@code null} when absent; a value that isn't a level reads as
+     * {@link Sensitivity#RESTRICTED} — the safe side — and is logged without itself.
+     */
+    public static Sensitivity sensitivity(CloudEvent event) {
+        String value = optionalExt(event, StintEvents.EXT_SENSITIVITY);
+        if (value == null) {
+            return null;
+        }
+        return Sensitivity.parse(value).orElseGet(() -> {
+            LOG.log(System.Logger.Level.WARNING, "Event {0} has an unreadable {1} extension: read as restricted",
+                    event.getId(), StintEvents.EXT_SENSITIVITY);
+            return Sensitivity.RESTRICTED;
+        });
+    }
+
+    /**
+     * SDD 3a.5, RF8: the result's {@code stintprovider}, or {@code null} when absent; one that can't be read is logged
+     * and dropped — it only feeds the audit trail.
+     */
+    public static ModelProvider provider(CloudEvent event) {
+        String value = optionalExt(event, StintEvents.EXT_PROVIDER);
+        if (value == null) {
+            return null;
+        }
+        return ModelProvider.parse(value).orElseGet(() -> {
+            LOG.log(System.Logger.Level.WARNING, "Event {0} has an unreadable {1} extension: ignored",
+                    event.getId(), StintEvents.EXT_PROVIDER);
+            return null;
+        });
+    }
+
+    /**
+     * SDD 3a.3c, tolerant read: no {@code stintdeadline}, or one that isn't an instant, is no known deadline — never
+     * an error. An unreadable one is logged without its value.
+     */
+    static Instant deadline(CloudEvent event) {
+        String value = optionalExt(event, StintEvents.EXT_DEADLINE);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Instant.parse(value);
+        } catch (DateTimeParseException e) {
+            LOG.log(System.Logger.Level.WARNING, "Task invoke {0} has an unreadable {1} extension: read as no deadline",
+                    event.getId(), StintEvents.EXT_DEADLINE);
+            return null;
+        }
     }
 
     @Override
@@ -89,9 +155,11 @@ public final class DefaultCloudEventCodec implements CloudEventCodec {
         String correlationId = ext(event, StintEvents.EXT_CORRELATION_ID);
         TaskResult.Status status = TaskResult.Status.valueOf(data.get("status").asText());
         if (status == TaskResult.Status.FAILED) {
-            return TaskResult.failed(correlationId, errorFromJson(data.get("error"))).withLineage(lineage(event));
+            return TaskResult.failed(correlationId, errorFromJson(data.get("error"))).withLineage(lineage(event))
+                    .withProvider(provider(event));
         }
-        return TaskResult.completed(correlationId, data.get("output")).withLineage(lineage(event));
+        return TaskResult.completed(correlationId, data.get("output")).withLineage(lineage(event))
+                .withProvider(provider(event));
     }
 
     /** SDD 2.5: writes only the lineage extensions that are set. */

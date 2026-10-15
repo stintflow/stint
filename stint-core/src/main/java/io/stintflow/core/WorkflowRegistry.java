@@ -55,6 +55,8 @@ public final class WorkflowRegistry {
         this(Duration.ofDays(365));
     }
 
+    private volatile boolean policyRequired;
+
     public WorkflowRegistry(Duration maxTimerDelay) {
         this.maxTimerDelay = maxTimerDelay;
     }
@@ -65,7 +67,20 @@ public final class WorkflowRegistry {
      * version's definition change. Registering it again with different content is rejected: bump
      * {@code document.version} instead of silently replacing a version instances may be running.
      */
+    /**
+     * SDD 3a.5, 8c: from now on, a definition without a compliance policy ({@code document.metadata.x-stint-policy})
+     * is refused. Off by default, so workflows of earlier phases keep registering; agentic workflows turn it on.
+     */
+    public WorkflowRegistry requirePolicy() {
+        this.policyRequired = true;
+        return this;
+    }
+
     public void register(WorkflowDefinition def) {
+        if (policyRequired && def.policy() == null) {
+            throw new IllegalArgumentException("Workflow " + def.ref().canonical() + " has no compliance policy "
+                    + "(document.metadata.x-stint-policy), which this registry requires (SDD 3a.5)");
+        }
         validateTimeouts(def.root());
         validateEmitTypes(def.root());
         List<ListenNode> listens = new ArrayList<>();

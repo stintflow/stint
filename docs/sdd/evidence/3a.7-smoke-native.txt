@@ -1,0 +1,16 @@
+SDD 3a.7 — native build and run of examples/stint-example-aws-smoke with the SQS worker binding (13/10/2026)
+
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-aws-smoke
+[INFO] BUILD SUCCESS
+Finished generating 'stint-example-aws-smoke-0.1.0-SNAPSHOT-runner' in 1m 32s.
+[INFO] BUILD SUCCESS
+
+Run: the binary in quay.io/quarkus/ubi9-quarkus-micro-image:2.0 on a Docker network with floci (credentials test/test), the resources AwsSmokeIT's FlociResource creates, provisioned with the AWS CLI; config by -D arguments. The same checks as AwsSmokeIT:
+--- POST /smoke
+{"echo":"smoke","nameLength":5,"chainId":"chn-fc19f26c-7445-3d84-92c9-e1a5188e570f"}
+--- fact on the domain bus
+{"specversion":"1.0","id":"76d08f68-e12c-3c80-aa5e-4077b07dde92","source":"https://stintflow.io/smoke","type":"io.stintflow.smoke.done.v1","datacontenttype":"application/json","time":"2026-10-13T09:25:45.004124225Z","chainid":"chn-fc19f26c-7445-3d84-92c9-e1a5188e570f","causationid":"ad7f2d90-36dc-45
+--- schedules: 1
+--- native app log
+{"timestamp":"2026-10-13T09:25:44.856814823Z","sequence":391,"loggerClassName":"org.slf4j.impl.Slf4jLogger","loggerName":"io.stintflow.aws.worker.SqsWorkerBinding","level":"INFO","message":"SQS worker binding started on http://localhost:4566/000000000000/smoke-invoke: concurrency 4, waitTime 5 s, visibilityTimeout 30 s, extendEvery 15 s, maxExtension PT1H, shutdownGrace PT30S","threadName":"main","threadId":3,"mdc":{},"ndc":"","hostName":"7967fd9f770d","processName":"/app/runner","processId":1}
+{"timestamp":"2026-10-13T09:25:44.859242293Z","sequence":392,"loggerClassName":"org.jboss.logging.Logger","loggerName":"io.quarkus","level":"INFO","message":"stint-aws-smoke 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.065s. Listening on: http://0.0.0.0:8080","threadName":"main","threadId":3,"mdc":{},"ndc":"","hostName":"7967fd9f770d","processName":"/app/runner","processId":1}

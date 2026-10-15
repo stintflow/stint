@@ -11,13 +11,15 @@ import com.fasterxml.jackson.databind.JsonNode;
  * @param output        the task output when {@code status == COMPLETED} (may be a claim-check pointer)
  * @param error         failure detail when {@code status == FAILED}, otherwise {@code null}
  * @param lineage       chain, cause (the invoke's id) and the worker's trace context (SDD 2.5)
+ * @param provider      the AI provider that produced it, when the worker reports one (SDD 3a.5, RF8), else {@code null}
  */
 public record TaskResult(
         String correlationId,
         Status status,
         JsonNode output,
         ErrorInfo error,
-        Lineage lineage) {
+        Lineage lineage,
+        ModelProvider provider) {
 
     public enum Status {COMPLETED, FAILED}
 
@@ -25,13 +27,22 @@ public record TaskResult(
         lineage = lineage == null ? Lineage.NONE : lineage;
     }
 
+    /** A result with no provider (the pre-SDD-3a.5 shape). */
+    public TaskResult(String correlationId, Status status, JsonNode output, ErrorInfo error, Lineage lineage) {
+        this(correlationId, status, output, error, lineage, null);
+    }
+
     /** A result with no lineage (the pre-SDD-2.5 shape). */
     public TaskResult(String correlationId, Status status, JsonNode output, ErrorInfo error) {
-        this(correlationId, status, output, error, Lineage.NONE);
+        this(correlationId, status, output, error, Lineage.NONE, null);
     }
 
     public TaskResult withLineage(Lineage lineage) {
-        return new TaskResult(correlationId, status, output, error, lineage);
+        return new TaskResult(correlationId, status, output, error, lineage, provider);
+    }
+
+    public TaskResult withProvider(ModelProvider provider) {
+        return new TaskResult(correlationId, status, output, error, lineage, provider);
     }
 
     public static TaskResult completed(String correlationId, JsonNode output) {

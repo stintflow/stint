@@ -1,0 +1,15 @@
+SDD 3a.3b, CA5 — native build and run of examples/stint-example-ai-worker after the causal commit time (12/10/2026)
+
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-ai-worker
+[INFO] [io.quarkus.deployment.pkg.steps.NativeImageBuildStep] Running Quarkus native-image plugin on MANDREL 25.0.4.1 JDK 25.0.4.1+1-LTS
+                        6,3s (8,6% of total time) in 880 GCs | Peak RSS: 2,49GB | CPU load: 9,01
+Finished generating 'stint-example-ai-worker-0.1.0-SNAPSHOT-runner' in 1m 12s.
+[INFO] BUILD SUCCESS
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0), exit code 0. The second LLM step reads the first step's exchange from the instance's memory (contextMessages 3):
+INFO  [io.quarkus] (main) stint-example-ai-worker 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.011s. 
+INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/3/summarize in instance e36308c1-ca1f-4845-a9c9-7bad6315b346 (chain chn-a147e4c3-98c5-395a-91b7-ed00b224a051, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=73, outputTokens=10, toolCalls=0, latencyMs=0, finishReason=STOP
+INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/4/extract in instance e36308c1-ca1f-4845-a9c9-7bad6315b346 (chain chn-a147e4c3-98c5-395a-91b7-ed00b224a051, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=119, outputTokens=29, toolCalls=0, latencyMs=0, finishReason=STOP
+AI-WORKER result={"transcript":"Topic: quarterly planning\nSpeaker A: the release slips one week.\nSpeaker B: I will update the roadmap.\nSpeaker A: and I will tell the support team.","doc":"ata","urgent":false,"summary":{"topic":"quarterly planning","speakers":2},"actions":{"items":["Speaker B: I will update the roadmap.","Speaker A: and I will tell the support team."],"contextMessages":3}}
+AI-WORKER urgent decision={"kind":"boolean","value":false,"confidence":0.8,"uncertain":false,"provenance":{"adapter":"litjev","provider":"litjev","model":"synthetic/qwen-checkpoint","version":"jev-adapter/1;server=litjev"},"attempt":1,"correlationId":"56943df7-efe8-4018-b13c-4cc5b985f583","decidedAt":"2026-10-13T00:16:14.140874647Z","count":1}
+AI-WORKER OK

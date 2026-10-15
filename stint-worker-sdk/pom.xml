@@ -62,6 +62,11 @@
                                 <bannedDependencies>
                                     <excludes>
                                         <exclude>io.github.stintflow:stint-core:*:*:compile</exclude>
+                                        <!-- SDD 3a.7, 4.1: transport-neutral — no cloud SDK; bindings live in connectors -->
+                                        <exclude>software.amazon.awssdk</exclude>
+                                        <exclude>com.amazonaws</exclude>
+                                        <exclude>com.azure</exclude>
+                                        <exclude>com.google.cloud</exclude>
                                     </excludes>
                                 </bannedDependencies>
                             </rules>

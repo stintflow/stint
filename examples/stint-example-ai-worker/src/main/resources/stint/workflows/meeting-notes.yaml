@@ -1,0 +1,51 @@
+# SDD 3a.3, CA4, SDD 3a.2, CA12 and SDD 3a.2b, CA5: a synthetic meeting through two decisions and two LLM steps of one instance.
+# - classify: which document the meeting produces, decided by the LLM adapter (fake model);
+# - urgent:   whether it needs action today, decided by the Jev adapter's local profile (an in-process fake LitJev);
+# - summarize, extract: the second LLM step gets no transcript, it reads the meeting from the instance's memory.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: meeting-notes
+  version: '1.0.0'
+do:
+  - keep:
+      set: '${ . }'
+      export:
+        as: '${ {transcript: .transcript} }'
+  - classify:
+      input: { from: '${ $context }' }
+      call: decision
+      with:
+        task: classify-meeting
+        kind: choice
+        input: '${ {transcript: .transcript} }'
+        options:
+          - ata: { description: "Minutes: what was discussed and who does what" }
+          - adr: { description: "A record of an architecture decision" }
+          - runbook: { description: "Operating steps" }
+      export: { as: '${ $context + {doc: .value} }' }
+  - urgent:
+      input: { from: '${ $context }' }
+      call: decision
+      with:
+        task: is-urgent
+        kind: boolean
+        input: '${ {transcript: .transcript} }'
+      export: { as: '${ $context + {urgent: .value} }' }
+  - summarize:
+      input: { from: '${ $context }' }
+      call: remote
+      with:
+        task: summarize-meeting
+        input:
+          transcript: ${ .transcript }
+      export:
+        as: '${ $context + {summary: .} }'
+  - extract:
+      call: remote
+      with:
+        task: extract-actions
+        input:
+          ask: action-items
+      export:
+        as: '${ $context + {actions: .} }'

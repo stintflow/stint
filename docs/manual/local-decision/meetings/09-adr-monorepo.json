@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "adr",
+    "urgent": false
+  },
+  "transcript": "Tema: organização dos repositórios\nPessoa A: hoje temos doze repositórios pequenos e versões desencontradas.\nPessoa B: a proposta é migrar para um monorepo com build incremental.\nPessoa C: decidido: monorepo, com a ressalva de investir em cache de build.\nPessoa A: o documento de decisão descreve contexto, decisão e consequências."
+}

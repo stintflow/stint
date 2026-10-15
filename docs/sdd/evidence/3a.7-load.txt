@@ -1,0 +1,6 @@
+SDD 3a.7 — load measurement in the spirit of the sandbox's S.4 (12/10/2026), floci/floci:latest (2.1.0), this machine (Ryzen 5 3600, 32 GB)
+50 invokes sent at once; 10 slow (their work completes after 2 s on a delayed executor) and 40 fast (50 ms); latency = send -> result in the result queue; nearest-rank percentiles.
+mvn -o test -pl stint-it -Dtest=SqsWorkerLoadMeasurement
+
+MEASURE concurrency=1 tasks=50 (10 x 2000 ms, 40 x 50 ms): median 11458 ms, p95 22730 ms, max 22862 ms, all done in 23040 ms
+MEASURE concurrency=8 tasks=50 (10 x 2000 ms, 40 x 50 ms): median 522 ms, p95 2735 ms, max 4209 ms, all done in 4239 ms

@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "adr",
+    "urgent": false
+  },
+  "transcript": "Tema: escolha da fila de mensagens\nPessoa A: avaliamos duas opções de fila para os eventos de pedidos.\nPessoa B: a opção gerenciada custa mais, mas elimina a operação dos brokers.\nPessoa C: decidimos pela fila gerenciada; a consequência é depender do provedor de nuvem.\nPessoa A: alternativas descartadas e motivos ficam registrados no documento de decisão."
+}

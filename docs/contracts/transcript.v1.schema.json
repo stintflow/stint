@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stintflow.io/contracts/transcript.v1.schema.json",
+  "title": "A transcript at rest, and the transcribe task's output (SDD 3a.6, 4.2)",
+  "description": "The transcript rests in a blob of the raw-transcript retention class (restricted, short retention), written by the transcribe handler of stint-worker-transcription. The task's output (TranscribeOutput) never holds the text.",
+  "$defs": {
+    "Transcript": {
+      "type": "object",
+      "required": ["version", "language", "durationSeconds", "segments", "engine", "model"],
+      "properties": {
+        "version": { "const": 1 },
+        "language": { "type": "string" },
+        "durationSeconds": { "type": "number", "minimum": 0 },
+        "segments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["start", "end", "text"],
+            "properties": {
+              "start": { "type": "number", "minimum": 0 },
+              "end": { "type": "number", "minimum": 0 },
+              "text": { "type": "string" }
+            }
+          }
+        },
+        "engine": { "type": "string", "description": "e.g. speaches, fake-transcriber" },
+        "model": { "type": "string" }
+      }
+    },
+    "TranscribeInput": {
+      "type": "object",
+      "required": ["audioRef"],
+      "properties": {
+        "audioRef": { "description": "A URI, or a claim-check pointer {\"__stint_claim_check__\": uri}" },
+        "language": { "type": "string" }
+      }
+    },
+    "TranscribeOutput": {
+      "type": "object",
+      "required": ["transcriptRef", "durationSeconds", "segmentCount", "engine", "model"],
+      "properties": {
+        "transcriptRef": { "type": "object", "required": ["__stint_claim_check__"], "description": "Claim-check pointer to the Transcript blob; call: redact reads it with its blob store" },
+        "language": { "type": "string" },
+        "durationSeconds": { "type": "number" },
+        "segmentCount": { "type": "integer" },
+        "engine": { "type": "string" },
+        "model": { "type": "string" }
+      }
+    }
+  },
+  "$ref": "#/$defs/Transcript"
+}

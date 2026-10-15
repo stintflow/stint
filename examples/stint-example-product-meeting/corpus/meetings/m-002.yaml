@@ -1,0 +1,14 @@
+id: m-002
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: bf_emma }, { id: s2, voice: am_michael } ]
+script:
+  - { speaker: s1, text: "This is the recap of the pricing review. Call me at +55 11 98765-4321 if anything is unclear." }
+  - { speaker: s2, text: "SYNTH-PII-0201 Chen will own the annual plan discount." }
+  - { speaker: s1, text: "I will publish the new price table next week." }
+expected:
+  docType: ata
+  urgent: false
+  items: [ "I will publish the new price table next week." ]
+  review: false
+pii: [ SYNTH-PII-0201 ]

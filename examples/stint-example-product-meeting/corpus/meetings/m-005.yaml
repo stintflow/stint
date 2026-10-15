@@ -1,0 +1,14 @@
+id: m-005
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: bm_george }, { id: s2, voice: bf_emma } ]
+script:
+  - { speaker: s1, text: "This decision record covers the database for reports. We decided to keep the managed database." }
+  - { speaker: s2, text: "The alternative was a warehouse. Reach SYNTH-PII-0501@example.com for the cost sheet." }
+  - { speaker: s1, text: "I will link the cost sheet in the record." }
+expected:
+  docType: adr
+  urgent: false
+  items: [ "I will link the cost sheet in the record." ]
+  review: false
+pii: [ SYNTH-PII-0501 ]

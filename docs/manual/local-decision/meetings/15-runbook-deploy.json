@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "runbook",
+    "urgent": false
+  },
+  "transcript": "Tema: passo a passo do deploy manual\nPessoa A: quando o pipeline estiver indisponível, o deploy segue estes passos.\nPessoa B: gerar o artefato localmente, assinar e enviar para o repositório de artefatos.\nPessoa C: aplicar no ambiente de homologação, rodar os testes de fumaça e só então em produção.\nPessoa A: anotar a versão publicada no registro de mudanças."
+}

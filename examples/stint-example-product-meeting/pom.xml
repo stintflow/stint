@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.stintflow</groupId>
+        <artifactId>stint-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>stint-example-product-meeting</artifactId>
+    <name>Stint :: Examples :: Product Meeting</name>
+    <description>SDD 3a.6: the Phase 3a milestone — a synthetic English meeting from its audio to approved, published
+        minutes: transcription, redaction, local decisions, structuring by an LLM, human review and approval, publishing
+        to one allowed space, facts, and a metrics report. Fake models in the build; a local model stack (Whisper,
+        LitJev, llama.cpp) for the manual run. Built JVM or native and run by a QuarkusMainIntegrationTest.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-dsl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-inmemory</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-langchain4j</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-decision-jev</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-redaction</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-transcription</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-publishing</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-otel</artifactId>
+        </dependency>
+        <!-- SDD 3a.6, 8d: the manual run's local generator (llama.cpp's OpenAI-compatible server, on loopback). Only
+             here, never in a module. -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-arc</artifactId>
+        </dependency>
+
+        <!-- tests -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- SDD 3a.6: the corpus's scripts and manifest ride in the jar (the audio, git-ignored, never does). -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>corpus</directory>
+                <targetPath>corpus</targetPath>
+                <includes>
+                    <include>manifest.json</include>
+                    <include>meetings/*.yaml</include>
+                </includes>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>quarkus-maven-plugin</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <extensions>true</extensions>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>build</goal>
+                            <goal>generate-code</goal>
+                            <goal>generate-code-tests</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- The pipeline tests capture every log record: JBoss LogManager, as in the packaged app. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <!-- The QuarkusMainIntegrationTest runs the packaged artifact (jar, or the native binary with -Pnative). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>${surefire-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <systemPropertyVariables>
+                        <native.image.path>${project.build.directory}/${project.build.finalName}-runner</native.image.path>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- Native without a local GraalVM, as the AWS smoke (SDD 2.7, sec. 8b):
+             mvn -Pnative verify -Dquarkus.native.container-build=true -pl examples/stint-example-product-meeting -am -->
+        <profile>
+            <id>native</id>
+            <activation>
+                <property>
+                    <name>native</name>
+                </property>
+            </activation>
+            <properties>
+                <quarkus.native.enabled>true</quarkus.native.enabled>
+                <quarkus.package.jar.enabled>false</quarkus.package.jar.enabled>
+            </properties>
+        </profile>
+    </profiles>
+</project>

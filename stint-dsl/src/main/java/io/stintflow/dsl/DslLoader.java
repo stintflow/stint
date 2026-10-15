@@ -37,11 +37,17 @@ import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.core.model.TryNode;
+import io.stintflow.core.policy.Policy;
 import io.stintflow.core.trigger.EventFilter;
 import io.stintflow.spi.CronExpression;
 import io.stintflow.spi.ErrorInfo;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.WorkflowRef;
 import io.stintflow.spi.wire.StintEvents;
+import io.stintflow.wire.decision.DecisionKind;
+import io.stintflow.wire.decision.DecisionOption;
+import io.stintflow.wire.decision.DecisionRequest;
+import io.stintflow.wire.review.ReviewContract;
 
 /**
  * Compiles a CNCF Serverless Workflow DSL 1.0 YAML/JSON document into a {@link WorkflowDefinition}
@@ -128,6 +134,7 @@ public final class DslLoader {
     /** Per-load mutable compiler state — a fresh instance backs every {@link #load} call. */
     private static final class Compiler {
         private final String sourceName;
+        private Set<String> reviewSources = Set.of();
         // SDD 2.9, RF4: the keys the compiler uses, per object (DSL 1.0 informative keys included).
         private static final Set<String> ROOT_KEYS = Set.of("document", "schedule", "do");
         private static final Set<String> DOCUMENT_KEYS =
@@ -144,6 +151,12 @@ public final class DslLoader {
                 "emit", Set.of("emit"),
                 "listen", Set.of("listen", "timeout"));
         private static final Set<String> CALL_REMOTE_WITH_KEYS = Set.of("task", "input");
+        /** SDD 3a.1: {@code call: decision} (Stint extension) — its own task key, {@code with} keys and option keys. */
+        private static final Set<String> DECISION_WITH_KEYS = Set.of("task", "kind", "input", "options");
+        private static final Set<String> DECISION_OPTION_KEYS = Set.of("description", "then");
+        /** SDD 3a.5: {@code call: redact} (Stint extension) — its {@code with} keys and where a doubtful one goes. */
+        private static final Set<String> REDACT_WITH_KEYS = Set.of("task", "input", "lowersTo", "types");
+        private static final String ON_DOUBT = "onDoubt";
         private static final Set<String> TIMEOUT_KEYS = Set.of("after");
         private static final Set<String> DURATION_KEYS = Set.of("days", "hours", "minutes", "seconds", "milliseconds");
         private static final Set<String> INPUT_KEYS = Set.of("from");
@@ -161,6 +174,22 @@ public final class DslLoader {
         private static final Set<String> BACKOFF_KEYS = Set.of("constant", "linear", "exponential");
         private static final Set<String> RETRY_LIMIT_KEYS = Set.of("attempt", "duration");
         private static final Set<String> RETRY_ATTEMPT_KEYS = Set.of("count", "duration");
+        /** SDD 3a.5: {@code document.metadata.x-stint-policy} (Stint extension) and a task's own. */
+        private static final Set<String> POLICY_KEYS = Set.of("sensitivity", "routes", "retention", "review");
+        private static final Set<String> POLICY_REVIEW_KEYS = Set.of("sources");
+        // SDD 3a.4, 4.1: the review step (Stint extension)
+        private static final Set<String> REVIEW_WITH_KEYS = Set.of("kind", "role", "material", "items", "options",
+                "deadline", "remind", "escalate", "onTimeout");
+        private static final Set<String> UNCERTAIN_REVIEW_KEYS = Set.of("role", "material", "deadline", "remind",
+                "escalate", "onTimeout");
+        private static final Set<String> ESCALATE_KEYS = Set.of("role", "after");
+        private static final String ON_REJECT = "onReject";
+        private static final java.util.regex.Pattern ROLE = java.util.regex.Pattern.compile("[a-z0-9][a-z0-9-]*");
+        private static final Set<String> POLICY_SENSITIVITY_KEYS = Set.of("from");
+        private static final Set<String> POLICY_RETENTION_KEYS = Set.of("days");
+        private static final Set<String> TASK_POLICY_KEYS = Set.of("maxSensitivity");
+        /** SDD 3a.5: a task's {@code metadata.x-stint-policy.maxSensitivity}, by the pointer of its remote call. */
+        private final Map<String, Sensitivity> taskMax = new java.util.HashMap<>();
 
         private final LoadOptions opts;
         private final ExpressionEvaluator evaluator;
@@ -185,15 +214,146 @@ public final class DslLoader {
 
             Schedule schedule = root.has("schedule") ? compileSchedule(root.get("schedule"), document) : null;
 
+            reviewSources = reviewSourcesOf(document.path("metadata").path(Policy.METADATA_KEY));
             JsonNode doArray = root.get("do");
             List<TaskNode> tasks = doArray != null && doArray.isArray()
                     ? compileTaskList(doArray, "")
                     : List.of();
 
+            Policy policy = compilePolicy(document.path("metadata").get(Policy.METADATA_KEY));
+            if (policy == null && !taskMax.isEmpty()) {
+                hardError("/document/metadata/" + Policy.METADATA_KEY, "a task declares metadata."
+                        + Policy.METADATA_KEY + " but the workflow has no document.metadata." + Policy.METADATA_KEY,
+                        null);
+            }
+
             failIfAnyHardErrors();
 
             DoNode rootNode = new DoNode("root", "", DataFlow.NONE, FlowDirective.END, tasks);
-            return new WorkflowDefinition(ref, rootNode, schedule);
+            return new WorkflowDefinition(ref, rootNode, schedule, policy);
+        }
+
+        /**
+         * SDD 3a.5, RF3: the Stint extension {@code document.metadata.x-stint-policy} — not part of the CNCF DSL, and
+         * kept under {@code document.metadata}, which the DSL leaves free, so the document stays valid for it. STRICT
+         * fails on any key it doesn't know.
+         */
+        private Policy compilePolicy(JsonNode node) {
+            if (node == null) {
+                return null;
+            }
+            String base = "/document/metadata/" + Policy.METADATA_KEY;
+            if (!node.isObject()) {
+                hardError(base, "'" + Policy.METADATA_KEY + "' is an object (sensitivity, routes, retention)", null);
+                return null;
+            }
+            checkKeys(node, base, POLICY_KEYS);
+            Expr from = null;
+            JsonNode sensitivity = node.get("sensitivity");
+            if (sensitivity != null) {
+                checkKeys(sensitivity, base + "/sensitivity", POLICY_SENSITIVITY_KEYS);
+                if (sensitivity.has("from")) {
+                    from = compileAndValidate(TemplateCompiler.compileTemplate(sensitivity.get("from")),
+                            base + "/sensitivity/from");
+                }
+            }
+            Map<Sensitivity, Set<String>> routes = new java.util.EnumMap<>(Sensitivity.class);
+            JsonNode routesNode = node.get("routes");
+            if (routesNode != null) {
+                if (!routesNode.isObject()) {
+                    hardError(base + "/routes", "'routes' maps a level to a list of routing keys", null);
+                } else {
+                    routesNode.properties().forEach(e -> {
+                        String pointer = base + "/routes/" + e.getKey();
+                        Sensitivity level = Sensitivity.parse(e.getKey()).orElse(null);
+                        if (level == null) {
+                            unsupported(pointer, "'" + e.getKey() + "' is not a level (internal, confidential, "
+                                    + "restricted)");
+                            return;
+                        }
+                        if (!e.getValue().isArray()) {
+                            hardError(pointer, "a level's routes are a list of routing keys ('*' = any)", null);
+                            return;
+                        }
+                        Set<String> keys = new java.util.LinkedHashSet<>();
+                        for (JsonNode key : e.getValue()) {
+                            if (!key.isTextual() || key.asText().isBlank()) {
+                                hardError(pointer, "a route is a routing key (text) or '*'", null);
+                            } else {
+                                keys.add(key.asText());
+                            }
+                        }
+                        routes.put(level, keys);
+                    });
+                }
+            }
+            Map<String, java.time.Duration> retention = new java.util.LinkedHashMap<>();
+            JsonNode retentionNode = node.get("retention");
+            if (retentionNode != null) {
+                if (!retentionNode.isObject()) {
+                    hardError(base + "/retention", "'retention' maps a blob class to {days}", null);
+                } else {
+                    retentionNode.properties().forEach(e -> {
+                        String pointer = base + "/retention/" + e.getKey();
+                        checkKeys(e.getValue(), pointer, POLICY_RETENTION_KEYS);
+                        JsonNode days = e.getValue().get("days");
+                        if (days == null || !days.canConvertToInt() || days.asInt() < 1) {
+                            hardError(pointer + "/days", "a retention is a whole number of days, at least 1", null);
+                        } else {
+                            retention.put(e.getKey(), java.time.Duration.ofDays(days.asInt()));
+                        }
+                    });
+                }
+            }
+            JsonNode reviewNode = node.get("review");
+            if (reviewNode != null) {
+                checkKeys(reviewNode, base + "/review", POLICY_REVIEW_KEYS);
+                JsonNode sources = reviewNode.get("sources");
+                if (sources == null || !sources.isArray() || sources.isEmpty()) {
+                    hardError(base + "/review/sources", "'review.sources' lists the sources trusted to answer reviews",
+                            null);
+                } else {
+                    for (JsonNode source : sources) {
+                        if (!source.isTextual() || source.asText().isBlank()) {
+                            hardError(base + "/review/sources", "a review source is the event 'source' (a URI)", null);
+                        }
+                    }
+                }
+            }
+            return new Policy(from, routes, retention, taskMax);
+        }
+
+        /** SDD 3a.5: a task's {@code metadata.x-stint-policy.maxSensitivity}, kept for each remote call it compiled to. */
+        private void collectTaskPolicy(JsonNode body, String pointer, List<TaskNode> compiled) {
+            JsonNode policy = body == null ? null : body.path("metadata").get(Policy.METADATA_KEY);
+            if (policy == null) {
+                return;
+            }
+            String base = pointer + "/metadata/" + Policy.METADATA_KEY;
+            checkKeys(policy, base, TASK_POLICY_KEYS);
+            JsonNode max = policy.get("maxSensitivity");
+            if (max == null) {
+                return;
+            }
+            Sensitivity level = Sensitivity.parse(max.asText()).orElse(null);
+            if (level == null) {
+                hardError(base + "/maxSensitivity", "'" + max.asText() + "' is not a level (internal, confidential, "
+                        + "restricted)", null);
+                return;
+            }
+            boolean remote = false;
+            for (TaskNode node : compiled) {
+                if (node instanceof CallRemoteNode call) {
+                    taskMax.put(call.pointer(), level);
+                    remote = true;
+                } else if (node instanceof TryNode tryNode && tryNode.body() != null) {
+                    taskMax.put(tryNode.body().pointer(), level);
+                    remote = true;
+                }
+            }
+            if (!remote) {
+                hardError(base, "only a task that dispatches (call) takes a maxSensitivity", null);
+            }
         }
 
         /**
@@ -311,12 +471,478 @@ public final class DslLoader {
                 String taskName = names.next();
                 JsonNode body = entry.get(taskName);
                 String pointer = parentPointer + "/do/" + i + "/" + taskName;
-                TaskNode compiled = compileTask(taskName, body, pointer);
-                if (compiled != null) {
-                    tasks.add(compiled);
+                List<TaskNode> compiled;
+                if (isDecision(body)) {
+                    checkTaskKeys(body, pointer);
+                    compiled = compileDecision(taskName, body, pointer, null);
+                } else if (isRedact(body)) {
+                    checkTaskKeys(body, pointer);
+                    compiled = compileRedact(taskName, body, pointer);
+                } else if (isReview(body)) {
+                    checkTaskKeys(body, pointer);
+                    compiled = compileReview(taskName, body, pointer);
+                } else if (isDecisionTry(body)) {
+                    compiled = compileTryDecision(taskName, body, pointer);
+                } else {
+                    TaskNode single = compileTask(taskName, body, pointer);
+                    compiled = single == null ? List.of() : List.of(single);
+                }
+                tasks.addAll(compiled);
+                collectTaskPolicy(body, pointer, compiled);
+            }
+            checkUniqueNames(tasks);
+            return tasks;
+        }
+
+        private static boolean isReview(JsonNode body) {
+            return body != null && body.isObject() && "review".equals(body.path("call").asText(null));
+        }
+
+        /** SDD 3a.4: the trusted answer sources, read before the tasks (the policy itself is compiled after). */
+        private static Set<String> reviewSourcesOf(JsonNode policy) {
+            Set<String> sources = new java.util.LinkedHashSet<>();
+            policy.path("review").path("sources").forEach(s -> {
+                if (s.isTextual() && !s.asText().isBlank()) {
+                    sources.add(s.asText());
+                }
+            });
+            return sources;
+        }
+
+        /**
+         * SDD 3a.4, 4.1: {@code call: review} — an approval of a document (or of its items) or a choice, asked of a
+         * role, with a deadline, a reminder and an escalation; compiled by {@link ReviewExpansion}. Only directly in
+         * a flow.
+         */
+        private List<TaskNode> compileReview(String name, JsonNode body, String pointer) {
+            JsonNode with = body.get("with");
+            if (with == null || !with.isObject()) {
+                hardError(pointer + "/with", "'call: review' requires 'with' (kind, role, material, deadline)", null);
+                return List.of();
+            }
+            checkKeys(with, pointer + "/with", REVIEW_WITH_KEYS);
+            String kind = with.path("kind").asText("");
+            if (!ReviewContract.APPROVAL.equals(kind) && !ReviewContract.CHOICE.equals(kind)) {
+                hardError(pointer + "/with/kind", "'call: review' requires 'with.kind': approval or choice", null);
+                return List.of();
+            }
+            List<io.stintflow.wire.decision.DecisionOption> options = new ArrayList<>();
+            List<FlowDirective> optionThens = new ArrayList<>();
+            if (ReviewContract.CHOICE.equals(kind)) {
+                JsonNode optionsNode = with.get("options");
+                if (optionsNode == null || !optionsNode.isArray() || optionsNode.size() < 2) {
+                    hardError(pointer + "/with/options", "a review choice needs at least two options", null);
+                    return List.of();
+                }
+                for (int i = 0; i < optionsNode.size(); i++) {
+                    JsonNode entry = optionsNode.get(i);
+                    String optionPointer = pointer + "/with/options/" + i;
+                    if (!entry.isObject() || entry.size() != 1) {
+                        hardError(optionPointer, "an option is a single-key map: '<name>: {description, then}'", null);
+                        return List.of();
+                    }
+                    String optionName = entry.fieldNames().next();
+                    JsonNode optionBody = entry.get(optionName);
+                    checkKeys(optionBody, optionPointer + "/" + optionName, DECISION_OPTION_KEYS);
+                    JsonNode description = optionBody == null ? null : optionBody.get("description");
+                    options.add(new io.stintflow.wire.decision.DecisionOption(optionName,
+                            description == null ? null : description.asText()));
+                    optionThens.add(optionBody != null && optionBody.has("then") ? compileThen(optionBody) : null);
+                }
+            } else if (with.has("options")) {
+                hardError(pointer + "/with/options", "an approval has no options (approved or rejected)", null);
+            }
+            if (body.has(ON_REJECT) && !ReviewContract.APPROVAL.equals(kind)) {
+                hardError(pointer + "/" + ON_REJECT, "'onReject' is only for 'kind: approval'", null);
+            }
+            if (with.has("items") && !ReviewContract.APPROVAL.equals(kind)) {
+                hardError(pointer + "/with/items", "'items' is only for 'kind: approval'", null);
+            }
+            List<String> answers = ReviewContract.APPROVAL.equals(kind)
+                    ? List.of(ReviewContract.APPROVED, ReviewContract.REJECTED)
+                    : options.stream().map(io.stintflow.wire.decision.DecisionOption::name).toList();
+            ReviewExpansion.Settings settings = reviewSettings(with, pointer + "/with", answers);
+            if (settings == null) {
+                return List.of();
+            }
+            DataFlow authored = compileDataFlow(body, pointer, null, null);
+            FlowDirective then = compileThen(body);
+            List<SwitchNode.Case> cases = new ArrayList<>();
+            if (ReviewContract.APPROVAL.equals(kind)) {
+                cases.add(new SwitchNode.Case(ReviewContract.APPROVED,
+                        Expr.jq(".verdict == " + ReviewExpansion.text(ReviewContract.APPROVED)), then));
+                cases.add(new SwitchNode.Case(ReviewContract.REJECTED, null,
+                        body.has(ON_REJECT) ? directive(body.get(ON_REJECT).asText()) : then));
+            } else {
+                for (int i = 0; i < options.size(); i++) {
+                    cases.add(ReviewExpansion.optionCase(options.get(i).name(),
+                            optionThens.get(i) != null ? optionThens.get(i) : then));
                 }
             }
-            return tasks;
+            return ReviewExpansion.expand(name, pointer, settings, kind, options, null, reviewSources,
+                    authored.inputFrom(), new DataFlow(null, authored.outputAs(), authored.exportAs()), cases);
+        }
+
+        /**
+         * The settings of a review: in {@code call: review}'s {@code with}, or in a decision's
+         * {@code onUncertain.review}. {@code answers} are what {@code onTimeout.value} may be.
+         */
+        private ReviewExpansion.Settings reviewSettings(JsonNode node, String pointer, List<String> answers) {
+            boolean valid = true;
+            if (reviewSources.isEmpty()) {
+                hardError("/document/metadata/" + Policy.METADATA_KEY + "/review/sources", "a review needs the "
+                        + "sources trusted to answer it: document.metadata." + Policy.METADATA_KEY
+                        + ".review.sources", null);
+                valid = false;
+            }
+            String role = node.path("role").asText("");
+            if (!ROLE.matcher(role).matches()) {
+                hardError(pointer + "/role", "'role' is a role name (lowercase letters, digits and dashes)", null);
+                valid = false;
+            }
+            if (!node.has("material")) {
+                hardError(pointer + "/material", "'material' is required: a pointer to the redacted material", null);
+                valid = false;
+            }
+            Duration deadline = null;
+            if (!node.has("deadline")) {
+                hardError(pointer + "/deadline", "'deadline' is required", null);
+                valid = false;
+            } else {
+                checkDuration(node.get("deadline"), pointer + "/deadline");
+                deadline = compileDurationSpec(node.get("deadline"));
+            }
+            Duration remind = null;
+            if (node.has("remind")) {
+                checkDuration(node.get("remind"), pointer + "/remind");
+                remind = compileDurationSpec(node.get("remind"));
+                if (deadline != null && (remind.isZero() || remind.compareTo(deadline) >= 0)) {
+                    hardError(pointer + "/remind", "'remind' comes before the 'deadline'", null);
+                    valid = false;
+                }
+            }
+            String escalateRole = null;
+            Duration escalateAfter = null;
+            JsonNode escalate = node.get("escalate");
+            if (escalate != null) {
+                checkKeys(escalate, pointer + "/escalate", ESCALATE_KEYS);
+                escalateRole = escalate.path("role").asText("");
+                if (!ROLE.matcher(escalateRole).matches() || escalateRole.equals(role)) {
+                    hardError(pointer + "/escalate/role", "'escalate.role' is another role", null);
+                    valid = false;
+                }
+                if (!escalate.has("after")) {
+                    hardError(pointer + "/escalate/after", "'escalate.after' is required", null);
+                    valid = false;
+                } else {
+                    checkDuration(escalate.get("after"), pointer + "/escalate/after");
+                    escalateAfter = compileDurationSpec(escalate.get("after"));
+                }
+            }
+            JsonNode onTimeoutValue = null;
+            JsonNode onTimeout = node.get("onTimeout");
+            if (onTimeout != null && !(onTimeout.isTextual() && "fail".equals(onTimeout.asText()))) {
+                if (!onTimeout.isObject() || onTimeout.size() != 1 || !onTimeout.has("value")) {
+                    hardError(pointer + "/onTimeout", "'onTimeout' is 'fail' or {value: <answer>}", null);
+                    valid = false;
+                } else if (!answers.contains(onTimeout.get("value").asText())) {
+                    hardError(pointer + "/onTimeout/value", "'onTimeout.value' is one of " + answers, null);
+                    valid = false;
+                } else {
+                    onTimeoutValue = onTimeout.get("value");
+                }
+            }
+            if (!valid) {
+                return null;
+            }
+            String material = TemplateCompiler.compileTemplate(node.get("material"));
+            String items = node.has("items") ? TemplateCompiler.compileTemplate(node.get("items")) : null;
+            compileAndValidate(material, pointer + "/material");
+            if (items != null) {
+                compileAndValidate(items, pointer + "/items");
+            }
+            return new ReviewExpansion.Settings(role, material, items, deadline, remind, escalateRole, escalateAfter,
+                    onTimeoutValue);
+        }
+
+        private static boolean isDecision(JsonNode body) {
+            return body != null && body.isObject() && "decision".equals(body.path("call").asText(null));
+        }
+
+        private static boolean isRedact(JsonNode body) {
+            return body != null && body.isObject() && "redact".equals(body.path("call").asText(null));
+        }
+
+        /**
+         * SDD 3a.5, RF5: {@code call: redact} (Stint extension) — a {@code call: remote} to {@code with.task}, the
+         * redactor, whose argument is {@code {input, types}} and whose output is checked against the redaction contract
+         * of {@code stint-wire}. A valid result without doubt lowers the instance's level to {@code with.lowersTo}; with
+         * {@code onDoubt}, a generated {@code <task>/route} switch sends a doubtful result there (the author's
+         * {@code output.as}/{@code export.as} then go on the switch, as for a decision). Only directly in a flow, not as
+         * a try's body.
+         */
+        private List<TaskNode> compileRedact(String name, JsonNode body, String pointer) {
+            JsonNode with = body.get("with");
+            if (with == null || !with.isObject()) {
+                hardError(pointer + "/with", "'call: redact' requires 'with' (task, input, lowersTo)", null);
+                return List.of();
+            }
+            checkKeys(with, pointer + "/with", REDACT_WITH_KEYS);
+            if (!with.hasNonNull("task") || with.get("task").asText().isBlank()) {
+                hardError(pointer + "/with/task", "'call: redact' requires 'with.task' (the routing key)", null);
+                return List.of();
+            }
+            Sensitivity lowersTo = null;
+            if (with.has("lowersTo")) {
+                lowersTo = Sensitivity.parse(with.get("lowersTo").asText()).orElse(null);
+                if (lowersTo == null) {
+                    hardError(pointer + "/with/lowersTo", "'" + with.get("lowersTo").asText()
+                            + "' is not a level (internal, confidential, restricted)", null);
+                    return List.of();
+                }
+            }
+            StringBuilder types = new StringBuilder("[");
+            JsonNode typesNode = with.get("types");
+            if (typesNode != null) {
+                if (!typesNode.isArray()) {
+                    hardError(pointer + "/with/types", "'with.types' is a list of data types (email, phone, ...)", null);
+                    return List.of();
+                }
+                for (int i = 0; i < typesNode.size(); i++) {
+                    types.append(i == 0 ? "" : ", ").append(com.fasterxml.jackson.databind.node.TextNode
+                            .valueOf(typesNode.get(i).asText()));
+                }
+            }
+            types.append(']');
+            JsonNode onDoubt = body.get(ON_DOUBT);
+            if (onDoubt != null && !onDoubt.isTextual()) {
+                hardError(pointer + "/" + ON_DOUBT, "'onDoubt' is a task name or a flow directive, like 'then'", null);
+                return List.of();
+            }
+            String input = with.has("input") ? TemplateCompiler.compileTemplate(with.get("input")) : ".";
+            Expr request = compileAndValidate("{\"" + io.stintflow.wire.redaction.RedactionContract.INPUT + "\": ("
+                    + input + "), \"" + io.stintflow.wire.redaction.RedactionContract.TYPES + "\": " + types + "}",
+                    pointer + "/with");
+            DataFlow authored = compileDataFlow(body, pointer, null, null);
+            RedactionOutputContract contract = new RedactionOutputContract(lowersTo);
+            String routingKey = with.path("task").asText();
+            Duration timeout = compileTimeout(body, pointer);
+            if (onDoubt == null) {
+                return List.of(new CallRemoteNode(name, pointer, authored, compileThen(body), routingKey, timeout,
+                        request, contract));
+            }
+            CallRemoteNode call = new CallRemoteNode(name, pointer, new DataFlow(authored.inputFrom(), null, null),
+                    FlowDirective.CONTINUE, routingKey, timeout, request, contract);
+            SwitchNode route = new SwitchNode(name + DecisionExpansion.ROUTE_SUFFIX,
+                    pointer + DecisionExpansion.ROUTE_SUFFIX, new DataFlow(null, authored.outputAs(),
+                            authored.exportAs()), FlowDirective.CONTINUE, List.of(
+                            new SwitchNode.Case("doubt", Expr.jq("." + io.stintflow.wire.redaction.RedactionContract
+                                    .DOUBT + " == true"), directive(onDoubt.asText())),
+                            new SwitchNode.Case("default", null, compileThen(body))));
+            return List.of(call, route);
+        }
+
+        private static boolean isDecisionTry(JsonNode body) {
+            JsonNode tryList = body == null ? null : body.get("try");
+            if (tryList == null || !tryList.isArray() || tryList.size() != 1) {
+                return false;
+            }
+            Iterator<String> names = tryList.get(0).fieldNames();
+            return names.hasNext() && isDecision(tryList.get(0).get(names.next()));
+        }
+
+        /** SDD 3a.1, 5.2: the generated {@code <task>/route} must not shadow a task the author named the same. */
+        private void checkUniqueNames(List<TaskNode> tasks) {
+            Set<String> seen = new java.util.HashSet<>();
+            for (TaskNode task : tasks) {
+                if (task.name().endsWith(DecisionExpansion.ROUTE_SUFFIX) && !seen.add(task.name())) {
+                    hardError(task.pointer(), "task name '" + task.name() + "' is used twice in the same flow "
+                            + "(a 'call: decision' generates a switch with this name, SDD 3a.1)", null);
+                } else {
+                    seen.add(task.name());
+                }
+            }
+        }
+
+        /**
+         * SDD 3a.1, RF2/RF3: {@code call: decision} (Stint extension, like {@code call: remote} — DSL 1.0, Call:
+         * {@code call} is "The name of the function to call", {@code with} "A name/value mapping of the parameters to
+         * call the function with"). Compiles to two siblings, so {@code then}, {@code goTo} and {@code continue} work
+         * as anywhere in the flow:
+         * <ol>
+         *   <li>a {@code call: remote} to {@code with.task}, whose argument is the decision request (kind, options and
+         *       {@code with.input}), whose output is checked against the decision contract, and which carries the
+         *       author's {@code input.from};</li>
+         *   <li>a {@code switch} named {@code <task>/route} over the decision's result: {@code onUncertain} first, then
+         *       one case per option, then — for a score, or a boolean without options — a default. It carries the
+         *       author's {@code output.as} and {@code export.as}.</li>
+         * </ol>
+         *
+         * @param defaultThen where a case without its own {@code then} goes when the decision is a try's body (the
+         *                    try's {@code then}); {@code null} = the task's own {@code then}
+         */
+        private List<TaskNode> compileDecision(String name, JsonNode body, String pointer, FlowDirective defaultThen) {
+            JsonNode with = body.get("with");
+            if (with == null || !with.isObject()) {
+                hardError(pointer + "/with", "'call: decision' requires 'with' (task, kind, options, input)", null);
+                return List.of();
+            }
+            checkKeys(with, pointer + "/with", DECISION_WITH_KEYS);
+            boolean valid = true;
+            if (!with.hasNonNull("task") || with.get("task").asText().isBlank()) {
+                hardError(pointer + "/with/task", "'call: decision' requires 'with.task' (the routing key)", null);
+                valid = false;
+            }
+            DecisionKind kind = DecisionKind.fromWireName(with.path("kind").asText(null)).orElse(null);
+            if (kind == null) {
+                hardError(pointer + "/with/kind", "'call: decision' requires 'with.kind': choice, score or boolean",
+                        null);
+                valid = false;
+            }
+            List<DecisionOption> options = new ArrayList<>();
+            List<FlowDirective> optionThens = new ArrayList<>();
+            JsonNode optionsNode = with.get("options");
+            if (optionsNode != null && !optionsNode.isArray()) {
+                hardError(pointer + "/with/options", "'with.options' must be a list of single-key maps", null);
+                valid = false;
+            } else if (optionsNode != null) {
+                for (int i = 0; i < optionsNode.size(); i++) {
+                    JsonNode entry = optionsNode.get(i);
+                    String optionPointer = pointer + "/with/options/" + i;
+                    if (!entry.isObject() || entry.size() != 1) {
+                        hardError(optionPointer, "an option is a single-key map: '<name>: {description, then}'", null);
+                        valid = false;
+                        continue;
+                    }
+                    String optionName = entry.fieldNames().next();
+                    JsonNode optionBody = entry.get(optionName);
+                    String bodyPointer = optionPointer + "/" + optionName;
+                    if (optionBody != null && !optionBody.isNull() && !optionBody.isObject()) {
+                        hardError(bodyPointer, "an option's body is a map (description, then)", null);
+                        valid = false;
+                        continue;
+                    }
+                    checkKeys(optionBody, bodyPointer, DECISION_OPTION_KEYS);
+                    JsonNode description = optionBody == null ? null : optionBody.get("description");
+                    if (description != null && !description.isTextual()) {
+                        hardError(bodyPointer + "/description", "an option's description is text", null);
+                        valid = false;
+                    }
+                    options.add(new DecisionOption(optionName, description == null ? null : description.asText()));
+                    optionThens.add(optionBody != null && optionBody.has("then") ? compileThen(optionBody) : null);
+                }
+            }
+            if (kind != null) {
+                for (String problem : DecisionRequest.optionProblems(kind, options)) {
+                    hardError(pointer + "/with/options", problem, null);
+                    valid = false;
+                }
+            }
+            JsonNode onUncertain = body.get(DecisionExpansion.ON_UNCERTAIN);
+            JsonNode uncertainReview = onUncertain != null && onUncertain.isObject() ? onUncertain.get("review") : null;
+            if (onUncertain != null && !onUncertain.isTextual()
+                    && (uncertainReview == null || onUncertain.size() != 1 || !uncertainReview.isObject())) {
+                hardError(pointer + "/" + DecisionExpansion.ON_UNCERTAIN,
+                        "'onUncertain' is a task name, a flow directive like 'then', or {review: {...}} (SDD 3a.4)",
+                        null);
+                valid = false;
+            }
+            if (uncertainReview != null && kind == DecisionKind.SCORE) {
+                hardError(pointer + "/" + DecisionExpansion.ON_UNCERTAIN + "/review",
+                        "a review chooses one of the options: not for 'kind: score'", null);
+                valid = false;
+            }
+            ReviewExpansion.Settings reviewSettings = null;
+            if (uncertainReview != null && valid) {
+                checkKeys(uncertainReview, pointer + "/" + DecisionExpansion.ON_UNCERTAIN + "/review",
+                        UNCERTAIN_REVIEW_KEYS);
+                List<String> answers = options.isEmpty() ? List.of("true", "false")
+                        : options.stream().map(DecisionOption::name).toList();
+                reviewSettings = reviewSettings(uncertainReview, pointer + "/" + DecisionExpansion.ON_UNCERTAIN
+                        + "/review", answers);
+                valid = reviewSettings != null;
+            }
+            if (!valid) {
+                return List.of();
+            }
+            DecisionRequest shape = DecisionRequest.shape(kind, options);
+            String input = with.has("input") ? TemplateCompiler.compileTemplate(with.get("input")) : ".";
+            Expr request = compileAndValidate(DecisionExpansion.requestTemplate(shape, input), pointer + "/with");
+            DataFlow authored = compileDataFlow(body, pointer, null, null);
+            FlowDirective otherwise = defaultThen != null ? defaultThen : compileThen(body);
+            FlowDirective uncertainThen = reviewSettings != null ? FlowDirective.goTo(name + "/review")
+                    : onUncertain == null ? null : directive(onUncertain.asText());
+            // SDD 3a.4 (8b): with a review, the decision's switch only dispatches — uncertain to the review, anything
+            // else to the review's route, which holds the options' branches and the author's output.as/export.as, so
+            // both paths route alike and the export runs once
+            List<TaskNode> expanded = reviewSettings == null
+                    ? DecisionExpansion.expand(name, pointer, shape, with.path("task").asText(),
+                            compileTimeout(body, pointer), request, authored, otherwise, uncertainThen, optionThens)
+                    : DecisionExpansion.expand(name, pointer, shape, with.path("task").asText(),
+                            compileTimeout(body, pointer), request, new DataFlow(authored.inputFrom(), null, null),
+                            FlowDirective.goTo(name + "/review" + ReviewExpansion.ROUTE_SUFFIX), uncertainThen,
+                            java.util.Collections.nCopies(optionThens.size(), null));
+            if (reviewSettings != null) {
+                // SDD 3a.4 (8b): the review follows the decision's own branches with the human answer
+                List<DecisionOption> reviewOptions = options.isEmpty()
+                        ? List.of(new DecisionOption("true", null), new DecisionOption("false", null)) : options;
+                List<SwitchNode.Case> cases = new ArrayList<>();
+                for (int i = 0; i < reviewOptions.size(); i++) {
+                    FlowDirective then = i < optionThens.size() && optionThens.get(i) != null ? optionThens.get(i)
+                            : otherwise;
+                    cases.add(ReviewExpansion.optionCase(reviewOptions.get(i).name(), then));
+                }
+                List<TaskNode> all = new ArrayList<>(expanded);
+                all.addAll(ReviewExpansion.expand(name + "/review", pointer + "/review", reviewSettings,
+                        ReviewContract.CHOICE, reviewOptions, pointer, reviewSources, null,
+                        new DataFlow(null, authored.outputAs(), authored.exportAs()), cases));
+                expanded = all;
+            }
+            List<TaskNode> result = expanded;
+            LOG.log(Level.DEBUG, () -> sourceName + " " + pointer + ": 'call: decision' expands to\n"
+                    + DefinitionPrinter.print(result));
+            return result;
+        }
+
+        /**
+         * SDD 3a.1, 5.2: a {@code try} whose body is a {@code call: decision}. The try wraps the remote call only (so
+         * its timeout, retry and catch are those of SDD 1.3); the decision's switch becomes the try's next sibling, and
+         * the try's own {@code then} becomes the switch's default.
+         */
+        private List<TaskNode> compileTryDecision(String name, JsonNode body, String pointer) {
+            checkTaskKeys(body, pointer);
+            JsonNode bodyEntry = body.get("try").get(0);
+            String bodyName = bodyEntry.fieldNames().next();
+            JsonNode decision = bodyEntry.get(bodyName);
+            String bodyPointer = pointer + "/do/0/" + bodyName;
+            checkTaskKeys(decision, bodyPointer);
+            if (decision.has("then")) {
+                unsupported(bodyPointer + "/then", "'then' of a try's body is not used: the try's own 'then' "
+                        + "applies (SDD 2.9)");
+            }
+            List<TaskNode> expanded = compileDecision(bodyName, decision, bodyPointer, compileThen(body));
+            JsonNode catchNode = body.get("catch");
+            if (catchNode == null) {
+                hardError(pointer + "/catch", "'try' requires a 'catch' clause", null);
+                return List.of();
+            }
+            TryNode.Catch catchClause = compileCatch(catchNode, pointer + "/catch");
+            if (expanded.size() != 2) {
+                return List.of();
+            }
+            TryNode tryNode = new TryNode(name, pointer, compileDataFlow(body, pointer, null, null),
+                    FlowDirective.CONTINUE, expanded.get(0), catchClause);
+            return List.of(tryNode, expanded.get(1));
+        }
+
+        /** A flow directive written as text: {@code then}'s syntax, also used by {@code onUncertain} (SDD 3a.1). */
+        private static FlowDirective directive(String value) {
+            return switch (value) {
+                case "continue" -> FlowDirective.CONTINUE;
+                case "end" -> FlowDirective.END;
+                case "exit" -> FlowDirective.EXIT;
+                default -> FlowDirective.goTo(value);
+            };
         }
 
         private TaskNode compileTask(String name, JsonNode body, String pointer) {
@@ -403,6 +1029,10 @@ public final class DslLoader {
                 return null;
             }
             String declaredType = isExpression(with.get("type")) ? null : with.get("type").asText();
+            if (declaredType != null && declaredType.startsWith(StintEvents.REVIEW_TYPE_PREFIX)) {
+                hardError(withPointer + "/type", "emit type '" + declaredType + "' is reserved for review steps "
+                        + "(SDD 3a.4): use 'call: review'", null);
+            }
             if (StintEvents.isReservedType(declaredType)) {
                 hardError(withPointer + "/type", "emit type '" + declaredType + "' is reserved for the engine's "
                         + "internal protocol " + StintEvents.RESERVED_TYPE_PREFIXES, null);
@@ -767,13 +1397,7 @@ public final class DslLoader {
             if (then == null || then.isNull()) {
                 return FlowDirective.CONTINUE;
             }
-            String v = then.asText();
-            return switch (v) {
-                case "continue" -> FlowDirective.CONTINUE;
-                case "end" -> FlowDirective.END;
-                case "exit" -> FlowDirective.EXIT;
-                default -> FlowDirective.goTo(v);
-            };
+            return directive(then.asText());
         }
 
         private Duration compileTimeout(JsonNode body, String pointer) {
@@ -862,6 +1486,15 @@ public final class DslLoader {
             }
             Set<String> allowed = new java.util.HashSet<>(COMMON_TASK_KEYS);
             allowed.addAll(specific);
+            if (isDecision(body)) {
+                allowed.add(DecisionExpansion.ON_UNCERTAIN); // SDD 3a.1: a Stint extension key, only on 'call: decision'
+            }
+            if (isRedact(body)) {
+                allowed.add(ON_DOUBT); // SDD 3a.5: a Stint extension key, only on 'call: redact'
+            }
+            if (isReview(body)) {
+                allowed.add(ON_REJECT); // SDD 3a.4: a Stint extension key, only on 'call: review'
+            }
             checkKeys(body, pointer, allowed);
         }
 
