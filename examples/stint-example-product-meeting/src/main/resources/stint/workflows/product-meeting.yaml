@@ -81,6 +81,9 @@ do:
         task: decide-urgency
         kind: boolean
         input: '${ {text: $context.redacted} }'
+        options:
+          - "true": { description: "Something must be done today: an outage, a failure or an urgent request" }
+          - "false": { description: "Nothing needs action today" }
       export: { as: '${ $context + {urgent: .value} }' }
   - structure:
       call: remote

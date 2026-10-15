@@ -38,6 +38,8 @@ stint-dsl                YAML/JSON front-end: compiles the CNCF DSL 1.0 into sti
 stint-worker-sdk         uniform TaskHandler programming model (depends on stint-wire, not stint-core)
 stint-otel               OpenTelemetry implementation of the tracing port (the only module using OTel)
 stint-worker-redaction   reference redactor for `call: redact`: layered, deterministic, no AI library (SDD 3a.5)
+stint-worker-transcription  Transcriber port, transcribe handler, Whisper (OpenAI-compatible) adapter (SDD 3a.6)
+stint-worker-publishing  PagePublisher port, publish-page handler, Confluence REST adapter and fake (SDD 3a.6)
 connectors/
   stint-inmemory         single-JVM transport/state/timer/blob/domain-event bus — the local dev+test path
   stint-aws              S3 (blob) · DynamoDB (state) · SQS/SNS/EventBridge (transport) · SQS-delay (timer)
@@ -49,6 +51,7 @@ examples/
   stint-example-build-report   "query → stage S3 pointer → format", loaded from build-report.yaml
   stint-example-send-report    schedule.cron + emit + call:remote — publishes report-sent (SDD 2.6 milestone)
   stint-example-archive-report schedule.on report-sent → archive record; independent of send-report (SDD 2.6)
+  stint-example-product-meeting the Phase 3a milestone: a meeting from its audio to published minutes (SDD 3a.6)
 stint-architecture-tests   the single consolidated ArchUnit suite for the whole reactor (test-only)
 stint-it                 floci (local AWS emulator) integration tests
 ```
@@ -446,6 +449,42 @@ registry.register("summarize-meeting", ai.handler(MeetingAssistant.class,
   `maxExtension` (1 h), and `close()` waits `shutdownGrace` (30 s) then hands the unfinished back unacknowledged.
   Logs carry ids only; `SqsWorkerMetrics` counts. Give invoke queues a `maxReceiveCount` of 3 or more. Measured over
   floci with 50 tasks (10 slow): p95 22.7 s with concurrency 1, 2.7 s with 8.
+
+## The Phase 3a milestone: a meeting, end to end (SDD 3a.6)
+
+`examples/stint-example-product-meeting` takes a synthetic English meeting from its recording to approved, published
+minutes on the local engine. Every step is something the earlier SDDs built:
+
+```
+meeting-recorded.v1 (audio by pointer, restricted) → transcribe → call: redact (lowers to confidential)
+  → call: decision doc type (onUncertain.review) → call: decision urgency → structure-minutes (LLM, structured)
+  → call: review approval, item by item → publish-page (one allowed space) → emit minutes-published.v1
+```
+
+- **Two new worker modules**, plain Java over the JDK's HttpClient: no AI library, no cloud SDK, and nothing of the
+  engine side depends on them (ArchUnit).
+  - `stint-worker-transcription`: the `Transcriber` port and the `transcribe` handler. Audio comes in by pointer; the
+    transcript, with its language, duration and timed segments, goes to a `raw-transcript` blob, and the output holds
+    only its pointer. The module has a `FakeTranscriber` and an `OpenAiCompatibleTranscriber` for a loopback Whisper
+    server (speaches, LocalAI, or whisper.cpp on `/inference`). Server errors become standard errors that never quote
+    the server.
+  - `stint-worker-publishing`: the `PagePublisher` port and the `publish-page` handler. A space other than the
+    configured one is refused before anything is read or called (`authorization` 403). Pages are idempotent by key and
+    labelled with the data's level. It ships an `InMemoryPagePublisher`, a `ConfluencePagePublisher` (REST, basic
+    auth) and a `FakeConfluenceServer` to test against.
+- **The redactor reads a pointer:** `call: redact` over a raw transcript's pointer redacts its segments' text. The
+  restricted transcript never leaves its blob.
+- **Corpus:** eight scripted meetings in `corpus/`, each with an answer key (document type, urgency, action items,
+  review branch) and planted `SYNTH-PII-*` markers. The manifest holds the hashes, and `scripts/generate-audio.py`
+  (Kokoro-82M, Apache-2.0) makes the audio, which never goes into the repository. This is the seed of the sandbox's
+  corpus.
+- **Metrics report** (`target/product-meeting-report/`, JSON and Markdown): latency per step and in total, tokens and
+  estimated cost (zero for local providers), human review and `uncertain` rates, accuracy against the key, rejected
+  items, the transcription's WER and the GPU's peak memory. It holds ids and numbers only.
+- **Runs:** the build runs every meeting with fake models (`ProductMeetingMainIT`, also native), and
+  `FlociProductMeetingIT` runs it on SQS, DynamoDB and S3 with the SQS worker binding. The manual run (`manual`)
+  uses Whisper, LitJev and llama.cpp on loopback; see `LOCAL-STACK.md`.
+- **Contracts for consumers:** `docs/contracts/meeting-recorded.v1.schema.json` and `transcript.v1.schema.json`.
 
 ## Human review on `listen` (SDD 3a.4)
 

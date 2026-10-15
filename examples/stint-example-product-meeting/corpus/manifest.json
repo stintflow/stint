@@ -6,49 +6,145 @@
       "id": "m-001",
       "script": "meetings/m-001.yaml",
       "scriptSha256": "e705bf3be04ba97d5252e36c10c8523c22c87ba8bae865f17ff5371ea28352ba",
-      "audio": null
+      "audio": {
+        "file": "audio/m-001.wav",
+        "sha256": "099612654984a354e019dc92dddb087159b0242da26f0ea90ed7febed5b17c44",
+        "seconds": 22.05,
+        "rate": 16000,
+        "engine": "kokoro-onnx",
+        "engineVersion": "0.4.9",
+        "model": "kokoro-v1.0",
+        "voices": [
+          "af_heart",
+          "am_adam"
+        ]
+      }
     },
     {
       "id": "m-002",
       "script": "meetings/m-002.yaml",
       "scriptSha256": "61d335b8da9a2659a4db5c9fba82a6cb974a19842aa8667cd0ff0f5a4533b044",
-      "audio": null
+      "audio": {
+        "file": "audio/m-002.wav",
+        "sha256": "97c3194d7ef9781aa9402b7c5bec39680877db019b5b4ec0efda555c76b02da1",
+        "seconds": 19.95,
+        "rate": 16000,
+        "engine": "kokoro-onnx",
+        "engineVersion": "0.4.9",
+        "model": "kokoro-v1.0",
+        "voices": [
+          "am_michael",
+          "bf_emma"
+        ]
+      }
     },
     {
       "id": "m-003",
       "script": "meetings/m-003.yaml",
       "scriptSha256": "5037cc351cedcb097d1596eee555723751c0bae843649025293db272c6721fa5",
-      "audio": null
+      "audio": {
+        "file": "audio/m-003.wav",
+        "sha256": "d7406f812c5b85870b17484ded04a27e381dd00e2291c99dadb76b9f39889c64",
+        "seconds": 21.94,
+        "rate": 16000,
+        "engine": "kokoro-onnx",
+        "engineVersion": "0.4.9",
+        "model": "kokoro-v1.0",
+        "voices": [
+          "af_bella",
+          "bm_george"
+        ]
+      }
     },
     {
       "id": "m-004",
       "script": "meetings/m-004.yaml",
       "scriptSha256": "c7ff107a4ec40c29d73ac81a4c04387c0eb782a03ed57844a07158a6b29694ec",
-      "audio": null
+      "audio": {
+        "file": "audio/m-004.wav",
+        "sha256": "a3b2c724f729f44fc41e1181b86c39b2c631cab424cab5dc96f7d3b2d4c13d74",
+        "seconds": 18.23,
+        "rate": 16000,
+        "engine": "kokoro-onnx",
+        "engineVersion": "0.4.9",
+        "model": "kokoro-v1.0",
+        "voices": [
+          "af_heart",
+          "am_adam"
+        ]
+      }
     },
     {
       "id": "m-005",
       "script": "meetings/m-005.yaml",
       "scriptSha256": "b51517915ddbbd464a547d91bb67588162416919fec469ff83e2419bac7a65fe",
-      "audio": null
+      "audio": {
+        "file": "audio/m-005.wav",
+        "sha256": "322c348c85da256d301fecec9baf7ae7ef047b377b0e1b67c2c073eebab60463",
+        "seconds": 17.67,
+        "rate": 16000,
+        "engine": "kokoro-onnx",
+        "engineVersion": "0.4.9",
+        "model": "kokoro-v1.0",
+        "voices": [
+          "bf_emma",
+          "bm_george"
+        ]
+      }
     },
     {
       "id": "m-006",
       "script": "meetings/m-006.yaml",
       "scriptSha256": "49388a60845cd4bfad8f74047207ed0f8240110cd363b1b152a3bfce87e71516",
-      "audio": null
+      "audio": {
+        "file": "audio/m-006.wav",
+        "sha256": "db26c308f865c069dee0674cfe10160a1f00614f902cd0181a8e2ea1bf7a2c94",
+        "seconds": 16.33,
+        "rate": 16000,
+        "engine": "kokoro-onnx",
+        "engineVersion": "0.4.9",
+        "model": "kokoro-v1.0",
+        "voices": [
+          "af_bella",
+          "am_michael"
+        ]
+      }
     },
     {
       "id": "m-007",
       "script": "meetings/m-007.yaml",
       "scriptSha256": "55a8ad9f27e6fde5c0cdd43d4a2717e8cce49358396b0e73902c35d152c2b23d",
-      "audio": null
+      "audio": {
+        "file": "audio/m-007.wav",
+        "sha256": "c2b541f360dc74ba450842b8c5fc456a7084221206084069633ad1f8a29b711f",
+        "seconds": 18.31,
+        "rate": 16000,
+        "engine": "kokoro-onnx",
+        "engineVersion": "0.4.9",
+        "model": "kokoro-v1.0",
+        "voices": [
+          "af_heart",
+          "bm_george"
+        ]
+      }
     },
     {
       "id": "m-008",
       "script": "meetings/m-008.yaml",
       "scriptSha256": "71403505ac6b45034b08972948f417fbc7207ce1dd0a7ce38e026fd2476af4ed",
-      "audio": null
+      "audio": {
+        "file": "audio/m-008.wav",
+        "sha256": "add3e37a75a1554a95d12a0e4da5da1e6afe3a315049b96e51b75e1bd6dc692f",
+        "seconds": 13.75,
+        "rate": 16000,
+        "engine": "kokoro-onnx",
+        "engineVersion": "0.4.9",
+        "model": "kokoro-v1.0",
+        "voices": [
+          "am_adam",
+          "bf_emma"
+        ]
+      }
     }
   ]
 }
