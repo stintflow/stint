@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.net.URI;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 
 /** SDD 3a.10: consuming a wait key and reopening it in the same save, against a real DynamoDB (floci). */
 class DynamoDbReopenConsumedWaitIT {
@@ -53,6 +55,27 @@ class DynamoDbReopenConsumedWaitIT {
                 assertThat(outcome).isEqualTo(SaveOutcome.OK);
                 assertThat(store.findWait(key).toCompletableFuture().get().orElseThrow().position())
                         .isEqualTo("/do/1/listen");
+
+                // A wait written before `gen` existed (no such attribute) reopens too; the counter then starts at 1.
+                String old = "event:sdd.done:id:old";
+                ddb.putItem(r -> r.tableName(WAITS_TABLE).item(Map.of(
+                        "waitKey", AttributeValue.fromS(old), "instanceId", AttributeValue.fromS("inst-1"),
+                        "position", AttributeValue.fromS("/do/0/listen"),
+                        "createdAt", AttributeValue.fromN("1"))));
+                assertThat(store.save(snapshot(3), 2,
+                        List.of(new Wait(old, "inst-1", "/do/2/listen", Instant.now())), List.of(old))
+                        .toCompletableFuture().get(10, TimeUnit.SECONDS)).isEqualTo(SaveOutcome.OK);
+                assertThat(ddb.getItem(r -> r.tableName(WAITS_TABLE).key(Map.of("waitKey", AttributeValue.fromS(old))))
+                        .item().get("gen").n()).isEqualTo("1");
+
+                // CA6: a key that is gone, or held by another instance, is still a conflict.
+                String gone = "event:sdd.done:id:gone";
+                assertThat(store.save(snapshot(4), 3,
+                        List.of(new Wait(gone, "inst-1", "/do/3/listen", Instant.now())), List.of(gone))
+                        .toCompletableFuture().get(10, TimeUnit.SECONDS)).isEqualTo(SaveOutcome.CONFLICT);
+                assertThat(store.save(snapshot(4), 3,
+                        List.of(new Wait(old, "inst-other", "/do/3/listen", Instant.now())), List.of(old))
+                        .toCompletableFuture().get(10, TimeUnit.SECONDS)).isEqualTo(SaveOutcome.CONFLICT);
             }
         }
     }

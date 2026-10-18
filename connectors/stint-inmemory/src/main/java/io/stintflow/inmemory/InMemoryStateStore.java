@@ -52,12 +52,15 @@ public final class InMemoryStateStore implements StateStore {
                 return CompletableFuture.completedFuture(SaveOutcome.CONFLICT);
             }
             for (Wait toAdd : addWaits) {
-                if (waits.containsKey(toAdd.waitKey())) {
+                // SDD 3a.10: a key consumed and added in the same save is a reopening of the existing wait.
+                if (waits.containsKey(toAdd.waitKey()) && !consumeWaitKeys.contains(toAdd.waitKey())) {
                     return CompletableFuture.completedFuture(SaveOutcome.CONFLICT);
                 }
             }
             for (String key : consumeWaitKeys) {
-                if (!waits.containsKey(key)) {
+                Wait existing = waits.get(key);
+                if (existing == null || addWaits.stream().anyMatch(w -> w.waitKey().equals(key)
+                        && !existing.instanceId().equals(w.instanceId()))) {
                     return CompletableFuture.completedFuture(SaveOutcome.CONFLICT);
                 }
             }

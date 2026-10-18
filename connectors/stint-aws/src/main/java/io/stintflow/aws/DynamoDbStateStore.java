@@ -41,6 +41,7 @@ import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
+import software.amazon.awssdk.services.dynamodb.model.Update;
 
 /**
  * {@link StateStore} backed by two DynamoDB tables: {@code stint-instances} (PK {@code instanceId})
@@ -129,10 +130,14 @@ public class DynamoDbStateStore implements StateStore {
             List<TransactWriteItem> items = new ArrayList<>();
             items.add(TransactWriteItem.builder().put(instancePut(snapshot, expectedVersion)).build());
             for (Wait toAdd : addWaits) {
-                items.add(TransactWriteItem.builder().put(waitPut(toAdd)).build());
+                items.add(consumeWaitKeys.contains(toAdd.waitKey())
+                        ? TransactWriteItem.builder().update(waitReopen(toAdd)).build()
+                        : TransactWriteItem.builder().put(waitPut(toAdd)).build());
             }
             for (String key : consumeWaitKeys) {
-                items.add(TransactWriteItem.builder().delete(waitDelete(key)).build());
+                if (addWaits.stream().noneMatch(w -> w.waitKey().equals(key))) {
+                    items.add(TransactWriteItem.builder().delete(waitDelete(key)).build());
+                }
             }
             for (OutboxEntry entry : addOutbox) {
                 items.add(TransactWriteItem.builder().put(outboxPut(entry)).build());
@@ -207,6 +212,26 @@ public class DynamoDbStateStore implements StateStore {
         item.put("createdAt", AttributeValue.fromN(Long.toString(toAdd.createdAt().toEpochMilli())));
         return Put.builder().tableName(waitsTable).item(item)
                 .conditionExpression("attribute_not_exists(waitKey)")
+                .build();
+    }
+
+    /**
+     * SDD 3a.10: a key consumed and added in the same save is one update of the existing wait — a Delete and a
+     * Put of one item can't share a {@code TransactWriteItems}. {@code gen} is optional: a wait written before
+     * it existed counts as 0.
+     */
+    private Update waitReopen(Wait toAdd) {
+        return Update.builder().tableName(waitsTable)
+                .key(Map.of("waitKey", AttributeValue.fromS(toAdd.waitKey())))
+                .updateExpression("SET #pos = :pos, createdAt = :created, gen = if_not_exists(gen, :zero) + :one")
+                .conditionExpression("attribute_exists(waitKey) AND instanceId = :self")
+                .expressionAttributeNames(Map.of("#pos", "position"))
+                .expressionAttributeValues(Map.of(
+                        ":pos", AttributeValue.fromS(toAdd.position()),
+                        ":created", AttributeValue.fromN(Long.toString(toAdd.createdAt().toEpochMilli())),
+                        ":self", AttributeValue.fromS(toAdd.instanceId()),
+                        ":zero", AttributeValue.fromN("0"),
+                        ":one", AttributeValue.fromN("1")))
                 .build();
     }
 

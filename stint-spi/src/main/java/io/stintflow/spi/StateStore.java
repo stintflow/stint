@@ -16,6 +16,10 @@ import java.util.concurrent.CompletionStage;
  * result of having done so are the same write, closing the crash-between-claim-and-save gap a
  * separate atomic-claim-then-separate-save choreography would have.
  * <p>
+ * SDD 3a.10: a key present in both {@code addWaits} and {@code consumeWaitKeys} is a <em>reopening</em>: the
+ * existing wait (which must exist and belong to the same instance, else {@link SaveOutcome#CONFLICT}) is
+ * replaced in place, so the key is never absent and a listen can wait again for the event it just consumed.
+ * <p>
  * SDD 2.2: the same atomic act also records the facts the activation emitted ({@code addOutbox}), so
  * a fact exists if and only if the state that produced it was saved. An {@code addOutbox} entry whose
  * {@code eventId} already exists fails the whole call with {@link SaveOutcome#CONFLICT}, like
