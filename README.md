@@ -667,6 +667,38 @@ do:
 - Without a policy, a definition behaves as before 3a.5. `WorkflowRegistry.requirePolicy()` makes the policy
   mandatory: do that for agentic workflows.
 
+## Knowledge base: the port, the graph schema and the extraction (SDD 3b.1, 3b.2)
+
+`stint-knowledge` holds what workers learn from meetings — passages of text, the entities they mention and the relations among
+them — behind one port, `KnowledgeStore`. It depends on the SPI alone (the engine never calls it) and ships in-memory adapters
+(`InMemoryVectorIndex`, `InMemoryGraph`, `InMemoryChangeLog`, composed by `CompositeKnowledgeStore`); a production backend
+plugs in beside them and must pass `KnowledgeStoreContract`, the conformance suite in the module's test-jar.
+
+- **Scope.** `KnowledgeScope.of(workflowRef)` is the namespace and the *name*, never the version: the base survives new
+  versions of a definition. `KnowledgeScope.named(ns, base)` is a base several definitions share.
+- **Writing.** `write(scope, batch)`: a batch is the *complete state of one document* (passages, links to entities, the entities
+  and relations it asserts), with deterministic ids (`PassageIds`, `EntityIds`), so writing it again, or a redelivery, changes
+  nothing (`UNCHANGED`); an older `revision` is `STALE`. The same entity asserted by two documents is one node.
+- **Change log.** Append-only, written in the same atomic step as the change (a failure before the state is published leaves
+  no change and no entry), ids and hashes only, with the instant, instance, chain, definition and schema version of the writer.
+- **Sensitivity.** Every item has a level (absent is restricted); `retrieve` and `entities` need a `ceiling` and return nothing
+  above it — nor anything that shows it is there. `Audience.ceiling(instanceLevel, provider, approvedRemote)` computes it. The
+  text of a restricted item rests only in a blob of a retention class (there is no default class: without one, a restricted
+  write is refused).
+- **Erasure.** `delete` by document or by person, from every structure at once, leaving `ERASE` entries (ids and a reason
+  code) and a tombstone so a redelivered write does not bring it back.
+- **Schema and extraction (3b.2).** `meetings@1` has seven node types (Meeting, Person, Decision, Requirement, System, Term,
+  ExternalReference) and six relations; a definition names it with `document.metadata.x-stint-knowledge: {schema: meetings@1,
+  glossary: product@1, base: …}`. `KnowledgeExtractionWorker` (route `extract-knowledge`, in `stint-worker-langchain4j`) asks the
+  model for the structured answer with only the glossary terms the window can be about, checks it against the schema (out of
+  the schema is `validation` 400, never partial, never echoing a value), resolves each mention to an id that exists before it
+  creates a node (never by similarity: `DuplicateCriterion` only *marks* a candidate) and answers a `KnowledgeBatch`. A person
+  is a pseudonym only; with `x-stint-policy.pseudonyms: {stable: scope}` and a redactor that allows it
+  (`RedactionHandler.allowingStablePseudonyms()`), the same person has the same 128-bit pseudonym in every meeting of the base,
+  and the id to erase is computed from who they are.
+- **Evaluation.** `corpus/kb/base.yaml` and the `kb:` sections of the synthetic corpus (121 mentions) are resolved in CI with no
+  model: no wrong merge, at least 95 % resolved right, at least 90 % of the expected duplicate candidates flagged.
+
 ## Honest MVP cuts (deliberate, documented)
 
 1. **DSL Fase 2 constructs**: `fork`, `wait`, `for` and call types other than the `remote` Stint

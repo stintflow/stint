@@ -12,3 +12,7 @@ expected:
   items: [ "I will rotate the expiring certificate this afternoon." ]
   review: false
 pii: [ SYNTH-PII-0701 ]
+kb:
+  mentions:
+    - { type: Term,   surface: "runbook",              expect: term-runbook,  how: glossary }
+    - { type: Term,   surface: "certificate rotation", expect: new }

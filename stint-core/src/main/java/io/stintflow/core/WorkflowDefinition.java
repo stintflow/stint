@@ -9,6 +9,7 @@ import java.util.Optional;
 import io.stintflow.core.policy.Policy;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.FlowDirective;
+import io.stintflow.core.model.KnowledgeDeclaration;
 import io.stintflow.core.model.Schedule;
 import io.stintflow.core.model.TaskNode;
 import io.stintflow.spi.WorkflowRef;
@@ -23,10 +24,17 @@ import io.stintflow.spi.WorkflowRef;
  * <p>
  * SDD 2.4: {@code schedule} is the definition's DSL 1.0 {@code schedule}, or {@code null}.
  * SDD 3a.5: {@code policy} is its compliance policy ({@code document.metadata.x-stint-policy}), or {@code null}.
+ * SDD 3b.2: {@code knowledge} is its knowledge base declaration ({@code document.metadata.x-stint-knowledge}), or {@code null}.
  */
-public record WorkflowDefinition(WorkflowRef ref, DoNode root, Schedule schedule, Policy policy) {
+public record WorkflowDefinition(WorkflowRef ref, DoNode root, Schedule schedule, Policy policy,
+        KnowledgeDeclaration knowledge) {
 
     static final String ROOT_POINTER = "";
+
+    /** A definition that declares no knowledge base (SDD 3b.2): everything before 3b.2. */
+    public WorkflowDefinition(WorkflowRef ref, DoNode root, Schedule schedule, Policy policy) {
+        this(ref, root, schedule, policy, null);
+    }
 
     /** A definition without a compliance policy (SDD 3a.5): the behaviour before 3a.5. */
     public WorkflowDefinition(WorkflowRef ref, DoNode root, Schedule schedule) {

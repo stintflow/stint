@@ -35,7 +35,8 @@ class ArchitectureTest {
                 "io.stintflow.dsl", "io.stintflow.worker", "io.stintflow.worker.langchain4j",
                 "io.stintflow.worker.langchain4j.memory", "io.stintflow.aws.conversations",
                 "io.stintflow.worker.decision", "io.stintflow.worker.decision.jev", "io.stintflow.aws.worker",
-                "io.stintflow.knowledge", "io.stintflow.knowledge.inmemory",
+                "io.stintflow.knowledge", "io.stintflow.knowledge.inmemory", "io.stintflow.knowledge.schema",
+                "io.stintflow.knowledge.extraction",
                 "io.stintflow.worker.redaction", "io.stintflow.worker.transcription",
                 "io.stintflow.worker.publishing"}) {
             assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))

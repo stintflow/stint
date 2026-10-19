@@ -1,0 +1,48 @@
+id: m-011
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: af_bella }, { id: s2, voice: bm_george } ]
+script:
+  - { speaker: s1, text: "Let's write the runbook for restarting the Search Cluster, and for the search service dashboards." }
+  - { speaker: s2, text: "SYNTH-PII-1101 Haddad says the search cluster drains slowly after a certificate rotation." }
+  - { speaker: s1, text: "The Certificate Manager renews the certificates, but the cert manager alerts were muted." }
+  - { speaker: s2, text: "The Auth Gateway checks them too, and the login gateway restarts when the bundle changes." }
+  - { speaker: s1, text: "The Reports Database and the reporting db share the same maintenance window." }
+  - { speaker: s2, text: "The Reporting Dashboard reads from the reports database, so tell the dashboard owners." }
+  - { speaker: s1, text: "Our SLA for search is lower than the SLA for checkout, which uses the Checkout Service." }
+  - { speaker: s2, text: "I will draft the rollback procedure and add the health checks, then ping the Notification Hub owners." }
+  - { speaker: s1, text: "After the rotation, check the Event Bus, the Inventory Sync and the stock sync dashboards, then the search service again." }
+  - { speaker: s2, text: "The playbook says to page the owners of the Payments API and the payments service when the cert manager complains." }
+
+expected:
+  docType: runbook
+  urgent: false
+  items: [ "I will draft the rollback procedure and add the health checks, then ping the Notification Hub owners." ]
+  review: false
+pii: [ SYNTH-PII-1101 ]
+kb:
+  mentions:
+    - { type: Term,   surface: "runbook",              expect: term-runbook,  how: glossary }
+    - { type: System, surface: "Search Cluster",       expect: sys-search,    how: glossary }
+    - { type: System, surface: "search service",       expect: sys-search,    how: alias }
+    - { type: System, surface: "search cluster",       expect: sys-search,    how: glossary }
+    - { type: System, surface: "Certificate Manager",  expect: sys-certs,     how: glossary }
+    - { type: System, surface: "cert manager",         expect: sys-certs,     how: alias }
+    - { type: System, surface: "Auth Gateway",         expect: sys-auth,      how: glossary }
+    - { type: System, surface: "login gateway",        expect: sys-auth,      how: alias }
+    - { type: System, surface: "Reports Database",     expect: sys-reports-db, how: glossary }
+    - { type: System, surface: "reporting db",         expect: sys-reports-db, how: alias }
+    - { type: System, surface: "Reporting Dashboard",  expect: sys-reporting, how: glossary }
+    - { type: System, surface: "reports database",     expect: sys-reports-db, how: glossary }
+    - { type: Term,   surface: "SLA",                  expect: term-sla,      how: glossary }
+    - { type: System, surface: "Checkout Service",     expect: sys-checkout,  how: glossary }
+    - { type: Term,   surface: "rollback procedure",   expect: term-rollback, how: alias }
+    - { type: System, surface: "Notification Hub",     expect: sys-notify,    how: glossary }
+    - { type: System, surface: "Event Bus",             expect: sys-bus,          how: glossary }
+    - { type: System, surface: "Inventory Sync",        expect: sys-inventory,    how: glossary }
+    - { type: System, surface: "stock sync",            expect: sys-inventory,    how: alias }
+    - { type: System, surface: "search service",        expect: sys-search,       how: alias }
+    - { type: Term,   surface: "playbook",              expect: term-runbook,     how: alias }
+    - { type: System, surface: "Payments API",          expect: sys-payments-api, how: glossary }
+    - { type: System, surface: "payments service",      expect: sys-payments-api, how: alias }
+    - { type: System, surface: "cert manager",          expect: sys-certs,        how: alias }

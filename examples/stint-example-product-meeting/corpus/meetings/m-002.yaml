@@ -12,3 +12,7 @@ expected:
   items: [ "I will publish the new price table next week." ]
   review: false
 pii: [ SYNTH-PII-0201 ]
+kb:
+  mentions:
+    - { type: Term,   surface: "annual plan discount", expect: new }
+    - { type: Term,   surface: "price table",           expect: new }

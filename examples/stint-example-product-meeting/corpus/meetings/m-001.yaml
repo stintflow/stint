@@ -13,3 +13,7 @@ expected:
   items: [ "I will update the checkout copy by Friday.", "I will schedule the usability test with five customers." ]
   review: false
 pii: [ SYNTH-PII-0101, SYNTH-PII-0102 ]
+kb:
+  mentions:
+    - { type: System, surface: "checkout",             expect: sys-checkout,  how: alias }
+    - { type: Term,   surface: "usability test",       expect: new }

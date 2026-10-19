@@ -29,6 +29,15 @@ public final class RedactionContract {
     /** The request: {@code {"input": <JSON>, "types": [..]}} ({@code types} empty = every type the redactor knows). */
     public static final String INPUT = "input";
     public static final String TYPES = "types";
+    /**
+     * SDD 3b.2, 4.6: optional, in the request: {@code {"pseudonyms": {"mode": "scope", "scope": "<ns>/<base>"}}} asks for pseudonyms
+     * that are the same in every meeting of one knowledge base (128 bits, no instance in them) — a worker that allows it
+     * answers so; any other answers with the pseudonyms of the instance. The scope is a name, never a person.
+     */
+    public static final String PSEUDONYMS = "pseudonyms";
+    public static final String PSEUDONYMS_MODE = "mode";
+    public static final String PSEUDONYMS_SCOPE = "scope";
+    public static final String MODE_SCOPE = "scope";
 
     private RedactionContract() {
     }

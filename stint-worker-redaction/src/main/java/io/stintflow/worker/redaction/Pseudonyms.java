@@ -39,6 +39,24 @@ public final class Pseudonyms {
         }
     }
 
+    /**
+     * SDD 3b.2, 4.6: the pseudonym of {@code value} that is the same in every meeting of one knowledge base: {@code TYPE_<32 hex>}
+     * = the first 128 bits of HMAC-SHA-256(secret, scope, type, normalized value) — no instance in it, so the same person in two
+     * meetings is one node of the graph, and the id of a person to erase can be computed from who they are by whoever holds the
+     * secret. A deliberate correlation, opt-in (the definition asks, the worker allows). Domain-separated from {@link #label}.
+     */
+    public String labelStable(String scopeKey, String type, String value) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret, "HmacSHA256"));
+            byte[] digest = mac.doFinal(("scope\0" + scopeKey + '\0' + type + '\0' + normalize(value))
+                    .getBytes(StandardCharsets.UTF_8));
+            return type.toUpperCase(Locale.ROOT) + "_" + HexFormat.of().formatHex(digest, 0, 16);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("HmacSHA256 is not available", e);
+        }
+    }
+
     /** Case and separators don't make another value: {@code A.B@x.com} and {@code a.b@X.com} are one. */
     static String normalize(String value) {
         return value.toLowerCase(Locale.ROOT).replaceAll("[\\s().-]", "");

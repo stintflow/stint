@@ -12,3 +12,8 @@ expected:
   items: [ "I will write down the consequences for consumers." ]
   review: false
 pii: [ SYNTH-PII-0401 ]
+kb:
+  mentions:
+    - { type: System, surface: "event bus",            expect: sys-bus,       how: glossary }
+    - { type: Decision, surface: "one shared topic",    expect: new }
+    - { type: Term, surface: "decision record", expect: term-adr, how: glossary }

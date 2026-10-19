@@ -5,7 +5,7 @@
     {
       "id": "m-001",
       "script": "meetings/m-001.yaml",
-      "scriptSha256": "e705bf3be04ba97d5252e36c10c8523c22c87ba8bae865f17ff5371ea28352ba",
+      "scriptSha256": "fbe98223dcab4a70042a6108b43f954c8b9f778e4f89a7e879b4e42b7e8151d8",
       "audio": {
         "file": "audio/m-001.wav",
         "sha256": "099612654984a354e019dc92dddb087159b0242da26f0ea90ed7febed5b17c44",
@@ -23,7 +23,7 @@
     {
       "id": "m-002",
       "script": "meetings/m-002.yaml",
-      "scriptSha256": "61d335b8da9a2659a4db5c9fba82a6cb974a19842aa8667cd0ff0f5a4533b044",
+      "scriptSha256": "6df57fa90096594e49da2ce836d45568662b5c80262eca98aea74abbcf8e7527",
       "audio": {
         "file": "audio/m-002.wav",
         "sha256": "97c3194d7ef9781aa9402b7c5bec39680877db019b5b4ec0efda555c76b02da1",
@@ -41,7 +41,7 @@
     {
       "id": "m-003",
       "script": "meetings/m-003.yaml",
-      "scriptSha256": "5037cc351cedcb097d1596eee555723751c0bae843649025293db272c6721fa5",
+      "scriptSha256": "6e4e4b331f60a1f98f5efccaed8ee88d3b759ee20062072b6ee4a1a5f069fe33",
       "audio": {
         "file": "audio/m-003.wav",
         "sha256": "d7406f812c5b85870b17484ded04a27e381dd00e2291c99dadb76b9f39889c64",
@@ -59,7 +59,7 @@
     {
       "id": "m-004",
       "script": "meetings/m-004.yaml",
-      "scriptSha256": "c7ff107a4ec40c29d73ac81a4c04387c0eb782a03ed57844a07158a6b29694ec",
+      "scriptSha256": "c4cad6d26d2ec048adf837fe257297db0b1d8f106a3076f336d8a1e21f321818",
       "audio": {
         "file": "audio/m-004.wav",
         "sha256": "a3b2c724f729f44fc41e1181b86c39b2c631cab424cab5dc96f7d3b2d4c13d74",
@@ -77,7 +77,7 @@
     {
       "id": "m-005",
       "script": "meetings/m-005.yaml",
-      "scriptSha256": "b51517915ddbbd464a547d91bb67588162416919fec469ff83e2419bac7a65fe",
+      "scriptSha256": "776e1f52cbc845f23fdc22f24e92b0d5f5110a60ff55d98ec01e8eed6a32f731",
       "audio": {
         "file": "audio/m-005.wav",
         "sha256": "322c348c85da256d301fecec9baf7ae7ef047b377b0e1b67c2c073eebab60463",
@@ -95,7 +95,7 @@
     {
       "id": "m-006",
       "script": "meetings/m-006.yaml",
-      "scriptSha256": "49388a60845cd4bfad8f74047207ed0f8240110cd363b1b152a3bfce87e71516",
+      "scriptSha256": "60068a1408222dafe57b46a1095d3ed89380ffb7b47fb60731cd4fa03f0a78db",
       "audio": {
         "file": "audio/m-006.wav",
         "sha256": "db26c308f865c069dee0674cfe10160a1f00614f902cd0181a8e2ea1bf7a2c94",
@@ -113,7 +113,7 @@
     {
       "id": "m-007",
       "script": "meetings/m-007.yaml",
-      "scriptSha256": "55a8ad9f27e6fde5c0cdd43d4a2717e8cce49358396b0e73902c35d152c2b23d",
+      "scriptSha256": "5f2c023f1c4830b6514b93c42dec880c324108020c72425cf5239b1bfc602a87",
       "audio": {
         "file": "audio/m-007.wav",
         "sha256": "c2b541f360dc74ba450842b8c5fc456a7084221206084069633ad1f8a29b711f",
@@ -131,7 +131,7 @@
     {
       "id": "m-008",
       "script": "meetings/m-008.yaml",
-      "scriptSha256": "71403505ac6b45034b08972948f417fbc7207ce1dd0a7ce38e026fd2476af4ed",
+      "scriptSha256": "a0e0b0c411b3de6eb596f54100aa13de4d9a346447635ac15d483f681b868460",
       "audio": {
         "file": "audio/m-008.wav",
         "sha256": "add3e37a75a1554a95d12a0e4da5da1e6afe3a315049b96e51b75e1bd6dc692f",
@@ -146,5 +146,12 @@
         ]
       }
     }
-  ]
+  ],
+  "knowledge": [
+    { "id": "m-009", "script": "meetings/m-009.yaml", "scriptSha256": "d02dafd85e5d1f869a19e2fffa6b5869113850cf3f92f5c452683507dc81109b" },
+    { "id": "m-010", "script": "meetings/m-010.yaml", "scriptSha256": "fa0ea0a9803779f0cb7eee2866b9881a02f6c00c1fda8981ab84f07fd6d77203" },
+    { "id": "m-011", "script": "meetings/m-011.yaml", "scriptSha256": "77845c4768fa2e260a714eb8c7b655d3614abb7940cc4d59523d53185d7035f7" },
+    { "id": "m-012", "script": "meetings/m-012.yaml", "scriptSha256": "2143f21ac94c25f63910bcb196bcf0df4873ebe2599dbe3737b5f94378dcebbd" }
+  ],
+  "kbBase": { "file": "kb/base.yaml", "sha256": "9b9282e7bebb1bae9d785a050012ada49546c09139a54a6ec94ef74cc06bbea5" }
 }

@@ -44,7 +44,7 @@ public final class TermListLayer implements RedactionLayer {
         while (matcher.find()) {
             found++;
             matcher.appendReplacement(out,
-                    Matcher.quoteReplacement(scope.pseudonyms().label(scope.instanceId(), type, matcher.group())));
+                    Matcher.quoteReplacement(scope.label(type, matcher.group())));
         }
         matcher.appendTail(out);
         return new Result(out.toString(), found == 0 ? Map.of() : Map.of(type, found), false);

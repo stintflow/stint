@@ -1,0 +1,37 @@
+# The knowledge base the entity-resolution evaluation (SDD 3b.2, 4.8) starts from: what the glossary holds, and the
+# entities the base already has from earlier meetings. Synthetic. Names are in English. Ids are opaque.
+glossary:
+  - { id: sys-checkout,      type: System, name: "Checkout Service",      aliases: ["checkout", "checkout svc"] }
+  - { id: sys-payments-api,  type: System, name: "Payments API",          aliases: ["payments service"] }
+  - { id: sys-payments-ui,   type: System, name: "Payments UI",           aliases: ["payments front end"] }
+  - { id: sys-search,        type: System, name: "Search Cluster",        aliases: ["search service"] }
+  - { id: sys-notify,        type: System, name: "Notification Hub",      aliases: ["notifier"] }
+  - { id: sys-auth,          type: System, name: "Auth Gateway",          aliases: ["login gateway"] }
+  - { id: sys-inventory,     type: System, name: "Inventory Sync",        aliases: ["stock sync"] }
+  - { id: sys-reporting,     type: System, name: "Reporting Dashboard",   aliases: ["reports dashboard"] }
+  - { id: sys-bus,           type: System, name: "Event Bus",             aliases: ["message bus"] }
+  - { id: sys-reports-db,    type: System, name: "Reports Database",      aliases: ["reporting db"] }
+  - { id: sys-certs,         type: System, name: "Certificate Manager",   aliases: ["cert manager"] }
+  - { id: term-sla,          type: Term,   name: "SLA",                   aliases: ["service level agreement"] }
+  - { id: term-slo,          type: Term,   name: "SLO",                   aliases: ["service level objective"] }
+  - { id: term-rfc,          type: Term,   name: "RFC",                   aliases: ["request for comments"] }
+  - { id: term-flag,         type: Term,   name: "feature flag",          aliases: ["feature toggle"] }
+  - { id: term-canary,       type: Term,   name: "canary release",        aliases: ["canary rollout"] }
+  - { id: term-rollback,     type: Term,   name: "rollback plan",         aliases: ["rollback procedure"] }
+  - { id: term-debt,         type: Term,   name: "tech debt",             aliases: ["technical debt"] }
+  - { id: term-runbook,      type: Term,   name: "runbook",               aliases: ["playbook"] }
+  - { id: term-adr,          type: Term,   name: "decision record",       aliases: ["architecture decision record"] }
+
+# entities earlier meetings left in the base (not in the glossary)
+existing:
+  - { id: dec-shared-topic,  type: Decision,          name: "Adopt one shared topic" }
+  - { id: req-ordering,      type: Requirement,       name: "Preserve event ordering" }
+  - { id: ref-adr-12,        type: ExternalReference, name: "ADR-12" }
+
+# pairs that are two things and must never become one, however alike they look
+mustNotMerge:
+  - [sys-payments-api, sys-payments-ui]
+  - [sys-reports-db, sys-reporting]
+  - [sys-search, sys-notify]
+  - [term-sla, term-slo]
+  - [term-runbook, term-adr]

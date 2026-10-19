@@ -12,3 +12,8 @@ expected:
   items: [ "I will link the cost sheet in the record." ]
   review: false
 pii: [ SYNTH-PII-0501 ]
+kb:
+  mentions:
+    - { type: Term,   surface: "decision record",      expect: term-adr,      how: glossary }
+    - { type: System, surface: "managed database",  expect: new }
+    - { type: Term, surface: "cost sheet", expect: new }

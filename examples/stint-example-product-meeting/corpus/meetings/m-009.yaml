@@ -1,0 +1,51 @@
+id: m-009
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: af_heart }, { id: s2, voice: am_adam } ]
+script:
+  - { speaker: s1, text: "Welcome to the checkout review. The Checkout Service retries a failed payment three times, and the checkout svc logs every attempt." }
+  - { speaker: s2, text: "SYNTH-PII-0901 Rivera says the Payments API timed out twice while the Payments UI showed no error at all." }
+  - { speaker: s1, text: "Our SLA promises ninety nine point nine percent uptime, and the service level agreement also covers refunds." }
+  - { speaker: s2, text: "The new Payments Api v2 ships behind a feature flag, and we start with a canary release next week." }
+  - { speaker: s1, text: "If the canary rollout misbehaves we follow the rollback plan and switch the feature toggle off." }
+  - { speaker: s2, text: "We should also pay down some technical debt in the Notification Hub before the notifier gets more traffic." }
+  - { speaker: s1, text: "The Checkout Servce typo in the old dashboard config made the checkout flow page the wrong team." }
+  - { speaker: s2, text: "I will open an RFC for the retry policy, and the request for comments goes out on Monday." }
+  - { speaker: s1, text: "Next sprint the Payments API gets rate limits, the Search Cluster gets a canary release, and the Auth Gateway gets the feature toggle." }
+  - { speaker: s2, text: "The Event Bus will carry the Inventory Sync events, and our SLO covers the Reporting Dashboard too." }
+
+expected:
+  docType: ata
+  urgent: false
+  items: [ "I will open an RFC for the retry policy, and the request for comments goes out on Monday." ]
+  review: false
+pii: [ SYNTH-PII-0901 ]
+kb:
+  mentions:
+    - { type: System, surface: "Checkout Service",       expect: sys-checkout,     how: glossary }
+    - { type: System, surface: "checkout svc",           expect: sys-checkout,     how: alias }
+    - { type: System, surface: "Payments API",           expect: sys-payments-api, how: glossary }
+    - { type: System, surface: "Payments UI",            expect: sys-payments-ui,  how: glossary }
+    - { type: Term,   surface: "SLA",                    expect: term-sla,         how: glossary }
+    - { type: Term,   surface: "service level agreement", expect: term-sla,        how: alias }
+    - { type: System, surface: "Payments Api v2",        expect: new, candidates: [sys-payments-api] }
+    - { type: Term,   surface: "feature flag",           expect: term-flag,        how: glossary }
+    - { type: Term,   surface: "canary release",         expect: term-canary,      how: glossary }
+    - { type: Term,   surface: "canary rollout",         expect: term-canary,      how: alias }
+    - { type: Term,   surface: "rollback plan",          expect: term-rollback,    how: glossary }
+    - { type: Term,   surface: "feature toggle",         expect: term-flag,        how: alias }
+    - { type: Term,   surface: "technical debt",         expect: term-debt,        how: alias }
+    - { type: System, surface: "Notification Hub",       expect: sys-notify,       how: glossary }
+    - { type: System, surface: "notifier",               expect: sys-notify,       how: alias }
+    - { type: System, surface: "Checkout Servce",        expect: new, candidates: [sys-checkout] }
+    - { type: Term,   surface: "RFC",                    expect: term-rfc,         how: glossary }
+    - { type: Term,   surface: "request for comments",   expect: term-rfc,         how: alias }
+    - { type: System, surface: "Payments API",          expect: sys-payments-api, how: glossary }
+    - { type: System, surface: "Search Cluster",         expect: sys-search,       how: glossary }
+    - { type: Term,   surface: "canary release",        expect: term-canary,      how: glossary }
+    - { type: System, surface: "Auth Gateway",          expect: sys-auth,         how: glossary }
+    - { type: Term,   surface: "feature toggle",        expect: term-flag,        how: alias }
+    - { type: System, surface: "Event Bus",             expect: sys-bus,          how: glossary }
+    - { type: System, surface: "Inventory Sync",        expect: sys-inventory,    how: glossary }
+    - { type: Term,   surface: "SLO",                   expect: term-slo,         how: glossary }
+    - { type: System, surface: "Reporting Dashboard",   expect: sys-reporting,    how: glossary }

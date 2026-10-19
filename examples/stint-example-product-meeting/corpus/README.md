@@ -34,3 +34,16 @@ pii: [ SYNTH-PII-0101 ]         # every marker planted in the script
 - Personal data takes forms the reference redactor recognizes: an e-mail (`SYNTH-PII-0102@example.com`), a phone
   (`+55 11 98765-4321`), or a name that is a marker (`SYNTH-PII-0101 Rivera`, redacted by the term list).
 - Changing a script means updating its hash in the manifest; `CorpusTest` fails otherwise.
+
+## The entity-resolution set (SDD 3b.2, format v1.1)
+A script may carry an optional `kb` section: what a model would cite in the meeting, and what each mention should resolve to
+(`kb.mentions`: `type`, `surface` as the script has it, `expect` = an entity id or `new`, `how` = `glossary | alias | existing`,
+and for a `new` one the `candidates` a duplicate check must flag beside it). It is additive: nothing that reads a script for
+the milestone looks at it.
+- `kb/base.yaml` is the base every mention is resolved against: the `glossary`, the `existing` entities from earlier meetings
+  and the `mustNotMerge` pairs (homonyms that must never become one). Its hash is `kbBase.sha256` in the manifest.
+- The eight milestone meetings carry a few mentions each. `m-009` to `m-012` are the meetings written for the evaluation
+  (aliases, abbreviations, case, typos, homonyms, the same thing in several meetings); they are listed under `knowledge` in the
+  manifest, **not** under `meetings`, so the milestone does not run them and has no audio for them.
+- `ResolutionEvalTest` resolves every mention with `EntityResolver` and checks the thresholds of the SDD: no wrong merge, at
+  least 95 % of the resolvable ones right, at least 90 % of the expected duplicate candidates flagged.

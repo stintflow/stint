@@ -30,6 +30,11 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-worker-decision</artifactId>
         </dependency>
+        <!-- SDD 3b.2: the extraction worker builds the batches of the knowledge base (schema, glossary, resolution). -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-knowledge</artifactId>
+        </dependency>
         <!-- ADR 3a.3-A: plain LangChain4j, version from the platform's quarkus-langchain4j-bom. -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
@@ -41,6 +46,11 @@
         </dependency>
 
         <!-- tests -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-inmemory</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

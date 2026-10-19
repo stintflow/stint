@@ -100,6 +100,7 @@
                 <includes>
                     <include>manifest.json</include>
                     <include>meetings/*.yaml</include>
+                    <include>kb/*.yaml</include>
                 </includes>
             </resource>
         </resources>

@@ -88,6 +88,85 @@ public final class Corpus {
         return List.copyOf(markers);
     }
 
+    // --- the entity-resolution evaluation set (SDD 3b.2, 4.8) -----------------------------------------------------
+
+    /**
+     * One thing a model would cite in a meeting, and what it should resolve to.
+     *
+     * @param surface    the words as the script has them (found in its text, ignoring case)
+     * @param expect     the id it resolves to, or {@code new} when nothing in the base is it
+     * @param how        for a resolved one: {@code glossary}, {@code alias} or {@code existing}
+     * @param candidates for a {@code new} one: the ids a duplicate check must flag beside it
+     */
+    public record Mention(String type, String surface, String expect, String how, List<String> candidates) {
+    }
+
+    /** A meeting with the gold of its mentions. */
+    public record KnowledgeMeeting(String id, String text, List<String> pii, List<Mention> mentions,
+            String scriptSha256, boolean inPipeline) {
+    }
+
+    public record Term(String id, String type, String name, List<String> aliases) {
+    }
+
+    /** What the base holds before any meeting of the set: glossary, entities from earlier meetings, and pairs never to merge. */
+    public record KnowledgeBase(List<Term> glossary, List<Term> existing, List<List<String>> mustNotMerge,
+            String sha256) {
+    }
+
+    public record Knowledge(KnowledgeBase base, List<KnowledgeMeeting> meetings) {
+        public long mentionCount() {
+            return meetings.stream().mapToLong(m -> m.mentions().size()).sum();
+        }
+    }
+
+    /**
+     * The evaluation set: the base ({@code corpus/kb/base.yaml}) and every meeting that carries a {@code kb} section — the
+     * eight of the milestone, and the ones the manifest lists under {@code knowledge}, which the milestone does not run.
+     */
+    public static Knowledge loadKnowledge() {
+        JsonNode manifest = read("corpus/manifest.json", false);
+        JsonNode baseEntry = manifest.path("kbBase");
+        JsonNode base = read("corpus/" + baseEntry.path("file").asText(), true);
+        List<Term> glossary = new ArrayList<>();
+        base.path("glossary").forEach(t -> glossary.add(term(t)));
+        List<Term> existing = new ArrayList<>();
+        base.path("existing").forEach(t -> existing.add(term(t)));
+        List<List<String>> pairs = new ArrayList<>();
+        base.path("mustNotMerge").forEach(p -> pairs.add(List.of(p.get(0).asText(), p.get(1).asText())));
+
+        List<KnowledgeMeeting> meetings = new ArrayList<>();
+        for (String list : List.of("meetings", "knowledge")) {
+            for (JsonNode entry : manifest.path(list)) {
+                JsonNode m = read("corpus/" + entry.path("script").asText(), true);
+                if (!m.has("kb")) {
+                    continue;
+                }
+                StringBuilder text = new StringBuilder();
+                m.path("script").forEach(l -> text.append(l.path("text").asText()).append('\n'));
+                List<Mention> mentions = new ArrayList<>();
+                m.path("kb").path("mentions").forEach(x -> {
+                    List<String> candidates = new ArrayList<>();
+                    x.path("candidates").forEach(c -> candidates.add(c.asText()));
+                    mentions.add(new Mention(x.path("type").asText(), x.path("surface").asText(), x.path("expect").asText(),
+                            x.path("how").asText(null), List.copyOf(candidates)));
+                });
+                List<String> pii = new ArrayList<>();
+                m.path("pii").forEach(p -> pii.add(p.asText()));
+                meetings.add(new KnowledgeMeeting(m.path("id").asText(), text.toString(), List.copyOf(pii),
+                        List.copyOf(mentions), entry.path("scriptSha256").asText(), list.equals("meetings")));
+            }
+        }
+        return new Knowledge(new KnowledgeBase(List.copyOf(glossary), List.copyOf(existing), List.copyOf(pairs),
+                baseEntry.path("sha256").asText()), List.copyOf(meetings));
+    }
+
+    private static Term term(JsonNode t) {
+        List<String> aliases = new ArrayList<>();
+        t.path("aliases").forEach(a -> aliases.add(a.asText()));
+        return new Term(t.path("id").asText(), t.path("type").asText(), t.path("name").asText(), List.copyOf(aliases));
+    }
+
     static byte[] bytes(String resource) {
         try (InputStream in = Corpus.class.getClassLoader().getResourceAsStream(resource)) {
             if (in == null) {

@@ -13,3 +13,7 @@ expected:
   items: [ "I will roll back the payment release now.", "I will post a status update for customers." ]
   review: false
 pii: [ SYNTH-PII-0301, SYNTH-PII-0302 ]
+kb:
+  mentions:
+    - { type: System, surface: "payment release",      expect: new }
+    - { type: Term,   surface: "status update",          expect: new }

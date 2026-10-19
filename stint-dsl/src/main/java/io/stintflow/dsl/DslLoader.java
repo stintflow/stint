@@ -31,6 +31,7 @@ import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.FlowDirective;
 import io.stintflow.core.model.ForRunNode;
+import io.stintflow.core.model.KnowledgeDeclaration;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.RetryPolicy;
 import io.stintflow.core.model.Schedule;
@@ -189,7 +190,16 @@ public final class DslLoader {
         private static final Set<String> RETRY_LIMIT_KEYS = Set.of("attempt", "duration");
         private static final Set<String> RETRY_ATTEMPT_KEYS = Set.of("count", "duration");
         /** SDD 3a.5: {@code document.metadata.x-stint-policy} (Stint extension) and a task's own. */
-        private static final Set<String> POLICY_KEYS = Set.of("sensitivity", "routes", "retention", "review");
+        private static final Set<String> POLICY_KEYS = Set.of("sensitivity", "routes", "retention", "review", "pseudonyms");
+        /** SDD 3b.2, 4.6: {@code x-stint-policy.pseudonyms} and {@code document.metadata.x-stint-knowledge}. */
+        private static final Set<String> POLICY_PSEUDONYMS_KEYS = Set.of("stable");
+        private static final Set<String> KNOWLEDGE_KEYS = Set.of("base", "schema", "glossary");
+        private static final java.util.regex.Pattern KNOWLEDGE_REFERENCE =
+                java.util.regex.Pattern.compile("[a-z0-9][a-z0-9-]*@\\d+");
+        private static final java.util.regex.Pattern KNOWLEDGE_BASE =
+                java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,79}");
+        /** SDD 3b.2: the knowledge scope ({@code <namespace>/<base>}) a {@code call: redact} asks stable pseudonyms for, or null. */
+        private String stablePseudonymScope;
         private static final Set<String> POLICY_REVIEW_KEYS = Set.of("sources");
         // SDD 3a.4, 4.1: the review step (Stint extension)
         private static final Set<String> REVIEW_WITH_KEYS = Set.of("kind", "role", "material", "items", "options",
@@ -229,6 +239,9 @@ public final class DslLoader {
             Schedule schedule = root.has("schedule") ? compileSchedule(root.get("schedule"), document) : null;
 
             reviewSources = reviewSourcesOf(document.path("metadata").path(Policy.METADATA_KEY));
+            KnowledgeDeclaration knowledge = compileKnowledge(document.path("metadata").get(KnowledgeDeclaration.METADATA_KEY));
+            stablePseudonymScope = stablePseudonymScope(document.path("metadata").path(Policy.METADATA_KEY), namespace,
+                    knowledge == null ? name : knowledge.baseOf(ref));
             JsonNode doArray = root.get("do");
             List<TaskNode> tasks = doArray != null && doArray.isArray()
                     ? compileTaskList(doArray, "")
@@ -244,7 +257,71 @@ public final class DslLoader {
             failIfAnyHardErrors();
 
             DoNode rootNode = new DoNode("root", "", DataFlow.NONE, FlowDirective.END, tasks);
-            return new WorkflowDefinition(ref, rootNode, schedule, policy);
+            return new WorkflowDefinition(ref, rootNode, schedule, policy, knowledge);
+        }
+
+        /**
+         * SDD 3b.2, 4.1: {@code document.metadata.x-stint-knowledge} (Stint extension) — which base the definition writes to and
+         * which schema and glossary it follows. STRICT checks the <em>form</em> only (known keys, {@code <id>@<major>}): the
+         * schema is resolved by the worker, since this module cannot depend on {@code stint-knowledge}.
+         */
+        private KnowledgeDeclaration compileKnowledge(JsonNode node) {
+            if (node == null) {
+                return null;
+            }
+            String base = "/document/metadata/" + KnowledgeDeclaration.METADATA_KEY;
+            if (!node.isObject()) {
+                hardError(base, "'" + KnowledgeDeclaration.METADATA_KEY + "' is an object (base, schema, glossary)", null);
+                return null;
+            }
+            checkKeys(node, base, KNOWLEDGE_KEYS);
+            String name = knowledgeText(node, "base", base, KNOWLEDGE_BASE, "letters, digits, '.', '_' or '-'");
+            String schema = knowledgeText(node, "schema", base, KNOWLEDGE_REFERENCE, "<id>@<major>, e.g. meetings@1");
+            String glossary = knowledgeText(node, "glossary", base, KNOWLEDGE_REFERENCE, "<id>@<major>, e.g. product@1");
+            if (schema == null) {
+                hardError(base + "/schema", "'schema' is required: the graph schema the definition follows (<id>@<major>)",
+                        null);
+            }
+            return new KnowledgeDeclaration(name, schema, glossary);
+        }
+
+        private String knowledgeText(JsonNode node, String field, String base, java.util.regex.Pattern form, String shape) {
+            JsonNode value = node.get(field);
+            if (value == null) {
+                return null;
+            }
+            if (!value.isTextual() || !form.matcher(value.asText()).matches()) {
+                hardError(base + "/" + field, "'" + field + "' is " + shape, null);
+                return null;
+            }
+            return value.asText();
+        }
+
+        /**
+         * SDD 3b.2, 4.6: {@code x-stint-policy.pseudonyms: {stable: scope}} — a {@code call: redact} then asks its redactor for
+         * pseudonyms stable across the meetings of one knowledge base. Returns the scope ({@code <namespace>/<base>}), or null.
+         */
+        private String stablePseudonymScope(JsonNode policy, String namespace, String base) {
+            JsonNode pseudonyms = policy.get("pseudonyms");
+            if (pseudonyms == null) {
+                return null;
+            }
+            String where = "/document/metadata/" + Policy.METADATA_KEY + "/pseudonyms";
+            if (!pseudonyms.isObject()) {
+                hardError(where, "'pseudonyms' is an object ({stable: scope})", null);
+                return null;
+            }
+            checkKeys(pseudonyms, where, POLICY_PSEUDONYMS_KEYS);
+            JsonNode stable = pseudonyms.get("stable");
+            if (stable == null) {
+                return null;
+            }
+            if (!stable.isTextual() || !stable.asText().equals("scope")) {
+                hardError(where + "/stable", "'stable' is 'scope' (the same pseudonym for the same person in every meeting of "
+                        + "the base); without it pseudonyms are per instance", null);
+                return null;
+            }
+            return namespace + "/" + base;
         }
 
         /**
@@ -734,8 +811,15 @@ public final class DslLoader {
                 return List.of();
             }
             String input = with.has("input") ? TemplateCompiler.compileTemplate(with.get("input")) : ".";
+            // SDD 3b.2, 4.6: with x-stint-policy.pseudonyms.stable the request also names the knowledge scope
+            String pseudonyms = stablePseudonymScope == null ? "" : ", \""
+                    + io.stintflow.wire.redaction.RedactionContract.PSEUDONYMS + "\": {\""
+                    + io.stintflow.wire.redaction.RedactionContract.PSEUDONYMS_MODE + "\": \""
+                    + io.stintflow.wire.redaction.RedactionContract.MODE_SCOPE + "\", \""
+                    + io.stintflow.wire.redaction.RedactionContract.PSEUDONYMS_SCOPE + "\": "
+                    + com.fasterxml.jackson.databind.node.TextNode.valueOf(stablePseudonymScope) + "}";
             Expr request = compileAndValidate("{\"" + io.stintflow.wire.redaction.RedactionContract.INPUT + "\": ("
-                    + input + "), \"" + io.stintflow.wire.redaction.RedactionContract.TYPES + "\": " + types + "}",
+                    + input + "), \"" + io.stintflow.wire.redaction.RedactionContract.TYPES + "\": " + types + pseudonyms + "}",
                     pointer + "/with");
             DataFlow authored = compileDataFlow(body, pointer, null, null);
             RedactionOutputContract contract = new RedactionOutputContract(lowersTo);

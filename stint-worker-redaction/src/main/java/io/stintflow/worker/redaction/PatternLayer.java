@@ -73,7 +73,7 @@ public final class PatternLayer implements RedactionLayer {
                 }
                 found++;
                 matcher.appendReplacement(out,
-                        Matcher.quoteReplacement(scope.pseudonyms().label(scope.instanceId(), rule.type(), value)));
+                        Matcher.quoteReplacement(scope.label(rule.type(), value)));
             }
             matcher.appendTail(out);
             current = out.toString();

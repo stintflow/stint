@@ -1,0 +1,50 @@
+id: m-010
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: bf_emma }, { id: s2, voice: am_michael } ]
+script:
+  - { speaker: s1, text: "This decision record revisits the Event Bus. We previously decided to adopt one shared topic with schemas." }
+  - { speaker: s2, text: "SYNTH-PII-1001 Novak still wants us to preserve event ordering, because the Reporting Dashboard depends on it." }
+  - { speaker: s1, text: "The message bus has to keep that guarantee, and the reports dashboard must not see duplicate events." }
+  - { speaker: s2, text: "A queue per service was rejected in ADR-12, the architecture decision record from last quarter." }
+  - { speaker: s1, text: "The Inventory Sync consumer is the biggest risk, because stock sync lags during peaks." }
+  - { speaker: s2, text: "The warehouse sync prototype reads the same topic, so we need an SLO for its lag." }
+  - { speaker: s1, text: "Our service level objective is five minutes at the ninety fifth percentile, not the SLA we promise customers." }
+  - { speaker: s2, text: "We decided to supersede the queue per service option and keep the single topic." }
+  - { speaker: s1, text: "I will update the runbook and the playbook for the topic, and link the decision record." }
+  - { speaker: s2, text: "The Notification Hub, the notifier and the Checkout Service all publish to the message bus." }
+  - { speaker: s1, text: "The Payments UI and the Payments API stay out of this decision, and the Reports Database keeps its own schema." }
+
+expected:
+  docType: adr
+  urgent: false
+  items: [ "I will update the runbook and the playbook for the topic, and link the decision record." ]
+  review: false
+pii: [ SYNTH-PII-1001 ]
+kb:
+  mentions:
+    - { type: System,            surface: "Event Bus",                    expect: sys-bus,       how: glossary }
+    - { type: Decision,          surface: "adopt one shared topic",       expect: dec-shared-topic, how: existing }
+    - { type: Requirement,       surface: "preserve event ordering",      expect: req-ordering,  how: existing }
+    - { type: System,            surface: "Reporting Dashboard",          expect: sys-reporting, how: glossary }
+    - { type: System,            surface: "message bus",                  expect: sys-bus,       how: alias }
+    - { type: System,            surface: "reports dashboard",            expect: sys-reporting, how: alias }
+    - { type: Decision,          surface: "queue per service",            expect: new }
+    - { type: ExternalReference, surface: "ADR-12",                       expect: ref-adr-12,    how: existing }
+    - { type: Term,              surface: "architecture decision record", expect: term-adr,       how: alias }
+    - { type: System,            surface: "Inventory Sync",               expect: sys-inventory, how: glossary }
+    - { type: System,            surface: "stock sync",                   expect: sys-inventory, how: alias }
+    - { type: System,            surface: "warehouse sync",               expect: new }
+    - { type: Term,              surface: "SLO",                          expect: term-slo,      how: glossary }
+    - { type: Term,              surface: "service level objective",      expect: term-slo,      how: alias }
+    - { type: Term,              surface: "SLA",                          expect: term-sla,      how: glossary }
+    - { type: Term,              surface: "runbook",                      expect: term-runbook,  how: glossary }
+    - { type: Term,              surface: "playbook",                     expect: term-runbook,  how: alias }
+    - { type: Term,              surface: "decision record",              expect: term-adr,      how: glossary }
+    - { type: System, surface: "Notification Hub",      expect: sys-notify,       how: glossary }
+    - { type: System, surface: "notifier",              expect: sys-notify,       how: alias }
+    - { type: System, surface: "Checkout Service",      expect: sys-checkout,     how: glossary }
+    - { type: System, surface: "message bus",           expect: sys-bus,          how: alias }
+    - { type: System, surface: "Payments UI",           expect: sys-payments-ui,  how: glossary }
+    - { type: System, surface: "Payments API",          expect: sys-payments-api, how: glossary }
+    - { type: System, surface: "Reports Database",      expect: sys-reports-db,   how: glossary }

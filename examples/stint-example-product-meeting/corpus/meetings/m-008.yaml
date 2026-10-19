@@ -12,3 +12,7 @@ expected:
   items: [ "I will draft the shorter signup flow." ]
   review: true
 pii: [ SYNTH-PII-0801 ]
+kb:
+  mentions:
+    - { type: Term,   surface: "onboarding",           expect: new }
+    - { type: Term,   surface: "signup flow",           expect: new }

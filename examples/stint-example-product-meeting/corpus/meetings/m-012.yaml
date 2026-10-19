@@ -1,0 +1,51 @@
+id: m-012
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: am_adam }, { id: s2, voice: bf_emma } ]
+script:
+  - { speaker: s1, text: "Sprint recap: the Checkout Service, the Payments API and the Notification Hub all changed this sprint." }
+  - { speaker: s2, text: "SYNTH-PII-1201 Mensah thinks the Payments UI copy is confusing, and the payments ui buttons are too small." }
+  - { speaker: s1, text: "Please use the canary release for the Auth Gateway and keep the rollback plan handy." }
+  - { speaker: s2, text: "The feature flag service should live in the Checkout Service, not in the Search Cluster." }
+  - { speaker: s1, text: "We owe the customers a postmortem, and the tech debt in the Inventory Sync will be part of it." }
+  - { speaker: s2, text: "The Payments API and the Payments Api v2 will run side by side until the SLA review." }
+  - { speaker: s1, text: "I will email the Reporting Dashboard owners about the Event Bus change." }
+  - { speaker: s2, text: "The Notifcation Hub typo in the alert rule should be fixed too, and the payments front end label as well." }
+  - { speaker: s1, text: "The reports dashboard and the Reports Database are healthy, and the login gateway passed the canary rollout." }
+  - { speaker: s2, text: "Please link the decision record and the runbook for the Event Bus, the message bus and the notifier." }
+
+expected:
+  docType: ata
+  urgent: false
+  items: [ "I will email the Reporting Dashboard owners about the Event Bus change." ]
+  review: false
+pii: [ SYNTH-PII-1201 ]
+kb:
+  mentions:
+    - { type: System, surface: "Checkout Service",     expect: sys-checkout,     how: glossary }
+    - { type: System, surface: "Payments API",         expect: sys-payments-api, how: glossary }
+    - { type: System, surface: "Notification Hub",     expect: sys-notify,       how: glossary }
+    - { type: System, surface: "Payments UI",          expect: sys-payments-ui,  how: glossary }
+    - { type: System, surface: "payments ui",          expect: sys-payments-ui,  how: glossary }
+    - { type: Term,   surface: "canary release",       expect: term-canary,      how: glossary }
+    - { type: System, surface: "Auth Gateway",         expect: sys-auth,         how: glossary }
+    - { type: Term,   surface: "rollback plan",        expect: term-rollback,    how: glossary }
+    - { type: Term,   surface: "feature flag",         expect: term-flag,        how: glossary }
+    - { type: System, surface: "Search Cluster",       expect: sys-search,       how: glossary }
+    - { type: Term,   surface: "tech debt",            expect: term-debt,        how: glossary }
+    - { type: System, surface: "Inventory Sync",       expect: sys-inventory,    how: glossary }
+    - { type: System, surface: "Payments Api v2",      expect: new, candidates: [sys-payments-api] }
+    - { type: Term,   surface: "SLA",                  expect: term-sla,         how: glossary }
+    - { type: System, surface: "Reporting Dashboard",  expect: sys-reporting,    how: glossary }
+    - { type: System, surface: "Event Bus",            expect: sys-bus,          how: glossary }
+    - { type: System, surface: "Notifcation Hub",      expect: new, candidates: [sys-notify] }
+    - { type: System, surface: "payments front end",   expect: sys-payments-ui,  how: alias }
+    - { type: System, surface: "reports dashboard",     expect: sys-reporting,    how: alias }
+    - { type: System, surface: "Reports Database",      expect: sys-reports-db,   how: glossary }
+    - { type: System, surface: "login gateway",         expect: sys-auth,         how: alias }
+    - { type: Term,   surface: "canary rollout",        expect: term-canary,      how: alias }
+    - { type: Term,   surface: "decision record",       expect: term-adr,         how: glossary }
+    - { type: Term,   surface: "runbook",               expect: term-runbook,     how: glossary }
+    - { type: System, surface: "Event Bus",             expect: sys-bus,          how: glossary }
+    - { type: System, surface: "message bus",           expect: sys-bus,          how: alias }
+    - { type: System, surface: "notifier",              expect: sys-notify,       how: alias }

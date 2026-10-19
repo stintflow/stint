@@ -1,0 +1,73 @@
+{
+  "schema": "meetings",
+  "version": "1.0.0",
+  "language": "en",
+  "nodes": {
+    "Meeting": {
+      "key": "meetingId",
+      "defaultSensitivity": "internal",
+      "properties": {
+        "meetingId": {"type": "string", "required": true},
+        "heldOn": {"type": "date"},
+        "title": {"type": "string", "sensitive": true}
+      }
+    },
+    "Person": {
+      "key": "pseudonym",
+      "defaultSensitivity": "confidential",
+      "properties": {
+        "pseudonym": {"type": "string", "required": true, "pattern": "PERSON_[0-9a-f]{6,32}"}
+      }
+    },
+    "Decision": {
+      "key": "key",
+      "defaultSensitivity": "internal",
+      "properties": {
+        "key": {"type": "string", "required": true},
+        "summary": {"type": "string", "required": true, "sensitive": true},
+        "status": {"type": "enum", "values": ["proposed", "accepted", "rejected"]}
+      }
+    },
+    "Requirement": {
+      "key": "key",
+      "defaultSensitivity": "internal",
+      "properties": {
+        "key": {"type": "string", "required": true},
+        "summary": {"type": "string", "required": true, "sensitive": true}
+      }
+    },
+    "System": {
+      "key": "name",
+      "defaultSensitivity": "internal",
+      "glossary": true,
+      "properties": {
+        "name": {"type": "string", "required": true}
+      }
+    },
+    "Term": {
+      "key": "name",
+      "defaultSensitivity": "internal",
+      "glossary": true,
+      "properties": {
+        "name": {"type": "string", "required": true},
+        "definition": {"type": "string"}
+      }
+    },
+    "ExternalReference": {
+      "key": "url",
+      "defaultSensitivity": "internal",
+      "properties": {
+        "url": {"type": "string", "required": true},
+        "kind": {"type": "enum", "values": ["ticket", "document", "repository", "other"]}
+      }
+    }
+  },
+  "relations": {
+    "participated": {"from": ["Person"], "to": ["Meeting"]},
+    "decided": {"from": ["Meeting"], "to": ["Decision"]},
+    "supersedes": {"from": ["Decision", "Requirement"], "to": ["Decision", "Requirement"], "sameType": true},
+    "affects": {"from": ["Decision", "Requirement"], "to": ["System", "Requirement"]},
+    "mentions": {"from": ["Meeting", "Decision", "Requirement"], "to": ["Term", "System", "ExternalReference"]},
+    "motivated-by": {"from": ["Decision"], "to": ["Requirement", "ExternalReference"]}
+  }
+}

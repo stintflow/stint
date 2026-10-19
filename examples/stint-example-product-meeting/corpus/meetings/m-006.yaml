@@ -12,3 +12,7 @@ expected:
   items: [ "I will add the health checks to the runbook." ]
   review: false
 pii: [ SYNTH-PII-0601 ]
+kb:
+  mentions:
+    - { type: Term,   surface: "runbook",              expect: term-runbook,  how: glossary }
+    - { type: System, surface: "search cluster",    expect: sys-search,    how: glossary }
