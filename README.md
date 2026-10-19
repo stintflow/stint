@@ -124,6 +124,7 @@ side is the exact version the running instance started with, not necessarily the
 | `io.stintflow.task.invoke.v1` / `io.stintflow.task.result.v1` | task transport | engine / worker | internal protocol |
 | timer fire `{timerId, workflowInstanceId}` | timer queue | SQS delay or EventBridge Scheduler | **not** a CloudEvent (SDD 1.3/2.4) |
 | `io.stintflow.schedule.fired.v1` | none (in-process) | the schedule consumer | synthetic start event of a cron occurrence; id `<schedule>@<scheduled instant>` (SDD 2.4) |
+| `io.stintflow.instance.cancel.v1` | domain channel | an operator or a coordinator | asks the engine to cancel the instance in `subject` (SDD 3a.11); only a `CancelReaction` built with the `source`s it trusts acts on it |
 | any other type, e.g. `io.stintflow.reports.report-sent.v1` | domain channel (EventBridge domain bus / SNS) | an `emit` task | a **domain fact**; workflows react through `schedule.on` or `listen` |
 
 The prefixes `io.stintflow.task.`, `io.stintflow.timer.` and `io.stintflow.schedule.` are reserved: an `emit`
@@ -244,6 +245,21 @@ A `listen` task (DSL 1.0 *Listen*) suspends the instance until correlated domain
 
 Wire it next to `StartReaction`: `new DomainEventRouter(List.of(new StartReaction(bindings, engine),
 new ResumeReaction(engine)))`.
+
+## Cancelling an instance (SDD 3a.11)
+
+`engine.cancel(instanceId, reason)` moves an instance to `ABORTED` and consumes every wait it holds in one versioned
+save (the waits are derived from its snapshot: a task in flight, a retry delay, a `listen` or a review with its
+timeout). It is idempotent (`CANCELLED`, `ALREADY_TERMINAL`, `NOT_FOUND`) and safe against a result, a timer or another
+activation arriving at the same time: exactly one wins, and what arrives afterwards is dropped as obsolete.
+`awaitCompletion` of a cancelled instance fails at once with `InstanceCancelledException`. The reason and who asked go
+to the `AuditLog` (kind `cancel`), never to the snapshot. A task already dispatched is **not** recalled: a long call
+(an LLM, say) runs to its end and its result is dropped.
+
+The same can be asked by an event: `io.stintflow.instance.cancel.v1`, `subject` = the instance id, `data` =
+`{"reason": "..."}`. The domain channel is shared, so wire `new CancelReaction(engine, Set.of("https://coordinator.example"))`
+next to the other reactions: it acts only on events from the `source`s it lists (no default; an empty set refuses
+everything), and audits a refusal.
 
 ## Schedules and long timers (SDD 2.4)
 

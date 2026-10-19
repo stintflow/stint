@@ -19,5 +19,10 @@ public record TriggerBinding(String id, EventFilter filter, WorkflowRef target) 
         if (filter == null || target == null) {
             throw new IllegalArgumentException("TriggerBinding requires a filter and a target");
         }
+        if (filter.type() != null && filter.type().startsWith("io.stintflow.instance.")) {
+            // SDD 3a.11, 4.5: the instance-control events are acted on by their own reaction, never start an instance
+            throw new IllegalArgumentException("TriggerBinding " + id + ": the type '" + filter.type()
+                    + "' is reserved for the engine's instance-control events");
+        }
     }
 }

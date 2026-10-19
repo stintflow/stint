@@ -83,11 +83,18 @@ public final class StintEvents {
     public static final String CONTENT_TYPE_JSON = "application/json";
 
     /**
-     * SDD 2.2, RNF1/sec. 8e (SDD 2.4 adds {@code io.stintflow.schedule.}): type prefixes of the internal protocol. A domain fact ({@code emit}) may
+     * SDD 2.2, RNF1/sec. 8e (SDD 2.4 adds {@code io.stintflow.schedule.}, SDD 3a.11 {@code io.stintflow.instance.}): type prefixes of the internal protocol. A domain fact ({@code emit}) may
      * never use them — the domain channel must not carry, or be mistaken for, engine traffic.
      */
     public static final List<String> RESERVED_TYPE_PREFIXES =
-            List.of("io.stintflow.task.", "io.stintflow.timer.", "io.stintflow.schedule.");
+            List.of("io.stintflow.task.", "io.stintflow.timer.", "io.stintflow.schedule.", "io.stintflow.instance.");
+
+    /**
+     * SDD 3a.11: asks the engine to cancel the instance named by the event's {@code subject}; {@code data} is
+     * {@code {"reason": "..."}}. Only a {@code CancelReaction} configured with the sources it trusts acts on it. The
+     * prefix {@code io.stintflow.instance.} is reserved: no {@code emit} may produce it and no {@code listen} may wait on it.
+     */
+    public static final String TYPE_INSTANCE_CANCEL = "io.stintflow.instance.cancel.v1";
 
     /**
      * SDD 2.4, sec. 8e (Stint extension): the synthetic event a schedule occurrence starts an instance with.

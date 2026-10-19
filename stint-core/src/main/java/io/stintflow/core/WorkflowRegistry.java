@@ -196,6 +196,11 @@ public final class WorkflowRegistry {
             if (filter.type() == null || filter.type().isBlank()) {
                 throw new IllegalArgumentException(where + "every event filter needs a 'type'");
             }
+            if (StintEvents.isReservedType(filter.type())) {
+                // SDD 3a.11, 4.5: the cancel event (and the other internal events) never go through a listen
+                throw new IllegalArgumentException(where + "the filter type '" + filter.type()
+                        + "' is reserved for the engine's internal protocol " + StintEvents.RESERVED_TYPE_PREFIXES);
+            }
             if (filter.correlate().isEmpty()) {
                 throw new IllegalArgumentException(where + "the filter on '" + filter.type()
                         + "' needs 'correlate' — an uncorrelated listen is not supported (SDD 2.3, sec. 8a)");

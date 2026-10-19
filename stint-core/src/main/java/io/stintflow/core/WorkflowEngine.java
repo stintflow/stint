@@ -460,6 +460,10 @@ public final class WorkflowEngine {
                             "Instance " + instanceId + " failed (last position: " + snap.position() + ")"));
                     return;
                 }
+                if (snap.status() == InstanceStatus.ABORTED) {
+                    result.completeExceptionally(new InstanceCancelledException(instanceId));   // SDD 3a.11, RF5
+                    return;
+                }
             }
             if (clock.instant().isAfter(deadline)) {
                 result.completeExceptionally(
@@ -469,6 +473,135 @@ public final class WorkflowEngine {
             RETRY_SCHEDULER.schedule(() -> pollForCompletion(instanceId, deadline, result),
                     AWAIT_POLL_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
         });
+    }
+
+    // --- cancellation (SDD 3a.11) ------------------------------------------------------------------
+
+    /** SDD 3a.11, 4.1: the longest {@code reason} the audit record keeps. */
+    static final int MAX_CANCEL_REASON = 500;
+
+    /**
+     * SDD 3a.11: cancels {@code instanceId} — {@code ABORTED}, and every wait it holds consumed, in one versioned save.
+     * Idempotent: a terminal instance is {@link CancelOutcome#ALREADY_TERMINAL}, an unknown id
+     * {@link CancelOutcome#NOT_FOUND}. Against a result, a timer or another activation of the same instance exactly
+     * one wins (the version); a lost race reloads and tries again. The reason goes to the {@link AuditLog}, not to the
+     * snapshot. A task already dispatched is not recalled: its result reaches an {@code ABORTED} instance and is
+     * dropped as obsolete.
+     */
+    public CompletionStage<CancelOutcome> cancel(String instanceId, String reason) {
+        return cancel(instanceId, reason, "api");
+    }
+
+    /** As {@link #cancel(String, String)}, recording who asked: {@code api}, or {@code event:<source>}. */
+    public CompletionStage<CancelOutcome> cancel(String instanceId, String reason, String origin) {
+        String kept = reason == null ? "" : reason.length() > MAX_CANCEL_REASON
+                ? reason.substring(0, MAX_CANCEL_REASON) : reason;
+        return cancelAttempt(instanceId, kept, origin, 1);
+    }
+
+    private CompletionStage<CancelOutcome> cancelAttempt(String instanceId, String reason, String origin, int attempt) {
+        return state.load(instanceId).thenCompose(optSnap -> {
+            if (optSnap.isEmpty()) {
+                return CompletableFuture.completedFuture(CancelOutcome.NOT_FOUND);
+            }
+            InstanceSnapshot snap = optSnap.get();
+            if (isTerminal(snap.status())) {
+                return CompletableFuture.completedFuture(CancelOutcome.ALREADY_TERMINAL);
+            }
+            List<String> waits = waitsOf(snap);
+            InstanceSnapshot aborted = new InstanceSnapshot(instanceId, snap.definition(), snap.position(), null,
+                    snap.context(), InstanceStatus.ABORTED, snap.version() + 1, null, clock.instant(), snap.input(),
+                    snap.startedAt(), snap.chainId(), snap.suspendedAt(), ListenState.carried(snap.listenState()),
+                    snap.decisions(), snap.sensitivity());
+            return state.save(aborted, snap.version(), List.of(), waits).thenCompose(outcome -> {
+                if (outcome == SaveOutcome.OK) {
+                    return cancelTimers(waits).thenApply(v -> {
+                        auditCancel(snap, "cancelled", Map.of("reason", reason, "origin", origin));
+                        return CancelOutcome.CANCELLED;
+                    });
+                }
+                if (attempt >= MAX_RETRY_ATTEMPTS) {
+                    return CompletableFuture.<CancelOutcome>failedFuture(new IllegalStateException(
+                            "Instance " + instanceId + " is under contention: cancel lost the race " + attempt
+                                    + " times"));
+                }
+                return delay(backoffMillis(attempt)).thenCompose(v -> cancelAttempt(instanceId, reason, origin,
+                        attempt + 1));
+            });
+        });
+    }
+
+    /**
+     * SDD 3a.11, 4.2: the wait keys an instance holds, derived from its snapshot (no index by instance needed).
+     * A {@code listen} (and a review) holds its still-pending {@code event:} keys and its timeout timer; a task
+     * holds {@code task:<corr>} and {@code timer:<corr>}; a retry delay holds its {@code retry:} key. SDD 3a.8 adds
+     * the keys of a join here.
+     */
+    static List<String> waitsOf(InstanceSnapshot snap) {
+        List<String> keys = new ArrayList<>();
+        ObjectNode active = ListenState.active(snap.listenState());
+        if (active != null) {
+            keys.addAll(ListenState.strings(active.get("pending")));
+            if (active.hasNonNull("timerKey")) {
+                keys.add(active.get("timerKey").asText());
+            }
+            return keys;
+        }
+        String waiting = snap.waitingKey();
+        if (waiting != null) {
+            keys.add(waiting);
+            if (waiting.startsWith("task:")) {
+                keys.add(WaitKeys.timer(WaitKeys.rawId(waiting)));
+            }
+        }
+        return keys;
+    }
+
+    /** Best effort, like a result's: a timer that fires late finds no wait and is dropped as obsolete. */
+    private CompletionStage<Void> cancelTimers(List<String> waits) {
+        CompletionStage<Void> chain = done();
+        for (String key : waits) {
+            if (key.startsWith("timer:") || WaitKeys.isRetry(key)) {
+                chain = chain.thenCompose(v -> timer.cancel(key).handle((ok, ex) -> null));
+            }
+        }
+        return chain;
+    }
+
+    private void auditCancel(InstanceSnapshot snap, String outcome, Map<String, String> detail) {
+        AuditLog log = audit;
+        if (log == AuditLog.NONE) {
+            return;
+        }
+        try {
+            log.append(new AuditLog.AuditRecord(snap.instanceId(), snap.chainId(), clock.instant(),
+                    AuditLog.AuditRecord.CANCEL, snap.position(), snap.sensitivity(), null, outcome, detail))
+                    .exceptionally(t -> {
+                        LOG.log(Level.WARNING, "Audit record of instance {0} not written ({1})", snap.instanceId(),
+                                t.getClass().getName());
+                        return null;
+                    });
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "Audit record of instance {0} not written ({1})", snap.instanceId(),
+                    e.getClass().getName());
+        }
+    }
+
+    /**
+     * SDD 3a.11, 4.5: records that a cancel event from {@code source} was refused (a source the engine's
+     * {@code CancelReaction} doesn't trust). Ids only: the event's {@code data} is not looked at.
+     */
+    public void auditCancelRefused(String instanceId, String source) {
+        AuditLog log = audit;
+        if (log == AuditLog.NONE) {
+            return;
+        }
+        try {
+            log.append(new AuditLog.AuditRecord(instanceId, null, clock.instant(), AuditLog.AuditRecord.CANCEL, null,
+                    null, null, "refused", Map.of("origin", "event:" + (source == null ? "" : source))));
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "Audit record of instance {0} not written ({1})", instanceId, e.getClass().getName());
+        }
     }
 
     // --- events that can resume a suspended instance (SDD 1.3, sec. 8a: handled uniformly) --------

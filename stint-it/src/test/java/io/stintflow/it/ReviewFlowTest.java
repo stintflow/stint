@@ -449,4 +449,25 @@ class ReviewFlowTest {
                       with: { kind: approval, role: tech, material: '${ .ref }', deadline: { hours: 1 } }
                 """)).isInstanceOf(DslValidationException.class).hasMessageContaining("review/sources");
     }
+
+    @Test
+    void sdd_3a11_a_review_waiting_for_its_reviewer_is_cancelled_with_its_keys_and_a_late_answer_is_dropped() throws Exception {
+        PolicyFixture f = triage();
+        String id = f.engine.start(TRIAGE, Json.obj().put("ref", MATERIAL), Sensitivity.INTERNAL);
+        CloudEvent request = awaitPublished(f, StintEvents.TYPE_REVIEW_REQUESTED, 1);
+        String reviewId = request.getSubject();
+        String eventKey = f.snapshot(id).waitingKey();
+        assertThat(f.state.findWait(eventKey).toCompletableFuture().get(5, TimeUnit.SECONDS)).isPresent();
+
+        assertThat(f.engine.cancel(id, "the meeting was withdrawn").toCompletableFuture().get(10, TimeUnit.SECONDS))
+                .isEqualTo(io.stintflow.core.CancelOutcome.CANCELLED);
+
+        assertThat(f.snapshot(id).status()).isEqualTo(InstanceStatus.ABORTED);
+        assertThat(f.state.findWait(eventKey).toCompletableFuture().get(5, TimeUnit.SECONDS)).isEmpty();
+        deliver(f, answer("ans-late", reviewId, PORTAL, "business-rep", Json.obj().put("value", "adr")));
+        assertThat(f.snapshot(id).status()).isEqualTo(InstanceStatus.ABORTED);
+        advance(f, Duration.ofHours(30));   // the reminder, escalation and deadline timers find nothing
+        assertThat(f.snapshot(id).status()).isEqualTo(InstanceStatus.ABORTED);
+        assertThat(published(f, StintEvents.TYPE_REVIEW_REMINDER)).isEmpty();
+    }
 }

@@ -118,6 +118,11 @@ final class PolicyFixture {
         return this;
     }
 
+    /** Delivers a result to the engine as the transport would (SDD 3a.11: a late one, after a cancel). */
+    void answer(TaskResult result) {
+        results.handle(result).toCompletableFuture().join();
+    }
+
     JsonNode awaitCompleted(String id) throws Exception {
         return engine.awaitCompletion(id, Duration.ofSeconds(10)).toCompletableFuture().get(15, TimeUnit.SECONDS);
     }

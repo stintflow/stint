@@ -37,7 +37,7 @@ public interface AuditLog {
      * @param instanceId  the instance
      * @param chainId     its business chain (SDD 2.5), or {@code null}
      * @param at          when
-     * @param kind        {@code policy}, {@code redaction} or {@code ai-call}
+     * @param kind        {@code policy}, {@code redaction}, {@code ai-call} or {@code cancel}
      * @param pointer     the task's position
      * @param sensitivity the instance's level at that moment, or {@code null}
      * @param route       the routing key involved, or {@code null}
@@ -50,6 +50,8 @@ public interface AuditLog {
         public static final String POLICY = "policy";
         public static final String REDACTION = "redaction";
         public static final String AI_CALL = "ai-call";
+        /** SDD 3a.11: a cancellation of an instance (done, or refused when asked by an event of a source not allowed). */
+        public static final String CANCEL = "cancel";
 
         public AuditRecord {
             detail = detail == null ? Map.of() : Map.copyOf(detail);
