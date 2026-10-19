@@ -1,0 +1,576 @@
+package io.stintflow.knowledge;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import org.junit.jupiter.api.Test;
+
+import io.stintflow.knowledge.ChangeEntry.Kind;
+import io.stintflow.knowledge.ChangeEntry.Op;
+import io.stintflow.knowledge.WriteReceipt.Status;
+import io.stintflow.spi.ModelProvider;
+import io.stintflow.spi.Sensitivity;
+import io.stintflow.spi.WorkflowRef;
+
+/**
+ * SDD 3b.1, CA15: what any {@link KnowledgeStore} must do, through the port alone. A backend extends this class and says how to
+ * build itself, how to move its clock and what it holds at rest; the in-memory composite is the first to pass it. Data is
+ * synthetic: {@code SYNTH-PII-*} markers stand for whatever must not rest in the clear.
+ */
+public abstract class KnowledgeStoreContract {
+
+    protected static final KnowledgeScope SCOPE = KnowledgeScope.of(new WorkflowRef("meetings", "notes", "1.0.0"));
+    protected static final String SCHEMA = "meetings@1.0.0";
+
+    /** A store with no model behind its embedder; {@code withRestrictedClass} gives it a retention class for restricted content. */
+    protected abstract KnowledgeStore newStore(boolean withRestrictedClass);
+
+    /** Moves the store's clock (what a blob's retention is measured against). */
+    protected abstract void advanceClock(Duration by);
+
+    /** Everything the store holds for {@code scope} as text outside the vault of restricted content — its structures — for the scanner. */
+    protected abstract String heldOutsideBlobs(KnowledgeScope scope);
+
+    /** Everything in the blobs of restricted content, as text. */
+    protected abstract String heldInBlobs();
+
+    /** Removes what has expired from the index, if the backend keeps it apart from the blobs; returns how many things. */
+    protected abstract int reapExpired(KnowledgeScope scope);
+
+    // --- a small way to build batches ----------------------------------------------------------------------------
+
+    protected static final class B {
+        final KnowledgeScope scope;
+        final String doc;
+        final List<Passage> passages = new ArrayList<>();
+        final List<Entity> entities = new ArrayList<>();
+        final List<Relation> relations = new ArrayList<>();
+        final List<Link> links = new ArrayList<>();
+        Long revision;
+        String batchId;
+        Source source = new Source("inst-1", "chain-1", new WorkflowRef("meetings", "notes", "1.0.0"));
+
+        B(KnowledgeScope scope, String doc) {
+            this.scope = scope;
+            this.doc = doc;
+            this.batchId = "batch-" + doc;
+        }
+
+        B passage(String text, Sensitivity level) {
+            int ordinal = passages.size();
+            passages.add(new Passage(PassageIds.of(scope, doc, ordinal, text), ordinal, text, "en", level));
+            return this;
+        }
+
+        String idOf(int ordinal) {
+            return passages.get(ordinal).passageId();
+        }
+
+        B entity(String id, String type, String label, Sensitivity level) {
+            entities.add(new Entity(id, type, label, level));
+            return this;
+        }
+
+        B relation(String type, String from, String to, Sensitivity level) {
+            relations.add(new Relation(type, from, to, level));
+            return this;
+        }
+
+        B link(int ordinal, String entityId) {
+            links.add(new Link(idOf(ordinal), entityId));
+            return this;
+        }
+
+        B revision(long revision) {
+            this.revision = revision;
+            return this;
+        }
+
+        B batchId(String id) {
+            this.batchId = id;
+            return this;
+        }
+
+        KnowledgeBatch build() {
+            String hash = PassageIds.sha256Hex(passages + "|" + entities + "|" + relations + "|" + links);
+            return new KnowledgeBatch(batchId, doc, hash, revision, source, SCHEMA, passages, entities, relations, links);
+        }
+    }
+
+    protected static WriteReceipt write(KnowledgeStore store, KnowledgeScope scope, KnowledgeBatch batch) throws Exception {
+        return store.write(scope, batch).toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    protected static List<ContextItem> retrieve(KnowledgeStore store, KnowledgeScope scope, String text, Sensitivity ceiling)
+            throws Exception {
+        return store.retrieve(scope, new RetrievalQuery(text, 10, ceiling)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    protected static List<ChangeEntry> log(KnowledgeStore store, KnowledgeScope scope) throws Exception {
+        return store.changes(scope, 0, 1000).toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    protected static DeleteReceipt erase(KnowledgeStore store, KnowledgeScope scope, DeleteRequest request) throws Exception {
+        return store.delete(scope, request).toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    private B checkout() {
+        return new B(SCOPE, "meeting:m-001")
+                .passage("The checkout service retries a failed payment three times.", Sensitivity.INTERNAL)
+                .passage("We agreed to move the checkout copy review to Friday.", Sensitivity.INTERNAL)
+                .entity("e-checkout", "System", "Checkout Service", Sensitivity.INTERNAL)
+                .entity("e-payments", "System", "Payments API", Sensitivity.INTERNAL)
+                .relation("affects", "e-checkout", "e-payments", Sensitivity.INTERNAL)
+                .link(0, "e-checkout").link(0, "e-payments").link(1, "e-checkout");
+    }
+
+    // --- CA1: write and read ----------------------------------------------------------------------------------------
+
+    @Test
+    protected void ca1_a_written_document_is_retrieved_with_its_origin_score_entities_and_level() throws Exception {
+        KnowledgeStore store = newStore(false);
+        WriteReceipt receipt = write(store, SCOPE, checkout().build());
+        assertThat(receipt.status()).isEqualTo(Status.APPLIED);
+
+        List<ContextItem> items = retrieve(store, SCOPE, "checkout payment retry", Sensitivity.INTERNAL);
+
+        assertThat(items).isNotEmpty();
+        ContextItem best = items.get(0);
+        assertThat(best.content()).contains("retries a failed payment");
+        assertThat(best.origin().kind()).isEqualTo(ContextItem.Kind.PASSAGE);
+        assertThat(best.origin().documentId()).isEqualTo("meeting:m-001");
+        assertThat(best.origin().instanceId()).isEqualTo("inst-1");
+        assertThat(best.origin().chainId()).isEqualTo("chain-1");
+        assertThat(best.score()).isBetween(0.0, 1.0);
+        assertThat(best.sensitivity()).isEqualTo(Sensitivity.INTERNAL);
+        assertThat(best.entities()).extracting(ContextItem.EntityRef::label)
+                .containsExactlyInAnyOrder("Checkout Service", "Payments API");
+        assertThat(items).extracting(ContextItem::score).isSortedAccordingTo(java.util.Comparator.reverseOrder());
+        assertThat(retrieve(store, SCOPE, "checkout payment retry", Sensitivity.INTERNAL))
+                .isEqualTo(items);   // deterministic
+    }
+
+    @Test
+    protected void ca1_the_graph_adds_the_entities_and_relations_one_hop_away() throws Exception {
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, checkout().build());
+
+        List<ContextItem> items = store.retrieve(SCOPE, new RetrievalQuery("checkout payment retry", 5, 0,
+                Sensitivity.INTERNAL, null, Set.of(), null, 1)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+
+        assertThat(items).extracting(i -> i.origin().kind()).contains(ContextItem.Kind.ENTITY, ContextItem.Kind.RELATION);
+        assertThat(items).filteredOn(i -> i.origin().kind() == ContextItem.Kind.RELATION).singleElement()
+                .satisfies(i -> assertThat(i.content()).isEqualTo("Checkout Service -[affects]-> Payments API"));
+    }
+
+    // --- CA2: scopes ------------------------------------------------------------------------------------------------
+
+    @Test
+    protected void ca2_the_scope_of_a_definition_ignores_its_version_and_scopes_do_not_leak() throws Exception {
+        assertThat(KnowledgeScope.of(new WorkflowRef("meetings", "notes", "1.0.0")))
+                .isEqualTo(KnowledgeScope.of(new WorkflowRef("meetings", "notes", "2.0.0")));
+        assertThat(KnowledgeScope.of(new WorkflowRef("meetings", "notes", "1.0.0")))
+                .isNotEqualTo(KnowledgeScope.named("meetings", "shared"));
+
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, checkout().build());
+        KnowledgeScope other = KnowledgeScope.named("meetings", "shared");
+
+        assertThat(retrieve(store, other, "checkout payment retry", Sensitivity.RESTRICTED)).isEmpty();
+        assertThat(log(store, other)).isEmpty();
+        assertThat(retrieve(store, KnowledgeScope.of(new WorkflowRef("meetings", "notes", "2.0.0")), "checkout payment",
+                Sensitivity.INTERNAL)).isNotEmpty();   // a new version of the definition sees the same base
+    }
+
+    // --- CA3: the ceiling -------------------------------------------------------------------------------------------
+
+    @Test
+    protected void ca3_nothing_above_the_ceiling_comes_back_and_nothing_tells_it_is_there() throws Exception {
+        KnowledgeStore withSecret = newStore(true);
+        KnowledgeStore without = newStore(true);
+        B open = new B(SCOPE, "meeting:open").passage("The roadmap review moved to Thursday.", Sensitivity.INTERNAL)
+                .entity("e-roadmap", "Term", "Roadmap", Sensitivity.INTERNAL).link(0, "e-roadmap");
+        B secret = new B(SCOPE, "meeting:secret").passage("The roadmap review has a SYNTH-PII-0001 budget cut.",
+                        Sensitivity.CONFIDENTIAL)
+                .passage("The roadmap review names SYNTH-PII-0002 as lead.", Sensitivity.RESTRICTED)
+                .entity("e-budget", "Term", "Budget", Sensitivity.CONFIDENTIAL)
+                .entity("e-lead", "Person", "PERSON_a1", Sensitivity.RESTRICTED)
+                .relation("mentions", "e-budget", "e-roadmap", Sensitivity.CONFIDENTIAL)
+                .link(0, "e-budget").link(0, "e-roadmap").link(1, "e-lead");
+        write(withSecret, SCOPE, open.build());
+        write(withSecret, SCOPE, secret.build());
+        write(without, SCOPE, open.build());
+
+        for (Sensitivity ceiling : new Sensitivity[] {Sensitivity.INTERNAL, Sensitivity.CONFIDENTIAL}) {
+            RetrievalQuery query = new RetrievalQuery("roadmap review", 10, 0, ceiling, null, Set.of(), null, 1);
+            List<ContextItem> a = withSecret.retrieve(SCOPE, query).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            assertThat(a).allSatisfy(i -> assertThat(i.sensitivity().atLeast(ceiling) && i.sensitivity() != ceiling)
+                    .as("%s above %s", i.content(), ceiling).isFalse());
+            assertThat(a).noneMatch(i -> i.content().contains("SYNTH-PII-0002"));
+            if (ceiling == Sensitivity.INTERNAL) {
+                // the same answer, to the score and the order, as a base that never had the other documents
+                List<ContextItem> b = without.retrieve(SCOPE, query).toCompletableFuture().get(10, TimeUnit.SECONDS);
+                assertThat(a).extracting(i -> i.origin().id()).containsExactlyElementsOf(
+                        b.stream().map(i -> i.origin().id()).toList());
+                assertThat(a).extracting(ContextItem::score).containsExactlyElementsOf(b.stream().map(ContextItem::score).toList());
+            }
+        }
+        assertThat(retrieve(withSecret, SCOPE, "roadmap review", Sensitivity.RESTRICTED))
+                .anyMatch(i -> i.content().contains("SYNTH-PII-0002"));
+        assertThat(withSecret.entities(SCOPE, new EntityQuery(null, EntityIds.normalize("PERSON_a1"), Sensitivity.CONFIDENTIAL, 5))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS)).isEmpty();
+        assertThat(withSecret.entities(SCOPE, new EntityQuery(null, EntityIds.normalize("PERSON_a1"), Sensitivity.RESTRICTED, 5))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS)).hasSize(1);
+    }
+
+    @Test
+    protected void ca3_the_ceiling_is_the_lower_of_the_instance_and_the_provider() {
+        ModelProvider local = new ModelProvider("litjev", "q", false);
+        ModelProvider approved = new ModelProvider("enterprise", "m", true);
+        ModelProvider other = new ModelProvider("public", "m", true);
+
+        assertThat(Audience.ceiling(Sensitivity.RESTRICTED, local, false)).isEqualTo(Sensitivity.RESTRICTED);
+        assertThat(Audience.ceiling(Sensitivity.INTERNAL, local, false)).isEqualTo(Sensitivity.INTERNAL);
+        assertThat(Audience.ceiling(Sensitivity.RESTRICTED, approved, true)).isEqualTo(Sensitivity.CONFIDENTIAL);
+        assertThat(Audience.ceiling(Sensitivity.CONFIDENTIAL, other, false)).isEqualTo(Sensitivity.INTERNAL);
+        assertThat(Audience.ceiling(null, null, false)).isEqualTo(Sensitivity.RESTRICTED);
+        assertThatThrownBy(() -> new RetrievalQuery("x", 5, 0, null, null, Set.of(), null, 0))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    // --- CA4 and CA5: restricted content ---------------------------------------------------------------------------
+
+    @Test
+    protected void ca4_restricted_content_rests_only_in_blobs_and_a_store_with_no_class_refuses_it() throws Exception {
+        KnowledgeStore noClass = newStore(false);
+        B restricted = new B(SCOPE, "meeting:r1").passage("Cut the vendor, says SYNTH-PII-0101 Rivera.", Sensitivity.RESTRICTED)
+                .entity("e-vendor", "Decision", "Drop SYNTH-PII-0102 vendor", Sensitivity.RESTRICTED).link(0, "e-vendor");
+        assertThatThrownBy(() -> write(noClass, SCOPE, restricted.build())).isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(KnowledgeValidationException.class).hasMessageContaining("retention class")
+                .hasMessageNotContaining("SYNTH-PII");
+
+        KnowledgeStore store = newStore(true);
+        assertThat(write(store, SCOPE, restricted.build()).status()).isEqualTo(Status.APPLIED);
+
+        assertThat(heldOutsideBlobs(SCOPE)).as("restricted text in the index, the graph or the log")
+                .doesNotContain("SYNTH-PII-0101").doesNotContain("SYNTH-PII-0102");
+        assertThat(heldInBlobs()).contains("SYNTH-PII-0101").contains("SYNTH-PII-0102");   // it rests in the vault
+        assertThat(retrieve(store, SCOPE, "vendor cut Rivera", Sensitivity.INTERNAL)).isEmpty();
+        assertThat(retrieve(store, SCOPE, "vendor cut Rivera", Sensitivity.RESTRICTED)).singleElement()
+                .satisfies(i -> assertThat(i.content()).contains("SYNTH-PII-0101"));
+        assertThat(log(store, SCOPE)).noneMatch(e -> e.contentHash() != null && e.sensitivity() == Sensitivity.RESTRICTED);
+    }
+
+    @Test
+    protected void ca5_an_expired_blob_is_left_out_of_a_retrieval_and_reaping_logs_the_expiry() throws Exception {
+        KnowledgeStore store = newStore(true);
+        write(store, SCOPE, new B(SCOPE, "meeting:r2").passage("Plan to relocate, says SYNTH-PII-0201.", Sensitivity.RESTRICTED)
+                .passage("The relocation is internal news.", Sensitivity.INTERNAL).build());
+        assertThat(retrieve(store, SCOPE, "relocation plan", Sensitivity.RESTRICTED)).hasSize(2);
+
+        advanceClock(Duration.ofDays(31));
+
+        List<ContextItem> after = retrieve(store, SCOPE, "relocation plan", Sensitivity.RESTRICTED);
+        assertThat(after).singleElement().satisfies(i -> assertThat(i.content()).contains("internal news"));
+        assertThat(reapExpired(SCOPE)).isEqualTo(1);
+        assertThat(log(store, SCOPE)).anySatisfy(e -> {
+            assertThat(e.op()).isEqualTo(Op.EXPIRE);
+            assertThat(e.kind()).isEqualTo(Kind.PASSAGE);
+            assertThat(e.reason()).isEqualTo("retention");
+        });
+    }
+
+    // --- CA7: the log -----------------------------------------------------------------------------------------------
+
+    @Test
+    protected void ca7_the_log_has_no_gap_no_text_and_says_when_who_and_under_which_schema() throws Exception {
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, checkout().build());
+
+        List<ChangeEntry> entries = log(store, SCOPE);
+
+        assertThat(entries).isNotEmpty();
+        for (int i = 0; i < entries.size(); i++) {
+            ChangeEntry e = entries.get(i);
+            assertThat(e.sequence()).isEqualTo(i + 1);
+            assertThat(e.at()).isNotNull();
+            assertThat(e.instanceId()).isEqualTo("inst-1");
+            assertThat(e.chainId()).isEqualTo("chain-1");
+            assertThat(e.definition()).isEqualTo("meetings:notes:1.0.0");
+            assertThat(e.schemaVersion()).isEqualTo(SCHEMA);
+            assertThat(e.batchId()).isEqualTo("batch-meeting:m-001");
+        }
+        assertThat(entries.toString()).doesNotContain("retries a failed payment").doesNotContain("Checkout Service");
+        assertThat(entries).extracting(ChangeEntry::kind).contains(Kind.PASSAGE, Kind.ENTITY, Kind.RELATION, Kind.LINK);
+        assertThat(log(store, SCOPE)).isEqualTo(entries);   // the same, read again
+        assertThat(store.changes(SCOPE, 3, 2).toCompletableFuture().get(10, TimeUnit.SECONDS))
+                .extracting(ChangeEntry::sequence).containsExactly(4L, 5L);
+    }
+
+    // --- CA8, CA9, CA10: idempotence --------------------------------------------------------------------------------
+
+    @Test
+    protected void ca8_writing_the_same_document_again_changes_and_logs_nothing() throws Exception {
+        KnowledgeStore store = newStore(false);
+        assertThat(write(store, SCOPE, checkout().build()).status()).isEqualTo(Status.APPLIED);
+        long last = log(store, SCOPE).size();
+        List<ContextItem> before = retrieve(store, SCOPE, "checkout", Sensitivity.INTERNAL);
+
+        WriteReceipt again = write(store, SCOPE, checkout().build());
+        WriteReceipt redelivery = write(store, SCOPE, checkout().batchId("another-batch-id").build());
+
+        assertThat(again.status()).isEqualTo(Status.UNCHANGED);
+        assertThat(redelivery.status()).isEqualTo(Status.UNCHANGED);
+        assertThat(log(store, SCOPE)).hasSize((int) last);
+        assertThat(retrieve(store, SCOPE, "checkout", Sensitivity.INTERNAL)).isEqualTo(before);
+        assertThat(retrieve(store, SCOPE, "checkout", Sensitivity.INTERNAL)).extracting(i -> i.origin().id()).doesNotHaveDuplicates();
+    }
+
+    @Test
+    protected void ca8_concurrent_redeliveries_leave_one_copy() throws Exception {
+        KnowledgeStore store = newStore(false);
+        int writers = 8;
+        CyclicBarrier go = new CyclicBarrier(writers);
+        var pool = Executors.newFixedThreadPool(writers);
+        List<Future<WriteReceipt>> receipts = new ArrayList<>();
+        for (int i = 0; i < writers; i++) {
+            receipts.add(pool.submit(() -> {
+                go.await(10, TimeUnit.SECONDS);
+                return write(store, SCOPE, checkout().build());
+            }));
+        }
+        List<Status> statuses = new ArrayList<>();
+        for (Future<WriteReceipt> receipt : receipts) {
+            statuses.add(receipt.get(30, TimeUnit.SECONDS).status());
+        }
+        pool.shutdown();
+
+        assertThat(statuses).containsOnly(Status.APPLIED, Status.UNCHANGED);
+        assertThat(statuses.stream().filter(s -> s == Status.APPLIED)).hasSize(1);
+        assertThat(retrieve(store, SCOPE, "checkout", Sensitivity.INTERNAL)).hasSize(2);
+        assertThat(log(store, SCOPE).stream().filter(e -> e.kind() == Kind.PASSAGE)).hasSize(2);
+    }
+
+    @Test
+    protected void ca9_a_changed_document_applies_only_the_difference_and_shared_facts_outlive_one_document() throws Exception {
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, checkout().build());
+        // a second document asserts the same system
+        write(store, SCOPE, new B(SCOPE, "meeting:m-002").passage("Checkout was down for ten minutes.", Sensitivity.INTERNAL)
+                .entity("e-checkout", "System", "Checkout Service", Sensitivity.INTERNAL).link(0, "e-checkout").build());
+        long before = log(store, SCOPE).size();
+
+        // the first document again, its second passage reworded and the Payments API gone
+        B edited = new B(SCOPE, "meeting:m-001")
+                .passage("The checkout service retries a failed payment three times.", Sensitivity.INTERNAL)
+                .passage("We agreed to review the checkout copy on Monday.", Sensitivity.INTERNAL)
+                .entity("e-checkout", "System", "Checkout Service", Sensitivity.INTERNAL).link(0, "e-checkout")
+                .link(1, "e-checkout");
+        WriteReceipt receipt = write(store, SCOPE, edited.build());
+
+        assertThat(receipt.status()).isEqualTo(Status.APPLIED);
+        List<ChangeEntry> added = log(store, SCOPE).subList((int) before, log(store, SCOPE).size());
+        assertThat(added).noneMatch(e -> e.targetId().equals(edited.idOf(0)));   // the first passage kept its id: untouched
+        assertThat(added).anyMatch(e -> e.op() == Op.REMOVE && e.kind() == Kind.PASSAGE);
+        assertThat(added).anyMatch(e -> e.op() == Op.ADD && e.kind() == Kind.PASSAGE && e.targetId().equals(edited.idOf(1)));
+        assertThat(added).anyMatch(e -> e.op() == Op.REMOVE && e.kind() == Kind.ENTITY && e.targetId().equals("e-payments"));
+        assertThat(added).noneMatch(e -> e.kind() == Kind.ENTITY && e.targetId().equals("e-checkout") && e.op() == Op.REMOVE);
+        assertThat(store.entities(SCOPE, new EntityQuery("System", EntityIds.normalize("checkout service"),
+                Sensitivity.INTERNAL, 5)).toCompletableFuture().get(10, TimeUnit.SECONDS)).hasSize(1);
+        assertThat(store.entities(SCOPE, new EntityQuery("System", EntityIds.normalize("payments api"),
+                Sensitivity.INTERNAL, 5)).toCompletableFuture().get(10, TimeUnit.SECONDS)).isEmpty();
+
+        // erasing the second document leaves the system, which the first still asserts
+        erase(store, SCOPE, new DeleteRequest.ByDocument("req-1", "erasure:document", "meeting:m-002"));
+        assertThat(store.entities(SCOPE, new EntityQuery("System", EntityIds.normalize("checkout service"),
+                Sensitivity.INTERNAL, 5)).toCompletableFuture().get(10, TimeUnit.SECONDS)).hasSize(1);
+    }
+
+    @Test
+    protected void ca10_an_older_revision_after_a_newer_one_is_stale_and_changes_nothing() throws Exception {
+        KnowledgeStore store = newStore(false);
+        B v2 = new B(SCOPE, "meeting:m-010").revision(2).passage("Version two of the minutes.", Sensitivity.INTERNAL);
+        B v1 = new B(SCOPE, "meeting:m-010").revision(1).passage("Version one of the minutes.", Sensitivity.INTERNAL);
+        write(store, SCOPE, v2.build());
+        long size = log(store, SCOPE).size();
+
+        assertThat(write(store, SCOPE, v1.build()).status()).isEqualTo(Status.STALE);
+
+        assertThat(log(store, SCOPE)).hasSize((int) size);
+        assertThat(retrieve(store, SCOPE, "minutes", Sensitivity.INTERNAL)).singleElement()
+                .satisfies(i -> assertThat(i.content()).contains("Version two"));
+        B conflicting = new B(SCOPE, "meeting:m-010").revision(2).passage("Another text, same revision.", Sensitivity.INTERNAL);
+        assertThatThrownBy(() -> write(store, SCOPE, conflicting.build())).hasCauseInstanceOf(KnowledgeValidationException.class);
+    }
+
+    // --- CA11 and CA12: erasure -------------------------------------------------------------------------------------
+
+    @Test
+    protected void ca11_erasing_a_document_and_a_person_leaves_them_nowhere_and_the_log_keeps_only_ids() throws Exception {
+        KnowledgeStore store = newStore(true);
+        write(store, SCOPE, new B(SCOPE, "meeting:p1")
+                .passage("PERSON_9f spoke about the SYNTH-PII-0301 contract.", Sensitivity.RESTRICTED)
+                .passage("PERSON_9f joined the standup.", Sensitivity.CONFIDENTIAL)
+                .passage("The build is green.", Sensitivity.INTERNAL)
+                .entity("e-person", "Person", "PERSON_9f", Sensitivity.CONFIDENTIAL)
+                .entity("e-build", "Term", "Build", Sensitivity.INTERNAL)
+                .relation("mentions", "e-person", "e-build", Sensitivity.CONFIDENTIAL)
+                .link(0, "e-person").link(1, "e-person").link(2, "e-build").build());
+        write(store, SCOPE, new B(SCOPE, "meeting:p2").passage("SYNTH-PII-0302 reviewed the roadmap.", Sensitivity.RESTRICTED)
+                .build());
+        long before = log(store, SCOPE).size();
+
+        // by person: the node, its edges and links, and (the default) the passages that mention it
+        DeleteReceipt person = erase(store, SCOPE, new DeleteRequest.ByPerson("req-p", "erasure:person", "e-person", null));
+        assertThat(person.counts()).containsKeys("ERASE.ENTITY", "ERASE.RELATION", "ERASE.LINK", "ERASE.PASSAGE");
+        assertThat(retrieve(store, SCOPE, "PERSON_9f spoke standup", Sensitivity.RESTRICTED))
+                .noneMatch(i -> i.content().contains("PERSON_9f"));
+        assertThat(heldOutsideBlobs(SCOPE) + heldInBlobs()).doesNotContain("SYNTH-PII-0301").doesNotContain("PERSON_9f");
+        assertThat(retrieve(store, SCOPE, "build green", Sensitivity.INTERNAL)).hasSize(1);   // what was not about the person stays
+
+        // by document
+        DeleteReceipt doc = erase(store, SCOPE, new DeleteRequest.ByDocument("req-d", "erasure:document", "meeting:p2"));
+        assertThat(doc.counts()).containsKey("ERASE.PASSAGE");
+        assertThat(heldOutsideBlobs(SCOPE) + heldInBlobs()).doesNotContain("SYNTH-PII-0302");
+        assertThat(retrieve(store, SCOPE, "roadmap", Sensitivity.RESTRICTED)).isEmpty();
+
+        List<ChangeEntry> entries = log(store, SCOPE);
+        assertThat(entries.subList((int) before, entries.size())).isNotEmpty().allSatisfy(e -> {
+            assertThat(e.op()).isEqualTo(Op.ERASE);
+            assertThat(e.reason()).startsWith("erasure:");
+        });
+        assertThat(entries.toString()).doesNotContain("PERSON_9f").doesNotContain("SYNTH-PII");
+        // a repeat of the request erases nothing more
+        assertThat(erase(store, SCOPE, new DeleteRequest.ByPerson("req-p", "erasure:person", "e-person", null)).counts()).isEmpty();
+    }
+
+    @Test
+    protected void ca11_erasing_a_person_can_keep_the_passages() throws Exception {
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, new B(SCOPE, "meeting:p3").passage("PERSON_77 owns the migration.", Sensitivity.INTERNAL)
+                .entity("e-owner", "Person", "PERSON_77", Sensitivity.INTERNAL).link(0, "e-owner").build());
+
+        DeleteReceipt receipt = erase(store, SCOPE, new DeleteRequest.ByPerson("req-k", "erasure:person", "e-owner",
+                DeleteRequest.PassagePolicy.NONE));
+
+        assertThat(receipt.counts()).containsKeys("ERASE.ENTITY", "ERASE.LINK").doesNotContainKey("ERASE.PASSAGE");
+        assertThat(retrieve(store, SCOPE, "migration", Sensitivity.INTERNAL)).singleElement()
+                .satisfies(i -> assertThat(i.entities()).isEmpty());
+    }
+
+    @Test
+    protected void ca12_a_redelivered_write_after_an_erasure_does_not_bring_the_data_back() throws Exception {
+        KnowledgeStore store = newStore(false);
+        B doc = new B(SCOPE, "meeting:p4").passage("Quarterly numbers for the board.", Sensitivity.INTERNAL)
+                .entity("e-board", "Term", "Board", Sensitivity.INTERNAL).entity("e-who", "Person", "PERSON_5", Sensitivity.INTERNAL)
+                .relation("mentions", "e-who", "e-board", Sensitivity.INTERNAL).link(0, "e-board").link(0, "e-who");
+        write(store, SCOPE, doc.build());
+        erase(store, SCOPE, new DeleteRequest.ByDocument("req-1", "erasure:document", "meeting:p4"));
+
+        WriteReceipt again = write(store, SCOPE, doc.build());
+
+        assertThat(again.status()).isEqualTo(Status.REJECTED_ERASED);
+        assertThat(retrieve(store, SCOPE, "numbers board", Sensitivity.RESTRICTED)).isEmpty();
+
+        // a person erased: another document that names her is written without her
+        write(store, SCOPE, new B(SCOPE, "meeting:p5").passage("Kickoff.", Sensitivity.INTERNAL)
+                .entity("e-who", "Person", "PERSON_5", Sensitivity.INTERNAL).link(0, "e-who").build());
+        erase(store, SCOPE, new DeleteRequest.ByPerson("req-2", "erasure:person", "e-who", DeleteRequest.PassagePolicy.NONE));
+        WriteReceipt later = write(store, SCOPE, new B(SCOPE, "meeting:p6").passage("Retro.", Sensitivity.INTERNAL)
+                .entity("e-who", "Person", "PERSON_5", Sensitivity.INTERNAL).entity("e-x", "Term", "Retro", Sensitivity.INTERNAL)
+                .link(0, "e-who").link(0, "e-x").build());
+        assertThat(later.status()).isEqualTo(Status.APPLIED);
+        assertThat(later.dropped()).isEqualTo(2);   // the entity and the link
+        assertThat(store.entities(SCOPE, new EntityQuery("Person", EntityIds.normalize("PERSON_5"), Sensitivity.RESTRICTED, 5))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS)).isEmpty();
+    }
+
+    // --- CA13: language ---------------------------------------------------------------------------------------------
+
+    @Test
+    protected void ca13_a_language_the_embedder_does_not_support_is_refused_and_english_is_kept_as_written() throws Exception {
+        KnowledgeStore store = newStore(false);
+        String text = "Façade review: the café menu is final.";
+        KnowledgeBatch portuguese = new KnowledgeBatch("b-pt", "meeting:pt", "h", null, null, SCHEMA,
+                List.of(new Passage(PassageIds.of(SCOPE, "meeting:pt", 0, "A reunião foi adiada."), 0,
+                        "A reunião foi adiada.", "pt-BR", Sensitivity.INTERNAL)), List.of(), List.of(), List.of());
+        assertThatThrownBy(() -> write(store, SCOPE, portuguese)).hasCauseInstanceOf(KnowledgeValidationException.class)
+                .hasMessageContaining("language");
+
+        write(store, SCOPE, new B(SCOPE, "meeting:en").passage(text, Sensitivity.INTERNAL).build());
+
+        assertThat(retrieve(store, SCOPE, "review menu final", Sensitivity.INTERNAL)).singleElement()
+                .satisfies(i -> assertThat(i.content()).isEqualTo(text));
+    }
+
+    // --- the batch itself -------------------------------------------------------------------------------------------
+
+    @Test
+    protected void a_malformed_batch_is_refused_whole_and_changes_nothing() throws Exception {
+        KnowledgeStore store = newStore(false);
+        B wrongId = new B(SCOPE, "meeting:bad");
+        wrongId.passages.add(new Passage("p-not-the-derived-id", 0, "Text.", "en", Sensitivity.INTERNAL));
+        B danglingLink = new B(SCOPE, "meeting:bad").passage("Text.", Sensitivity.INTERNAL).link(0, "e-nowhere");
+        B belowEnds = new B(SCOPE, "meeting:bad").entity("e-a", "Term", "A", Sensitivity.CONFIDENTIAL)
+                .entity("e-b", "Term", "B", Sensitivity.INTERNAL).relation("mentions", "e-a", "e-b", Sensitivity.INTERNAL);
+        B repeated = new B(SCOPE, "meeting:bad").entity("e-a", "Term", "A", Sensitivity.INTERNAL)
+                .entity("e-a", "Term", "A again", Sensitivity.INTERNAL);
+
+        for (B bad : List.of(wrongId, danglingLink, belowEnds, repeated)) {
+            assertThatThrownBy(() -> write(store, SCOPE, bad.build())).hasCauseInstanceOf(KnowledgeValidationException.class);
+        }
+        assertThat(log(store, SCOPE)).isEmpty();
+        assertThat(retrieve(store, SCOPE, "text", Sensitivity.RESTRICTED)).isEmpty();
+    }
+
+    @Test
+    protected void a_level_is_never_lowered_by_a_later_write() throws Exception {
+        KnowledgeStore store = newStore(true);
+        write(store, SCOPE, new B(SCOPE, "meeting:l1").entity("e-x", "Term", "Thing", Sensitivity.CONFIDENTIAL).build());
+        write(store, SCOPE, new B(SCOPE, "meeting:l2").entity("e-x", "Term", "Thing", Sensitivity.INTERNAL).build());
+
+        assertThat(store.entities(SCOPE, new EntityQuery(null, EntityIds.normalize("Thing"), Sensitivity.INTERNAL, 5))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS)).isEmpty();
+        assertThat(store.entities(SCOPE, new EntityQuery(null, EntityIds.normalize("Thing"), Sensitivity.CONFIDENTIAL, 5))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS)).hasSize(1);
+    }
+
+    @Test
+    protected void entities_are_found_by_label_or_alias_after_normalizing() throws Exception {
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, new B(SCOPE, "meeting:e1").entity("e-sla", "Term", "SLA", Sensitivity.INTERNAL).build());
+        KnowledgeBatch withAlias = new KnowledgeBatch("b-alias", "meeting:e2", "h2", null, null, SCHEMA, List.of(),
+                List.of(new Entity("e-svc", "System", "Checkout Service", Map.of("aliases", "checkout|the checkout svc"),
+                        Sensitivity.INTERNAL)), List.of(), List.of());
+        write(store, SCOPE, withAlias);
+
+        assertThat(store.entities(SCOPE, new EntityQuery("Term", EntityIds.normalize(" SLA. "), Sensitivity.INTERNAL, 5))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS)).extracting(EntityMatch::entityId).containsExactly("e-sla");
+        assertThat(store.entities(SCOPE, new EntityQuery(null, EntityIds.normalize("The Checkout SVC"), Sensitivity.INTERNAL, 5))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS)).singleElement()
+                .satisfies(m -> assertThat(m.aliases()).containsExactly("checkout", "the checkout svc"));
+        assertThat(store.entities(SCOPE, new EntityQuery("Term", EntityIds.normalize("checkout service"), Sensitivity.INTERNAL, 5))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS)).isEmpty();   // wrong type
+    }
+
+    @Test
+    protected void identities_are_a_function_of_where_and_what() {
+        assertThat(PassageIds.of(SCOPE, "d", 0, "text")).isEqualTo(PassageIds.of(SCOPE, "d", 0, "text"))
+                .isNotEqualTo(PassageIds.of(SCOPE, "d", 1, "text")).isNotEqualTo(PassageIds.of(SCOPE, "d", 0, "other"))
+                .isNotEqualTo(PassageIds.of(SCOPE, "e", 0, "text"));
+        assertThat(EntityIds.of("System", "Checkout  Service!")).isEqualTo(EntityIds.of("System", "checkout service"))
+                .isNotEqualTo(EntityIds.of("Term", "checkout service"));
+        assertThat(EntityIds.normalize("  Café-Menu, 2nd  ")).isEqualTo("cafe menu 2nd");
+    }
+}

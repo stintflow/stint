@@ -35,6 +35,7 @@ class ArchitectureTest {
                 "io.stintflow.dsl", "io.stintflow.worker", "io.stintflow.worker.langchain4j",
                 "io.stintflow.worker.langchain4j.memory", "io.stintflow.aws.conversations",
                 "io.stintflow.worker.decision", "io.stintflow.worker.decision.jev", "io.stintflow.aws.worker",
+                "io.stintflow.knowledge", "io.stintflow.knowledge.inmemory",
                 "io.stintflow.worker.redaction", "io.stintflow.worker.transcription",
                 "io.stintflow.worker.publishing"}) {
             assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))
@@ -148,6 +149,32 @@ class ArchitectureTest {
             .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
                     "io.stintflow.dsl..", "io.stintflow.worker")
             .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.worker.redaction..");
+
+    /**
+     * SDD 3b.1, 4.1: the knowledge port lives outside the SPI and depends on it alone — no engine, no wire, no DSL, no worker, no
+     * cloud SDK, no AI library, no OpenTelemetry. The engine side and the plain worker SDK do not depend on it either: the
+     * engine never calls the base; workers do.
+     */
+    @ArchTest
+    static final ArchRule knowledge_depends_on_the_spi_alone = noClasses()
+            .that().resideInAnyPackage("io.stintflow.knowledge..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "io.stintflow.core..", "io.stintflow.wire..", "io.stintflow.dsl..", "io.stintflow.worker..",
+                    "io.stintflow.aws..", "io.stintflow.inmemory..", "software.amazon..", "com.amazonaws..",
+                    "com.azure..", "com.google.cloud..", "io.fabric8..", "dev.langchain4j..",
+                    "io.quarkiverse.langchain4j..", "io.opentelemetry..");
+
+    @ArchTest
+    static final ArchRule engine_side_and_worker_sdk_do_not_depend_on_knowledge = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.dsl..", "io.stintflow.worker")
+            .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge..");
+
+    /** SDD 3b.1, 4.1: the port and its types do not know the adapters; backends plug in beside them. */
+    @ArchTest
+    static final ArchRule the_knowledge_port_does_not_depend_on_its_in_memory_adapters = noClasses()
+            .that().resideInAPackage("io.stintflow.knowledge")
+            .should().dependOnClassesThat().resideInAPackage("io.stintflow.knowledge.inmemory..");
 
     /**
      * SDD 1.5, RF1/RF2: reactivated once {@code Json}, {@code CeWire}, {@code DefaultCloudEventCodec}
