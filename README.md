@@ -449,6 +449,17 @@ registry.register("summarize-meeting", ai.handler(MeetingAssistant.class,
   `maxExtension` (1 h), and `close()` waits `shutdownGrace` (30 s) then hands the unfinished back unacknowledged.
   Logs carry ids only; `SqsWorkerMetrics` counts. Give invoke queues a `maxReceiveCount` of 3 or more. Measured over
   floci with 50 tasks (10 slow): p95 22.7 s with concurrency 1, 2.7 s with 8.
+- **Reply address and routing** (SDD 3a.9): a worker shared by several engines answers each one in its own result
+  queue. The engine's transport announces a *logical name* on every invoke (`stint.aws.sqs.reply-to`, or
+  `RoutingSqsTaskTransport.builder().replyTo("business-results")`: the CloudEvents extension `stintreplyto`,
+  `[A-Za-z0-9_.-]{1,80}`, never a URL or an ARN). The worker's `replyDestinations(Map.of("business-results", queueUrl))`
+  is the authorization: only listed names are answered, and an invoke naming anything else is **not run and not
+  acknowledged** (it goes to the queue's dead-letter queue; `SqsWorkerMetrics.replyRefused()` counts it). Without the
+  list, or with `shipResult`, the extension is ignored, so nothing changes for a 3a.7 worker. `RoutingSqsTaskTransport`
+  (module `connectors/stint-aws`) picks the invoke queue by the task's routing key (`.route("redact", url)`, exact
+  match, optional `.defaultInvokeQueueUrl(..)`); an unrouted key fails the dispatch with `UnroutableTaskException`, and
+  `unroutable(keys)` checks a workflow's keys at startup. A new engine announcing a reply name must not be pointed at
+  an old shared worker, which ignores the extension and answers its fixed queue.
 
 ## The Phase 3a milestone: a meeting, end to end (SDD 3a.6)
 

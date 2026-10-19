@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.time.InstantSource;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -61,6 +62,9 @@ public final class SqsWorkerBinding implements AutoCloseable {
     private final SqsClient sqs;
     private final String invokeQueueUrl;
     private final Function<CloudEvent, CompletionStage<Void>> ship;
+    /** SDD 3a.9: logical reply name to queue URL; empty when the extension is ignored. Null {@code ship} when no default. */
+    private final Map<String, String> replyDestinations;
+    private final boolean customShip;
     private final WorkerPool pool;
     private final boolean ownsPool;
     private final Duration waitTime;
@@ -84,19 +88,16 @@ public final class SqsWorkerBinding implements AutoCloseable {
     private SqsWorkerBinding(Builder b) {
         this.sqs = Objects.requireNonNull(b.sqs, "sqs is required");
         this.invokeQueueUrl = Objects.requireNonNull(b.invokeQueueUrl, "invokeQueueUrl is required");
+        this.customShip = b.ship != null;
+        this.replyDestinations = b.ship != null ? Map.of() : Map.copyOf(b.replyDestinations);
         if (b.ship != null) {
             this.ship = b.ship;
+        } else if (b.resultQueueUrl != null) {
+            this.ship = sendTo(b.resultQueueUrl);
+        } else if (!replyDestinations.isEmpty()) {
+            this.ship = null;   // no default: an invoke without a reply name is refused
         } else {
-            String resultQueueUrl = Objects.requireNonNull(b.resultQueueUrl, "resultQueueUrl or shipResult is required");
-            this.ship = result -> {
-                try {
-                    sqs.sendMessage(r -> r.queueUrl(resultQueueUrl)
-                            .messageBody(new String(CeWire.toJson(result), StandardCharsets.UTF_8)));
-                    return CompletableFuture.completedFuture(null);
-                } catch (RuntimeException e) {
-                    return CompletableFuture.failedFuture(e);
-                }
-            };
+            throw new NullPointerException("resultQueueUrl, replyDestinations or shipResult is required");
         }
         if (b.pool != null) {
             this.pool = b.pool;
@@ -224,6 +225,10 @@ public final class SqsWorkerBinding implements AutoCloseable {
             return;
         }
         Ids ids = Ids.of(message, invoke);
+        Function<CloudEvent, CompletionStage<Void>> ship = shipFor(invoke, ids);
+        if (ship == null) {
+            return;   // refused (SDD 3a.9): not run, not acknowledged
+        }
         if (ids.receiveCount() > 1) {
             LOG.info("{} is received again (receive count {})", ids, ids.receiveCount());
         }
@@ -255,6 +260,54 @@ public final class SqsWorkerBinding implements AutoCloseable {
                 LOG.debug("{} was acknowledged", ids);
             }
         });
+    }
+
+    /** Ships each result as a CloudEvent JSON message to {@code queueUrl}. */
+    private Function<CloudEvent, CompletionStage<Void>> sendTo(String queueUrl) {
+        return result -> {
+            try {
+                sqs.sendMessage(r -> r.queueUrl(queueUrl)
+                        .messageBody(new String(CeWire.toJson(result), StandardCharsets.UTF_8)));
+                return CompletableFuture.completedFuture(null);
+            } catch (RuntimeException e) {
+                return CompletableFuture.failedFuture(e);
+            }
+        };
+    }
+
+    /**
+     * Where this invoke's result goes (SDD 3a.9). With a configured list, the invoke's {@code stintreplyto} is a key of
+     * that list and nothing else: a name that is invalid or not listed gets the task <em>not run</em> and the message
+     * <em>not acknowledged</em> (it returns through the queue's redrive to its dead-letter queue); the result must not
+     * go to the wrong engine. Without a list, or with a custom {@code shipResult}, the extension is ignored.
+     *
+     * @return the shipper, or {@code null} when the invoke is refused
+     */
+    private Function<CloudEvent, CompletionStage<Void>> shipFor(CloudEvent invoke, Ids ids) {
+        if (customShip || replyDestinations.isEmpty()) {
+            return ship;
+        }
+        Object value = invoke.getExtension(StintEvents.EXT_REPLY_TO);
+        if (value == null) {
+            if (ship != null) {
+                return ship;
+            }
+            refuse(ids, "it has no reply name and no default destination is configured", null);
+            return null;
+        }
+        String name = value.toString();
+        String url = StintEvents.REPLY_TO_NAME.matcher(name).matches() ? replyDestinations.get(name) : null;
+        if (url == null) {
+            refuse(ids, "its reply name is invalid or not in the configured list", name);
+            return null;
+        }
+        return sendTo(url);
+    }
+
+    private void refuse(Ids ids, String why, String name) {
+        metrics.replyRefused();
+        LOG.warn("{} is not run and not acknowledged: {}{}", ids, why,
+                name == null ? "" : " (name: " + (name.length() > 80 ? name.substring(0, 80) : name) + ")");
     }
 
     private void acknowledge(Lease lease) {
@@ -484,6 +537,7 @@ public final class SqsWorkerBinding implements AutoCloseable {
         private String invokeQueueUrl;
         private String resultQueueUrl;
         private Function<CloudEvent, CompletionStage<Void>> ship;
+        private Map<String, String> replyDestinations = Map.of();
         private WorkerRuntime runtime;
         private WorkerPool pool;
         private int concurrency = 4;
@@ -513,6 +567,24 @@ public final class SqsWorkerBinding implements AutoCloseable {
         /** Where results go, as a CloudEvent JSON message. Or {@link #shipResult}. */
         public Builder resultQueueUrl(String url) {
             this.resultQueueUrl = url;
+            return this;
+        }
+
+        /**
+         * SDD 3a.9: the destinations an invoke's {@code stintreplyto} may name, logical name to result queue URL. The
+         * list is the authorization: an invoke naming anything else is not run and not acknowledged. Without it the
+         * extension is ignored; with {@link #shipResult} it is ignored too. {@link #resultQueueUrl} stays the default
+         * for an invoke without the extension.
+         */
+        public Builder replyDestinations(Map<String, String> nameToQueueUrl) {
+            Objects.requireNonNull(nameToQueueUrl, "nameToQueueUrl");
+            nameToQueueUrl.forEach((name, url) -> {
+                if (!StintEvents.REPLY_TO_NAME.matcher(name).matches()) {
+                    throw new IllegalArgumentException("A reply name is [A-Za-z0-9_.-]{1,80}, got " + name);
+                }
+                Objects.requireNonNull(url, "url of " + name);
+            });
+            this.replyDestinations = Map.copyOf(nameToQueueUrl);
             return this;
         }
 

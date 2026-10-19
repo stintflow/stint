@@ -42,6 +42,8 @@ public final class FakeSqs implements SqsClient {
     public final List<VisibilityChange> visibilityChanges = new CopyOnWriteArrayList<>();
     public final List<String> deleted = new CopyOnWriteArrayList<>();
     public final List<String> sent = new CopyOnWriteArrayList<>();
+    /** The queue URL of each entry of {@link #sent}, in the same order. */
+    public final List<String> sentTo = new CopyOnWriteArrayList<>();
     /** Thrown by the next receive, if set; then cleared. */
     public volatile RuntimeException failNextReceive;
     /** Thrown by every visibility change while set. */
@@ -109,6 +111,7 @@ public final class FakeSqs implements SqsClient {
         if (failure != null) {
             throw failure;
         }
+        sentTo.add(request.queueUrl());
         sent.add(request.messageBody());
         return SendMessageResponse.builder().messageId("r-" + sent.size()).build();
     }

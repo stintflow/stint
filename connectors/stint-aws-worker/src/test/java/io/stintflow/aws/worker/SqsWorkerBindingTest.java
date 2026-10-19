@@ -304,6 +304,123 @@ class SqsWorkerBindingTest {
         binding = null;
     }
 
+
+    // --- SDD 3a.9: the reply address ------------------------------------------------------------------------
+
+    /** An invoke whose {@code stintreplyto} is {@code replyTo}, written straight onto the wire. */
+    private String offerReplying(String correlationId, String routingKey, String replyTo) {
+        TaskInvocation inv = new TaskInvocation("i-1", "/do/0/" + routingKey, correlationId,
+                new WorkflowRef("test", "sqs", "1.0.0"), routingKey, Json.obj().put("text", SECRET), 1, Lineage.NONE,
+                null);
+        io.cloudevents.CloudEvent event = io.cloudevents.core.builder.CloudEventBuilder.from(codec.toEvent(inv))
+                .withExtension(io.stintflow.spi.wire.StintEvents.EXT_REPLY_TO, replyTo).build();
+        return sqs.offer(new String(CeWire.toJson(event), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void a_listed_reply_name_gets_its_own_queue_and_the_default_is_kept_for_an_invoke_without_one() throws Exception {
+        start(binding(2).replyDestinations(Map.of("business-results", "q-business", "delivery-results", "q-delivery")));
+        String a = offerReplying("c-1", "fast", "business-results");
+        String b = offerReplying("c-2", "fast", "delivery-results");
+        String c = offer("c-3", "fast", null);
+        awaitCondition(() -> sqs.deleted.containsAll(List.of(a, b, c)), "all three are deleted");
+
+        assertThat(sqs.sentTo).containsExactlyInAnyOrder("q-business", "q-delivery", "result");
+        for (int i = 0; i < sqs.sent.size(); i++) {
+            String body = sqs.sent.get(i);
+            String expected = body.contains("c-1") ? "q-business" : body.contains("c-2") ? "q-delivery" : "result";
+            assertThat(sqs.sentTo.get(i)).isEqualTo(expected);
+        }
+        assertThat(metrics.replyRefused).hasValue(0);
+    }
+
+    @Test
+    void a_name_outside_the_list_or_the_format_is_not_run_not_acknowledged_and_counted() throws Exception {
+        AtomicInteger runs = new AtomicInteger();
+        handlers.register("count", ctx -> {
+            runs.incrementAndGet();
+            return CompletableFuture.completedFuture(Json.obj());
+        });
+        try (Logs logs = new Logs()) {
+            start(binding(1).replyDestinations(Map.of("business-results", "q-business")));
+            String unknown = offerReplying("c-1", "count", "other-results");
+            String malformed = offerReplying("c-2", "count", "has space/and;chars");
+            String longName = offerReplying("c-3", "count", "x".repeat(200));
+            awaitCondition(() -> metrics.replyRefused.get() == 3, "the three refusals are counted");
+
+            assertThat(runs).hasValue(0);
+            assertThat(sqs.deleted).doesNotContain(unknown, malformed, longName);
+            assertThat(sqs.sent).isEmpty();
+            assertThat(metrics.acknowledged).hasValue(0);
+            assertThat(String.join("\n", logs.lines)).doesNotContain(SECRET).doesNotContain("x".repeat(81));
+        }
+    }
+
+    @Test
+    void a_reply_name_that_looks_like_an_address_is_never_used_as_one() throws Exception {
+        start(binding(1).replyDestinations(Map.of("business-results", "q-business")));
+        String url = offerReplying("c-1", "fast", "https://sqs.elsewhere.example/123456789012/other-queue");
+        String arn = offerReplying("c-2", "fast", "arn:aws:sqs:us-east-1:123456789012:other-queue");
+        awaitCondition(() -> metrics.replyRefused.get() == 2, "both are refused");
+
+        assertThat(sqs.sentTo).isEmpty();
+        assertThat(sqs.deleted).doesNotContain(url, arn);
+    }
+
+    @Test
+    void without_a_list_or_with_a_custom_shipper_the_extension_is_ignored() throws Exception {
+        start(binding(1));
+        String plain = offerReplying("c-1", "fast", "anything-at-all");
+        awaitCondition(() -> sqs.deleted.contains(plain), "the invoke is answered on the default queue");
+        assertThat(sqs.sentTo).containsExactly("result");
+        assertThat(metrics.replyRefused).hasValue(0);
+        binding.close();
+
+        FakeSqs other = new FakeSqs();
+        List<String> shipped = new CopyOnWriteArrayList<>();
+        SqsWorkerBinding custom = SqsWorkerBinding.builder().sqs(other).invokeQueueUrl("invoke")
+                .shipResult(result -> {
+                    shipped.add(result.getId());
+                    return CompletableFuture.completedFuture(null);
+                })
+                .replyDestinations(Map.of("business-results", "q-business"))
+                .runtime(new WorkerRuntime(handlers, null)).concurrency(1).waitTime(Duration.ZERO)
+                .visibilityTimeout(Duration.ofSeconds(30)).extendEvery(Duration.ofSeconds(10))
+                .clock(scheduler.clock()).scheduler(scheduler).metrics(metrics).build().start();
+        try {
+            TaskInvocation inv = new TaskInvocation("i-1", "/do/0/fast", "c-9", new WorkflowRef("test", "sqs", "1.0.0"),
+                    "fast", Json.obj(), 1, Lineage.NONE, null);
+            String receipt = other.offer(new String(CeWire.toJson(io.cloudevents.core.builder.CloudEventBuilder
+                    .from(codec.toEvent(inv)).withExtension(io.stintflow.spi.wire.StintEvents.EXT_REPLY_TO, "unlisted")
+                    .build()), StandardCharsets.UTF_8));
+            awaitCondition(() -> other.deleted.contains(receipt), "the custom shipper answers");
+            assertThat(shipped).hasSize(1);
+            assertThat(other.sentTo).isEmpty();
+        } finally {
+            CompletableFuture.runAsync(custom::close);
+            scheduler.advance(Duration.ofMinutes(5));
+        }
+    }
+
+    @Test
+    void a_list_without_a_default_refuses_an_invoke_that_has_no_reply_name() throws Exception {
+        start(SqsWorkerBinding.builder().sqs(sqs).invokeQueueUrl("invoke")
+                .replyDestinations(Map.of("business-results", "q-business"))
+                .runtime(new WorkerRuntime(handlers, null)).concurrency(1).waitTime(Duration.ZERO)
+                .visibilityTimeout(Duration.ofSeconds(30)).extendEvery(Duration.ofSeconds(10))
+                .clock(scheduler.clock()).scheduler(scheduler).metrics(metrics));
+        String bare = offer("c-1", "fast", null);
+        awaitCondition(() -> metrics.replyRefused.get() == 1, "the bare invoke is refused");
+        assertThat(sqs.deleted).doesNotContain(bare);
+        assertThat(sqs.sent).isEmpty();
+    }
+
+    @Test
+    void a_reply_list_with_a_malformed_name_is_refused_at_build_time() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> SqsWorkerBinding.builder()
+                .replyDestinations(Map.of("bad name", "q"))).isInstanceOf(IllegalArgumentException.class);
+    }
+
     /** Counts what the binding reports. */
     static final class Counting implements SqsWorkerMetrics {
         final AtomicInteger acknowledged = new AtomicInteger();
@@ -313,6 +430,7 @@ class SqsWorkerBindingTest {
         final AtomicInteger receiveFailed = new AtomicInteger();
         final AtomicInteger unreadable = new AtomicInteger();
         final AtomicInteger released = new AtomicInteger();
+        final AtomicInteger replyRefused = new AtomicInteger();
 
         @Override
         public void acknowledged() {
@@ -342,6 +460,11 @@ class SqsWorkerBindingTest {
         @Override
         public void unreadable() {
             unreadable.incrementAndGet();
+        }
+
+        @Override
+        public void replyRefused() {
+            replyRefused.incrementAndGet();
         }
 
         @Override

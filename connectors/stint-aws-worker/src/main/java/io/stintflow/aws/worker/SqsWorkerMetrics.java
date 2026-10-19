@@ -39,6 +39,10 @@ public interface SqsWorkerMetrics {
     default void unreadable() {
     }
 
+    /** SDD 3a.9: an invoke whose reply name is invalid or not in the configured list: not run, not acknowledged. */
+    default void replyRefused() {
+    }
+
     /** A message handed back to the queue (visibility 0) unacknowledged, when the binding stopped. */
     default void released() {
     }

@@ -62,6 +62,14 @@ public final class StintEvents {
      * ({@code completed}).
      */
     public static final String EXT_ROLE = "stintrole";
+    /**
+     * SDD 3a.9: on a task invoke, the <em>logical name</em> of the destination the worker answers to
+     * ({@code [A-Za-z0-9_.-]{1,80}}), written by the engine's transport. Never an address: a worker resolves it only
+     * through its own configured list.
+     */
+    public static final String EXT_REPLY_TO = "stintreplyto";
+    /** SDD 3a.9: the format of a {@link #EXT_REPLY_TO} name. */
+    public static final java.util.regex.Pattern REPLY_TO_NAME = java.util.regex.Pattern.compile("[A-Za-z0-9_.-]{1,80}");
 
     /** SDD 3a.4: the prefix of the review events; only a review step may emit them, never an author's {@code emit}. */
     public static final String REVIEW_TYPE_PREFIX = "io.stintflow.review.";

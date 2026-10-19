@@ -2,6 +2,7 @@ package io.stintflow.aws;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -33,7 +34,17 @@ public class SqsTaskTransport extends AbstractSqsResultTransport {
     @ConfigProperty(name = "stint.aws.sqs.result-queue-url")
     String resultQueueUrl;
 
+    /** SDD 3a.9: the logical name announced as {@code stintreplyto}; absent, the invoke carries no reply name. */
+    @ConfigProperty(name = "stint.aws.sqs.reply-to")
+    Optional<String> replyTo = Optional.empty();
+
     public SqsTaskTransport() {
+    }
+
+    /** Test/manual wiring outside CDI, announcing {@code replyTo} (a logical name) on every invoke. */
+    public SqsTaskTransport(SqsClient sqs, String invokeQueueUrl, String resultQueueUrl, String replyTo) {
+        this(sqs, invokeQueueUrl, resultQueueUrl);
+        this.replyTo = Optional.ofNullable(checkedReplyTo(replyTo));
     }
 
     /** Test/manual wiring outside CDI. */
@@ -46,7 +57,8 @@ public class SqsTaskTransport extends AbstractSqsResultTransport {
     @Override
     public CompletionStage<Void> dispatch(TaskInvocation invocation) {
         return CompletableFuture.runAsync(() -> {
-            String body = new String(CeWire.toJson(codec.toEvent(invocation)), StandardCharsets.UTF_8);
+            String body = new String(CeWire.toJson(withReplyTo(codec.toEvent(invocation),
+                    checkedReplyTo(replyTo.orElse(null)))), StandardCharsets.UTF_8);
             sqs.sendMessage(SendMessageRequest.builder()
                     .queueUrl(invokeQueueUrl)
                     .messageBody(body)
