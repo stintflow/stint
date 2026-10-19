@@ -55,6 +55,7 @@ public final class JqExpressionEvaluator implements ExpressionEvaluator {
         if (scope.workflow() != null) {
             callScope.setValue("workflow", workflowNode(scope.workflow()));
         }
+        scope.variables().forEach(callScope::setValue);   // SDD 3a.8: a for's each and at
 
         List<JsonNode> results = new ArrayList<>(1);
         try {

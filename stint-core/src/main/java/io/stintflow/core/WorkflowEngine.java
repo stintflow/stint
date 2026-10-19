@@ -17,6 +17,8 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.net.URI;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -39,6 +41,7 @@ import io.stintflow.core.interpreter.Emitted;
 import io.stintflow.core.interpreter.InterpretResult;
 import io.stintflow.core.interpreter.TreeInterpreter;
 import io.stintflow.core.model.CallRemoteNode;
+import io.stintflow.core.model.ForRunNode;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.OutputContract;
 import io.stintflow.core.model.RetryPolicy;
@@ -197,7 +200,9 @@ public final class WorkflowEngine {
         this.clock = clock;
         this.publisher = publisher;
         this.factBlob = factBlob;
-        this.relay = publisher == null ? null : new OutboxRelay(this.state, publisher, clock);
+        // SDD 3a.8: the relay also hands the engine its own entries (a fan-out), so there is one even without a publisher
+        this.relay = new OutboxRelay(this.state, publisher, clock, OutboxRelay.DEFAULT_GRACE, OutboxRelay.DEFAULT_BATCH,
+                this::onInternal);
         this.tracer = tracer;
         this.transport.onResult(this::onResult);
         this.timer.onFire(this::onTimerFire);
@@ -512,10 +517,18 @@ public final class WorkflowEngine {
             InstanceSnapshot aborted = new InstanceSnapshot(instanceId, snap.definition(), snap.position(), null,
                     snap.context(), InstanceStatus.ABORTED, snap.version() + 1, null, clock.instant(), snap.input(),
                     snap.startedAt(), snap.chainId(), snap.suspendedAt(), ListenState.carried(snap.listenState()),
-                    snap.decisions(), snap.sensitivity());
-            return state.save(aborted, snap.version(), List.of(), waits).thenCompose(outcome -> {
+                    snap.decisions(), snap.sensitivity(), snap.composition());
+            // SDD 3a.8: the children still running are cancelled by entries recorded in this same save, and the end of
+            // this instance is told to its own parent (if it is a child) — all durable before anything is acted on
+            Instance cancelled = new Instance(instanceId, snap.input(), snap.startedAt(), snap.chainId(),
+                    new Lineage(snap.chainId(), null, null, null), null, List.of(), snap.decisions(),
+                    snap.sensitivity(), snap.composition());
+            List<OutboxEntry> entries = new ArrayList<>(childCancelEntries(cancelled, snap.composition(), 0));
+            finishedEntry(instanceId, snap.composition(), snap.sensitivity(), InstanceStatus.ABORTED, snap.context(),
+                    snap.position(), snap.chainId()).ifPresent(entries::add);
+            return state.save(aborted, snap.version(), List.of(), waits, entries, List.of()).thenCompose(outcome -> {
                 if (outcome == SaveOutcome.OK) {
-                    return cancelTimers(waits).thenApply(v -> {
+                    return relay.publishNow(entries).thenCompose(v -> cancelTimers(waits)).thenApply(v -> {
                         auditCancel(snap, "cancelled", Map.of("reason", reason, "origin", origin));
                         return CancelOutcome.CANCELLED;
                     });
@@ -539,6 +552,9 @@ public final class WorkflowEngine {
      */
     static List<String> waitsOf(InstanceSnapshot snap) {
         List<String> keys = new ArrayList<>();
+        if (FanOut.forOf(snap.composition()) != null) {
+            return FanOut.runningWaits(snap.composition());   // SDD 3a.8: waiting for children, one wait each
+        }
         ObjectNode active = ListenState.active(snap.listenState());
         if (active != null) {
             keys.addAll(ListenState.strings(active.get("pending")));
@@ -604,6 +620,323 @@ public final class WorkflowEngine {
         }
     }
 
+    // --- fan-out: a for over run: workflow (SDD 3a.8) -----------------------------------------------
+
+    /** SDD 3a.8, 5.1: the engine's ceiling on the items of a {@code for} (a definition may ask for fewer). */
+    public static final int DEFAULT_FOR_CEILING = 200;
+    private static final URI INTERNAL_SOURCE = URI.create("urn:stint:engine");
+    /** SDD 3a.8, 5.2: a child's end is retried this often on a lost race before it is left to the outbox sweep. */
+    private static final int MAX_CHILD_FINISHED_ATTEMPTS = 40;
+    private volatile int forCeiling = DEFAULT_FOR_CEILING;
+
+    /** SDD 3a.8: sets the most items a {@code for} accepts, whatever its own {@code x-stint-max-iterations}. */
+    public WorkflowEngine forMaxIterations(int ceiling) {
+        if (ceiling < 1) {
+            throw new IllegalArgumentException("The ceiling of a for must be at least 1: " + ceiling);
+        }
+        this.forCeiling = ceiling;
+        return this;
+    }
+
+    /** A lost race on the parent that retrying in place did not win: the end of the child stays in the outbox. */
+    private static final class FanOutContention extends RuntimeException {
+        FanOutContention(String message) {
+            super(message, null, false, false);
+        }
+    }
+
+    private CompletionStage<SaveOutcome> commitFor(Instance inst, WorkflowDefinition def,
+            InterpretResult.SuspendOnFor s, long expectedVersion, List<String> consumeWaitKeys,
+            List<OutboxEntry> outbox) {
+        ForRunNode node = s.node();
+        String problem = forProblem(inst, node, s.items());
+        if (problem != null) {
+            return commitTerminal(inst, def.ref(), s.pointer(), s.context(), InstanceStatus.FAILED, expectedVersion,
+                    consumeWaitKeys, () -> completeExceptionally(inst.id(), new RuntimeException(problem)), outbox);
+        }
+        WorkflowDescriptor wf = inst.descriptor(def.ref());
+        List<JsonNode> inputs = new ArrayList<>();
+        try {
+            for (int i = 0; i < s.items().size(); i++) {
+                inputs.add(interpreter.forChildInput(node, s.items().get(i), i, s.input(), s.context(), wf));
+            }
+        } catch (RuntimeException e) {
+            String message = "for at " + node.pointer() + ": the input of a child could not be built ("
+                    + e.getClass().getSimpleName() + ")";
+            return commitTerminal(inst, def.ref(), s.pointer(), s.context(), InstanceStatus.FAILED, expectedVersion,
+                    consumeWaitKeys, () -> completeExceptionally(inst.id(), new RuntimeException(message)), outbox);
+        }
+        ObjectNode forState = FanOut.initial(node, inst.id(), inputs);
+        return applyForStep(inst, def, node, s.pointer(), s.context(), forState, FanOut.open(forState),
+                expectedVersion, consumeWaitKeys, outbox);
+    }
+
+    /** Why a {@code for} cannot start, or {@code null}. Nothing is started when it does not. */
+    private String forProblem(Instance inst, ForRunNode node, JsonNode items) {
+        String where = "for at " + node.pointer() + ": ";
+        if (inst.sensitivity() == Sensitivity.RESTRICTED) {
+            return where + "not supported in a restricted instance: the outputs of its children would rest in the "
+                    + "parent's item (SDD 3a.8)";
+        }
+        if (items == null || !items.isArray()) {
+            return where + "'in' did not evaluate to an array";
+        }
+        int limit = Math.min(node.maxIterations(), forCeiling);
+        if (items.size() > limit) {
+            return where + "validation (400): " + items.size() + " items exceed the limit of " + limit
+                    + "; no child was started";
+        }
+        if (registry.find(node.run().ref()).isEmpty()) {
+            return where + "unknown workflow " + node.run().ref().canonical();
+        }
+        return null;
+    }
+
+    /**
+     * Saves what a {@code for} decided: the children to start (their start entries and waits), the ones to cancel (their
+     * waits consumed, their cancel entries recorded), and — if it is over — its output carried on through the rest of
+     * the workflow, or its failure. All in the one versioned save.
+     */
+    private CompletionStage<SaveOutcome> applyForStep(Instance inst, WorkflowDefinition def, ForRunNode node,
+            String pointer, JsonNode context, ObjectNode forState, FanOut.Step step, long expectedVersion,
+            List<String> consumeWaitKeys, List<OutboxEntry> outbox) {
+        List<String> consume = new ArrayList<>(consumeWaitKeys);
+        List<OutboxEntry> entries = new ArrayList<>(outbox);
+        for (String childId : step.cancel()) {
+            consume.add(FanOut.childWait(childId));
+            entries.add(childCancelEntry(inst, childId, entries.size()));
+        }
+        switch (step.action()) {
+            case FAIL -> {
+                return commitTerminal(inst, def.ref(), pointer, context, InstanceStatus.FAILED, expectedVersion,
+                        consume, () -> completeExceptionally(inst.id(), new RuntimeException(step.message())), entries);
+            }
+            case COMPLETE -> {
+                InterpretResult next = interpreter.resume(def, inst.descriptor(def.ref()), pointer, node,
+                        step.output(), context);
+                Instance after = inst.withComposition(FanOut.withoutFor(inst.composition()));
+                return commit(after, def, next, expectedVersion, consume, entries);
+            }
+            default -> {
+                Instant now = clock.instant();
+                List<Wait> waits = new ArrayList<>();
+                for (FanOut.Start start : step.start()) {
+                    waits.add(new Wait(FanOut.childWait(start.id()), inst.id(), pointer, now));
+                    entries.add(childStartEntry(inst, node, start, entries.size()));
+                }
+                JsonNode composition = FanOut.withFor(inst.composition(), forState);
+                String waiting = FanOut.runningWaits(composition).stream().findFirst().orElse(null);
+                InstanceSnapshot next = new InstanceSnapshot(inst.id(), def.ref(), pointer, waiting, context,
+                        InstanceStatus.WAITING, expectedVersion + 1, null, now, inst.input(), inst.startedAt(),
+                        inst.chainId(), inst.trace(), inst.listenState(), inst.decisions(), inst.sensitivity(),
+                        composition);
+                return state.save(next, expectedVersion, waits, consume, entries, inst.inboxConsumed())
+                        .thenCompose(outcome -> outcome != SaveOutcome.OK
+                                ? CompletableFuture.completedFuture(outcome)
+                                : relay.publishNow(entries.stream().filter(WorkflowEngine::isInternal).toList())
+                                        .thenApply(v -> outcome));
+            }
+        }
+    }
+
+    /** A child of a parent's {@code for} ended: record it, and let the join decide (start more, finish, or fail). */
+    private CompletionStage<SaveOutcome> advanceFor(Instance inst, WorkflowDefinition def, InstanceSnapshot snap,
+            TaskNode node, ResumeEvent.ChildFinished finished, String waitKey) {
+        ObjectNode current = FanOut.forOf(snap.composition());
+        if (current == null || !(node instanceof ForRunNode forNode)) {
+            return CompletableFuture.completedFuture(SaveOutcome.OK);   // stale: this instance no longer fans out
+        }
+        ObjectNode forState = current.deepCopy();
+        int index = -1;
+        for (int i = 0; i < forState.get("children").size(); i++) {
+            if (finished.childId().equals(forState.get("children").get(i).path("id").asText())) {
+                index = i;
+            }
+        }
+        if (index < 0) {
+            return CompletableFuture.completedFuture(SaveOutcome.OK);
+        }
+        FanOut.Step step = FanOut.settle(forState, index, finished.status(), finished.output(), finished.error());
+        return applyForStep(inst, def, forNode, snap.position(), snap.context(), forState, step, snap.version(),
+                List.of(waitKey), List.of());
+    }
+
+    private OutboxEntry internalEntry(Instance inst, String id, String type, String subject, ObjectNode data, int seq) {
+        Instant now = clock.instant();
+        CloudEvent event = CloudEventBuilder.v1().withId(id).withSource(INTERNAL_SOURCE).withType(type)
+                .withSubject(subject).withTime(now.atOffset(java.time.ZoneOffset.UTC))
+                .withDataContentType(StintEvents.CONTENT_TYPE_JSON).withData(Json.bytes(data)).build();
+        return new OutboxEntry(id, inst.id(), seq, new String(CeWire.toJson(event), StandardCharsets.UTF_8), now);
+    }
+
+    private OutboxEntry childStartEntry(Instance inst, ForRunNode node, FanOut.Start start, int seq) {
+        ObjectNode data = Json.obj();
+        data.putObject("parent").put("id", inst.id()).put("pointer", node.pointer()).put("index", start.index());
+        ForRunNode.Run run = node.run();
+        data.putObject("workflow").put("namespace", run.namespace()).put("name", run.name())
+                .put("version", run.version());
+        data.set("input", start.input());
+        data.put("chainId", inst.chainId());
+        if (inst.sensitivity() != null) {
+            data.put("sensitivity", inst.sensitivity().wireName());
+        }
+        return internalEntry(inst, "start:" + start.id(), StintEvents.TYPE_CHILD_START, start.id(), data, seq);
+    }
+
+    private OutboxEntry childCancelEntry(Instance inst, String childId, int seq) {
+        ObjectNode data = Json.obj();
+        data.put("parentId", inst.id());
+        return internalEntry(inst, "cancel:" + childId, StintEvents.TYPE_CHILD_CANCEL, childId, data, seq);
+    }
+
+    /** The entries that cancel the children a parent still has running (it is being cancelled or has failed). */
+    private List<OutboxEntry> childCancelEntries(Instance inst, JsonNode composition, int firstSeq) {
+        List<OutboxEntry> entries = new ArrayList<>();
+        for (String childId : FanOut.runningIds(composition)) {
+            entries.add(childCancelEntry(inst, childId, firstSeq + entries.size()));
+        }
+        return entries;
+    }
+
+    /**
+     * SDD 3a.8, 5.2: if {@code instanceId} is a child of a {@code for}, the entry that tells its parent it ended — written
+     * in the same save that makes it terminal, so a child's end can never be lost nor seen before it is durable.
+     */
+    private Optional<OutboxEntry> finishedEntry(String instanceId, JsonNode composition, Sensitivity level,
+            InstanceStatus status, JsonNode context, String position, String chainId) {
+        ObjectNode parent = FanOut.parentOf(composition);
+        if (parent == null || !isTerminal(status)) {
+            return Optional.empty();
+        }
+        ObjectNode data = Json.obj();
+        data.put("childId", instanceId);
+        String outcome = switch (status) {
+            case COMPLETED -> FanOut.COMPLETED;
+            case ABORTED -> FanOut.CANCELLED;
+            default -> FanOut.FAILED;
+        };
+        data.put("status", outcome);
+        data.put("index", parent.path("index").asInt());
+        if (status == InstanceStatus.COMPLETED) {
+            if (level == Sensitivity.RESTRICTED) {
+                data.putObject("output").put("withheld", true);   // a restricted child's data does not reach the parent
+            } else {
+                data.set("output", context == null ? Json.MAPPER.nullNode() : context);
+            }
+        } else {
+            data.put("error", status == InstanceStatus.ABORTED ? "cancelled" : "failed at " + position);
+        }
+        Instant now = clock.instant();
+        String id = "finished:" + instanceId;
+        CloudEvent event = CloudEventBuilder.v1().withId(id).withSource(INTERNAL_SOURCE)
+                .withType(StintEvents.TYPE_CHILD_FINISHED).withSubject(parent.path("id").asText())
+                .withTime(now.atOffset(java.time.ZoneOffset.UTC)).withDataContentType(StintEvents.CONTENT_TYPE_JSON)
+                .withData(Json.bytes(data)).build();
+        return Optional.of(new OutboxEntry(id, instanceId, Integer.MAX_VALUE / 2,
+                new String(CeWire.toJson(event), StandardCharsets.UTF_8), now));
+    }
+
+    /** What the relay hands to the engine: the entries of a fan-out, never published on a bus. */
+    private CompletionStage<Void> onInternal(CloudEvent event) {
+        return switch (event.getType()) {
+            case StintEvents.TYPE_CHILD_START -> onChildStart(event);
+            case StintEvents.TYPE_CHILD_CANCEL -> onChildCancel(event);
+            case StintEvents.TYPE_CHILD_FINISHED -> onChildFinished(event);
+            default -> CompletableFuture.failedFuture(new IllegalStateException(
+                    "Unknown internal entry type " + event.getType() + ": left in the outbox"));
+        };
+    }
+
+    private static JsonNode dataOf(CloudEvent event) {
+        return event.getData() == null ? Json.obj() : Json.read(event.getData().toBytes());
+    }
+
+    private CompletionStage<Void> onChildFinished(CloudEvent event) {
+        JsonNode data = dataOf(event);
+        String childId = data.path("childId").asText();
+        return resumeWithRetry(FanOut.childWait(childId), new ResumeEvent.ChildFinished(childId,
+                data.path("status").asText(), data.has("output") ? data.get("output") : null,
+                data.hasNonNull("error") ? data.get("error").asText() : null), 1);
+    }
+
+    private CompletionStage<Void> onChildCancel(CloudEvent event) {
+        String childId = event.getSubject();
+        // NOT_FOUND is final: a start that comes after finds its parent no longer waiting for the child (onChildStart)
+        return cancel(childId, "its parent stopped waiting for it", "engine").thenApply(outcome -> null);
+    }
+
+    private CompletionStage<Void> onChildStart(CloudEvent event) {
+        JsonNode data = dataOf(event);
+        String childId = event.getSubject();
+        JsonNode parent = data.path("parent");
+        String parentId = parent.path("id").asText();
+        String pointer = parent.path("pointer").asText();
+        WorkflowRef ref = new WorkflowRef(data.path("workflow").path("namespace").asText(),
+                data.path("workflow").path("name").asText(), data.path("workflow").path("version").asText());
+        WorkflowDefinition def = registry.find(ref).orElse(null);
+        if (def == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Child " + childId
+                    + " cannot start here: unknown workflow " + ref.canonical() + "; left in the outbox"));
+        }
+        return parentWaits(parentId, pointer, childId).thenCompose(waits -> {
+            if (!waits) {
+                LOG.log(Level.INFO, "Child {0} is not started: its parent {1} no longer waits for it", childId, parentId);
+                return done();
+            }
+            return startChild(event, data, childId, parentId, pointer, parent.path("index").asInt(), ref, def)
+                    // a parent that stopped waiting while the child was being created cancels it (closes the race)
+                    .thenCompose(v -> parentWaits(parentId, pointer, childId))
+                    .thenCompose(still -> still ? done()
+                            : cancel(childId, "its parent stopped waiting for it", "engine").thenApply(o -> null));
+        });
+    }
+
+    /** Whether {@code parentId} is alive and its {@code for} at {@code pointer} still has {@code childId} running. */
+    private CompletionStage<Boolean> parentWaits(String parentId, String pointer, String childId) {
+        return state.load(parentId).thenApply(optParent -> {
+            if (optParent.isEmpty() || isTerminal(optParent.get().status())) {
+                return false;
+            }
+            ObjectNode forState = FanOut.forOf(optParent.get().composition());
+            if (forState == null || !pointer.equals(forState.path("pointer").asText())) {
+                return false;
+            }
+            for (JsonNode child : forState.get("children")) {
+                if (childId.equals(child.path("id").asText())) {
+                    return FanOut.RUNNING.equals(child.path("status").asText());
+                }
+            }
+            return false;
+        });
+    }
+
+    /** Creates the child with its deterministic id — a redelivery loses the version-0 save and finds it there. */
+    private CompletionStage<Void> startChild(CloudEvent entry, JsonNode data, String childId, String parentId,
+            String pointer, int index, WorkflowRef ref, WorkflowDefinition def) {
+        JsonNode input = data.has("input") ? data.get("input") : Json.obj();
+        String chainId = data.hasNonNull("chainId") ? data.get("chainId").asText() : newChainId(childId);
+        Sensitivity carried = Sensitivity.parse(data.path("sensitivity").asText(null)).orElse(null);
+        Sensitivity level = def.policy() != null && carried == null ? Sensitivity.RESTRICTED : carried;
+        ExecutionSpan span = startActivation(childId, chainId, entry.getId(), ref, null, List.of());
+        Instance inst = new Instance(childId, input, clock.instant(), chainId,
+                new Lineage(chainId, entry.getId(), null, null).withTrace(span.context()), null, List.of(), null, level,
+                FanOut.withParent(parentId, pointer, index));
+        CompletionStage<SaveOutcome> committed;
+        try (LogContext log = logContext(inst, ref)) {
+            InterpretResult result;
+            try {
+                result = interpreter.run(def, inst.descriptor(ref), WorkflowDefinition.ROOT_POINTER, input, input);
+            } catch (RuntimeException e) {
+                result = InterpretResult.failed(WorkflowDefinition.ROOT_POINTER, input,
+                        "Failed to start child " + childId + ": " + e.getMessage());
+            }
+            committed = commit(inst, def, result, 0, List.of());
+        } catch (RuntimeException e) {
+            committed = CompletableFuture.failedFuture(e);
+        }
+        return committed.whenComplete((outcome, ex) -> endSpan(span, ex)).thenApply(outcome -> null);
+    }
+
     // --- events that can resume a suspended instance (SDD 1.3, sec. 8a: handled uniformly) --------
 
     private sealed interface ResumeEvent {
@@ -615,6 +948,10 @@ public final class WorkflowEngine {
 
         /** SDD 2.3: a domain event for a {@code listen}; {@code fromInbox} = it had been kept as an early event. */
         record EventArrived(CloudEvent event, boolean fromInbox) implements ResumeEvent {
+        }
+
+        /** SDD 3a.8: a child of this instance's {@code for} ended ({@code status}: COMPLETED, FAILED or CANCELLED). */
+        record ChildFinished(String childId, String status, JsonNode output, String error) implements ResumeEvent {
         }
     }
 
@@ -728,6 +1065,8 @@ public final class WorkflowEngine {
                         withEvent.add(eventLineage);
                         links = List.copyOf(withEvent);
                     }
+                } else if (event instanceof ResumeEvent.ChildFinished child) {
+                    causationId = "finished:" + child.childId();
                 } else {
                     causationId = ((ResumeEvent.TimerElapsed) event).timerId(); // decision 6: a timer fire, not a wire event
                 }
@@ -744,6 +1083,12 @@ public final class WorkflowEngine {
                         .whenComplete((outcome, ex) -> endSpan(span, ex))
                         .thenCompose(outcome -> afterAttempt(waitKey, event, attempt, outcome))
                         .exceptionally(ex -> {
+                            Throwable cause = ex instanceof CompletionException && ex.getCause() != null
+                                    ? ex.getCause() : ex;
+                            if (cause instanceof FanOutContention) {
+                                // SDD 3a.8: the end of a child stays in the outbox; the parent is not failed for it
+                                throw new CompletionException(cause);
+                            }
                             failExistingInstance(instanceId, ex);
                             return null;
                         });
@@ -755,10 +1100,18 @@ public final class WorkflowEngine {
         if (outcome == SaveOutcome.OK) {
             return done();
         }
-        if (attempt >= MAX_RETRY_ATTEMPTS) {
+        boolean childEnd = event instanceof ResumeEvent.ChildFinished;
+        if (attempt >= (childEnd ? MAX_CHILD_FINISHED_ATTEMPTS : MAX_RETRY_ATTEMPTS)) {
+            if (childEnd) {
+                // SDD 3a.8, 5.2: never fail the parent for losing races; the entry is swept and tried again
+                return CompletableFuture.failedFuture(new FanOutContention(
+                        "The end of a child lost the race for its parent " + attempt + " times"));
+            }
             return handleExhaustedRetries(waitKey);
         }
-        return delay(backoffMillis(attempt)).thenCompose(v -> resumeWithRetry(waitKey, event, attempt + 1));
+        long wait = childEnd ? backoffMillis(attempt) + ThreadLocalRandom.current().nextLong(backoffMillis(attempt) + 1)
+                : backoffMillis(attempt);
+        return delay(wait).thenCompose(v -> resumeWithRetry(waitKey, event, attempt + 1));
     }
 
     /** Sec. 8d: never ambiguous — either someone else legitimately won, or this is a definitive FAILED. */
@@ -775,11 +1128,16 @@ public final class WorkflowEngine {
                 InstanceSnapshot failedSnap = new InstanceSnapshot(snap.instanceId(), snap.definition(),
                         snap.position(), null, snap.context(), InstanceStatus.FAILED, snap.version() + 1, null,
                         clock.instant(), snap.input(), snap.startedAt(), snap.chainId(), snap.suspendedAt(),
-                        null, snap.decisions(), snap.sensitivity());
-                return state.save(failedSnap, snap.version(), List.of(), List.of(waitKey))
-                        .thenAccept(outcome -> completeExceptionally(snap.instanceId(), new RuntimeException(
-                                "State store write conflict persisted after " + MAX_RETRY_ATTEMPTS
-                                        + " attempts on wait key " + waitKey)));
+                        null, snap.decisions(), snap.sensitivity(), snap.composition());
+                List<OutboxEntry> finished = finishedEntry(snap.instanceId(), snap.composition(), snap.sensitivity(),
+                        InstanceStatus.FAILED, snap.context(), snap.position(), snap.chainId()).stream().toList();
+                return state.save(failedSnap, snap.version(), List.of(), List.of(waitKey), finished, List.of())
+                        .thenCompose(outcome -> {
+                            completeExceptionally(snap.instanceId(), new RuntimeException(
+                                    "State store write conflict persisted after " + MAX_RETRY_ATTEMPTS
+                                            + " attempts on wait key " + waitKey));
+                            return outcome == SaveOutcome.OK ? relay.publishNow(finished) : done();
+                        });
             });
         });
     }
@@ -800,6 +1158,9 @@ public final class WorkflowEngine {
         WorkflowDescriptor wf = inst.descriptor(snap.definition());
         TaskNode node = def.at(snap.position());
 
+        if (event instanceof ResumeEvent.ChildFinished finished) {
+            return advanceFor(inst, def, snap, node, finished, waitKey);   // SDD 3a.8
+        }
         ObjectNode activeListen = ListenState.active(snap.listenState());
         if (activeListen != null) {
             return advanceListen(inst, def, snap, node, activeListen, event, waitKey);
@@ -982,7 +1343,7 @@ public final class WorkflowEngine {
                 snap.retryState() != null ? snap.retryState().dispatchInput() : null);
         InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(), retryKey,
                 snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState, clock.instant(),
-                inst.input(), inst.startedAt(), inst.chainId(), inst.trace(), inst.listenState(), inst.decisions(), inst.sensitivity());
+                inst.input(), inst.startedAt(), inst.chainId(), inst.trace(), inst.listenState(), inst.decisions(), inst.sensitivity(), inst.composition());
 
         return armThenSave(new TimerRequest(retryKey, instanceId, null, clock.instant().plus(delay)),
                 () -> state.save(next, snap.version(),
@@ -1033,7 +1394,7 @@ public final class WorkflowEngine {
                     InstanceSnapshot next = new InstanceSnapshot(instanceId, snap.definition(), snap.position(),
                             taskKey, snap.context(), InstanceStatus.WAITING, snap.version() + 1, newRetryState,
                             clock.instant(), inst.input(), inst.startedAt(), inst.chainId(), inst.trace(),
-                            inst.listenState(), inst.decisions(), inst.sensitivity());
+                            inst.listenState(), inst.decisions(), inst.sensitivity(), inst.composition());
                     Duration timeout = effectiveTimeout(body);
                     // SDD 3a.3c: the attempt's deadline is the instant its timeout timer fires
                     Instant deadline = clock.instant().plus(timeout);
@@ -1115,6 +1476,12 @@ public final class WorkflowEngine {
 
     private CompletionStage<SaveOutcome> commit(Instance before, WorkflowDefinition def, InterpretResult interpreted,
             long expectedVersion, List<String> consumeWaitKeys) {
+        return commit(before, def, interpreted, expectedVersion, consumeWaitKeys, List.of());
+    }
+
+    /** As above, recording {@code extraOutbox} too (SDD 3a.8: facts of earlier in the activation, children to cancel). */
+    private CompletionStage<SaveOutcome> commit(Instance before, WorkflowDefinition def, InterpretResult interpreted,
+            long expectedVersion, List<String> consumeWaitKeys, List<OutboxEntry> extraOutbox) {
         String instanceId = before.id();
         InterpretResult result = checkEmits(interpreted);
         // SDD 3a.4: a review's events get their id, deadline and fields from its record, kept in the decisions
@@ -1130,7 +1497,11 @@ public final class WorkflowEngine {
                 a.path("outcome").asText(), Map.of("reviewId", a.path("reviewId").asText(),
                         "role", a.path("role").asText())));
         InterpretResult committed = result;
-        return prepareFacts(inst, def, committed.emitted(), expectedVersion).thenCompose(outbox -> {
+        return prepareFacts(inst, def, committed.emitted(), expectedVersion).thenCompose(prepared -> {
+            List<OutboxEntry> outbox = new ArrayList<>(extraOutbox);
+            for (OutboxEntry fact : prepared) {
+                outbox.add(new OutboxEntry(fact.eventId(), fact.instanceId(), outbox.size(), fact.event(), fact.createdAt()));
+            }
             CompletionStage<SaveOutcome> saved = switch (committed) {
                 case InterpretResult.Suspend s -> commitSuspend(inst, def, s.node(), s.pointer(), s.dispatchInput(),
                         s.context(), expectedVersion, consumeWaitKeys, null, outbox);
@@ -1139,6 +1510,7 @@ public final class WorkflowEngine {
                         new RetryState(s.tryNode().pointer(), 1, clock.instant(), null, null), outbox);
                 case InterpretResult.SuspendOnListen s -> commitListen(inst, def, s, expectedVersion, consumeWaitKeys,
                         outbox);
+                case InterpretResult.SuspendOnFor s -> commitFor(inst, def, s, expectedVersion, consumeWaitKeys, outbox);
                 case InterpretResult.Complete c -> commitTerminal(inst, def.ref(), c.pointer(), c.context(),
                         InstanceStatus.COMPLETED, expectedVersion, consumeWaitKeys,
                         () -> complete(instanceId, c.context()), outbox);
@@ -1175,6 +1547,7 @@ public final class WorkflowEngine {
             case InterpretResult.Suspend s -> InterpretResult.failed(s.pointer(), s.context(), message);
             case InterpretResult.SuspendInTry s -> InterpretResult.failed(s.tryNode().pointer(), s.context(), message);
             case InterpretResult.SuspendOnListen s -> InterpretResult.failed(s.pointer(), s.context(), message);
+            case InterpretResult.SuspendOnFor s -> InterpretResult.failed(s.pointer(), s.context(), message);
             case InterpretResult.Complete c -> InterpretResult.failed(c.pointer(), c.context(), message);
             case InterpretResult.Failed f -> InterpretResult.failed(f.pointer(), f.context(), f.message() + "; " + message);
         };
@@ -1429,7 +1802,7 @@ public final class WorkflowEngine {
                     InstanceSnapshot snap = new InstanceSnapshot(instanceId, def.ref(), position, taskKey, context,
                             InstanceStatus.WAITING, expectedVersion + 1, retryState, clock.instant(),
                             inst.input(), inst.startedAt(), inst.chainId(), inst.trace(), inst.listenState(),
-                            inst.decisions(), inst.sensitivity());
+                            inst.decisions(), inst.sensitivity(), inst.composition());
                     Duration timeout = effectiveTimeout(node);
                     int attempt = retryState != null ? retryState.attempt() : 1;
                     // SDD 3a.3c: the attempt's deadline is the instant its timeout timer fires
@@ -1475,7 +1848,7 @@ public final class WorkflowEngine {
                 InstanceStatus.WAITING, expectedVersion + 1, null, now, inst.input(), inst.startedAt(),
                 inst.chainId(), inst.trace(),
                 ListenState.withActive(inst.listenState(), listenId, listen.strategy().name(), keys, timerKey),
-                inst.decisions(), inst.sensitivity());
+                inst.decisions(), inst.sensitivity(), inst.composition());
         List<Wait> waits = new ArrayList<>();
         for (String key : keys) {
             waits.add(new Wait(key, instanceId, s.pointer(), now));
@@ -1651,7 +2024,7 @@ public final class WorkflowEngine {
             InstanceSnapshot partial = new InstanceSnapshot(inst.id(), snap.definition(), snap.position(),
                     stillPending.get(0), snap.context(), InstanceStatus.WAITING, snap.version() + 1, null,
                     clock.instant(), inst.input(), inst.startedAt(), inst.chainId(), inst.trace(), after,
-                    inst.decisions(), inst.sensitivity());
+                    inst.decisions(), inst.sensitivity(), inst.composition());
             return state.save(partial, snap.version(), List.of(), List.of(waitKey), List.of(), inst.inboxConsumed());
         }
 
@@ -1868,14 +2241,26 @@ public final class WorkflowEngine {
         String instanceId = inst.id();
         InstanceSnapshot snap = new InstanceSnapshot(instanceId, ref, position, null, context, status,
                 expectedVersion + 1, null, clock.instant(), inst.input(), inst.startedAt(), inst.chainId(), inst.trace(),
-                inst.listenState(), inst.decisions(), inst.sensitivity());
-        return state.save(snap, expectedVersion, List.of(), consumeWaitKeys, outbox, inst.inboxConsumed())
-                .thenApply(outcome -> {
-                    if (outcome == SaveOutcome.OK) {
-                        onSuccess.run();
+                inst.listenState(), inst.decisions(), inst.sensitivity(), inst.composition());
+        // SDD 3a.8, 5.2: a child's end is recorded by the save that makes it terminal, addressed to its parent
+        List<OutboxEntry> entries = new ArrayList<>(outbox);
+        finishedEntry(instanceId, inst.composition(), inst.sensitivity(), status, context, position, inst.chainId())
+                .ifPresent(entries::add);
+        return state.save(snap, expectedVersion, List.of(), consumeWaitKeys, entries, inst.inboxConsumed())
+                .thenCompose(outcome -> {
+                    if (outcome != SaveOutcome.OK) {
+                        return CompletableFuture.completedFuture(outcome);
                     }
-                    return outcome;
+                    onSuccess.run();
+                    return relay.publishNow(entries.stream().filter(WorkflowEngine::isInternal).toList())
+                            .thenApply(v -> outcome);
                 });
+    }
+
+    /** Whether {@code entry} is one of the engine's own (SDD 3a.8), acted on at once rather than left to the facts' path. */
+    private static boolean isInternal(OutboxEntry entry) {
+        String id = entry.eventId();
+        return id.startsWith("start:") || id.startsWith("cancel:") || id.startsWith("finished:");
     }
 
     /**
@@ -1898,9 +2283,12 @@ public final class WorkflowEngine {
             InstanceSnapshot failedSnap = new InstanceSnapshot(instanceId, snap.definition(), snap.position(),
                     null, snap.context(), InstanceStatus.FAILED, snap.version() + 1, null, clock.instant(),
                     snap.input(), snap.startedAt(), snap.chainId(), snap.suspendedAt(), null,
-                    snap.decisions(), snap.sensitivity());
+                    snap.decisions(), snap.sensitivity(), snap.composition());
             List<String> consume = snap.waitingKey() == null ? List.of() : List.of(snap.waitingKey());
-            state.save(failedSnap, snap.version(), List.of(), consume);
+            List<OutboxEntry> finished = finishedEntry(instanceId, snap.composition(), snap.sensitivity(),
+                    InstanceStatus.FAILED, snap.context(), snap.position(), snap.chainId()).stream().toList();
+            state.save(failedSnap, snap.version(), List.of(), consume, finished, List.of())
+                    .thenCompose(outcome -> outcome == SaveOutcome.OK ? relay.publishNow(finished) : done());
         }));
         completeExceptionally(instanceId, t);
     }
@@ -1912,7 +2300,19 @@ public final class WorkflowEngine {
      */
     private record Instance(String id, JsonNode input, Instant startedAt, String chainId, Lineage activation,
                             JsonNode listenState, List<InboxEntry.Key> inboxConsumed, JsonNode decisions,
-                            Sensitivity sensitivity) {
+                            Sensitivity sensitivity, JsonNode composition) {
+
+        /** The shape before SDD 3a.8: no fan-out bookkeeping. */
+        Instance(String id, JsonNode input, Instant startedAt, String chainId, Lineage activation,
+                 JsonNode listenState, List<InboxEntry.Key> inboxConsumed, JsonNode decisions,
+                 Sensitivity sensitivity) {
+            this(id, input, startedAt, chainId, activation, listenState, inboxConsumed, decisions, sensitivity, null);
+        }
+
+        Instance withComposition(JsonNode composition) {
+            return new Instance(id, input, startedAt, chainId, activation, listenState, inboxConsumed, decisions,
+                    sensitivity, composition);
+        }
 
         /**
          * SDD 2.5: {@code activation} = chain, cause and trace context of the activation now running.
@@ -1922,22 +2322,22 @@ public final class WorkflowEngine {
          */
         static Instance of(InstanceSnapshot snap, Lineage activation, List<InboxEntry.Key> inboxConsumed) {
             return new Instance(snap.instanceId(), snap.input(), snap.startedAt(), activation.chainId(), activation,
-                    ListenState.carried(snap.listenState()), inboxConsumed, snap.decisions(), snap.sensitivity());
+                    ListenState.carried(snap.listenState()), inboxConsumed, snap.decisions(), snap.sensitivity(), snap.composition());
         }
 
         Instance withListenState(JsonNode state) {
             return new Instance(id, input, startedAt, chainId, activation, state, inboxConsumed, decisions,
-                    sensitivity);
+                    sensitivity, composition);
         }
 
         Instance withSensitivity(Sensitivity level) {
             return new Instance(id, input, startedAt, chainId, activation, listenState, inboxConsumed, decisions,
-                    level);
+                    level, composition);
         }
 
         Instance withDecisions(JsonNode records) {
             return new Instance(id, input, startedAt, chainId, activation, listenState, inboxConsumed, records,
-                    sensitivity);
+                    sensitivity, composition);
         }
 
         /** What the snapshot keeps for the next activation to link to (SDD 2.5, 8b). */

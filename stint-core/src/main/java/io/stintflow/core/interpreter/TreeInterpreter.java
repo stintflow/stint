@@ -1,7 +1,9 @@
 package io.stintflow.core.interpreter;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -14,6 +16,7 @@ import io.stintflow.core.expr.WorkflowDescriptor;
 import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.EmitNode;
+import io.stintflow.core.model.ForRunNode;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.SetNode;
 import io.stintflow.core.model.SwitchNode;
@@ -85,6 +88,12 @@ public final class TreeInterpreter {
 
             if (node instanceof ListenNode listen) {
                 return InterpretResult.suspendOnListen(listen, null, pointer, effectiveInput, context);
+            }
+
+            if (node instanceof ForRunNode forNode) {
+                // SDD 3a.8: the engine starts the children; it checks that this is an array within the limit
+                JsonNode items = evaluator.eval(forNode.in(), effectiveInput, new EvalScope(context, wf));
+                return InterpretResult.suspendOnFor(forNode, pointer, items, effectiveInput, context);
             }
 
             if (node instanceof TryNode tryNode) {
@@ -220,6 +229,24 @@ public final class TreeInterpreter {
      */
     public JsonNode callArgument(CallRemoteNode call, JsonNode taskInput, JsonNode context, WorkflowDescriptor wf) {
         return DataFlowSupport.applyExpr(evaluator, call.withInput(), taskInput, context, wf);
+    }
+
+    /**
+     * SDD 3a.8: the input of the child that runs for item {@code index} of a {@code for}: {@code run.workflow.input}
+     * evaluated over the task input, with the loop variables ({@code $<each>} and {@code $<at>}) bound; the item itself
+     * when the {@code run} declares no input.
+     */
+    public JsonNode forChildInput(ForRunNode node, JsonNode item, int index, JsonNode taskInput, JsonNode context,
+            WorkflowDescriptor wf) {
+        if (node.run().input() == null) {
+            return item;
+        }
+        Map<String, JsonNode> variables = new HashMap<>();
+        variables.put(node.each(), item);
+        if (node.at() != null) {
+            variables.put(node.at(), com.fasterxml.jackson.databind.node.IntNode.valueOf(index));
+        }
+        return evaluator.eval(node.run().input(), taskInput, new EvalScope(context, wf).withVariables(variables));
     }
 
     /** SDD 2.9, RF4: the argument of a try's body, from the try's transformed input. */

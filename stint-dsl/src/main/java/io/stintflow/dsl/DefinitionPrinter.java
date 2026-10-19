@@ -17,6 +17,7 @@ import io.stintflow.core.model.CallRemoteNode;
 import io.stintflow.core.model.DataFlow;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.EmitNode;
+import io.stintflow.core.model.ForRunNode;
 import io.stintflow.core.model.FlowDirective;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.SetNode;
@@ -124,6 +125,25 @@ public final class DefinitionPrinter {
                 for (ListenNode.Filter filter : listen.filters()) {
                     filters.addObject().putObject("with").put("type", filter.type());
                 }
+            }
+            case ForRunNode forRun -> {
+                ObjectNode spec = body.putObject("for");
+                spec.put("each", forRun.each());
+                if (forRun.at() != null) {
+                    spec.put("at", forRun.at());
+                }
+                spec.put("in", expr(forRun.in()));
+                ObjectNode workflow = body.putArray("do").addObject().putObject("run").putObject("workflow");
+                workflow.put("namespace", forRun.run().namespace());
+                workflow.put("name", forRun.run().name());
+                workflow.put("version", forRun.run().version());
+                if (forRun.run().input() != null) {
+                    workflow.put("input", expr(forRun.run().input()));
+                }
+                ObjectNode metadata = body.putObject("metadata");
+                metadata.put("x-stint-concurrency", forRun.concurrency());
+                metadata.put("x-stint-join", forRun.join().name().toLowerCase());
+                metadata.put("x-stint-max-iterations", forRun.maxIterations());
             }
             case DoNode doNode -> body.set("do", tasks(doNode.tasks()));
         }

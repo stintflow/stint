@@ -245,7 +245,7 @@ public final class RestrictedContentStateStore implements StateStore {
         InstanceSnapshot failed = new InstanceSnapshot(stored.instanceId(), stored.definition(), stored.position(),
                 null, null, InstanceStatus.FAILED, stored.version() + 1, null, clock.instant(), null,
                 stored.startedAt(), stored.chainId(), stored.suspendedAt(), null, stored.decisions(),
-                stored.sensitivity());
+                stored.sensitivity(), stored.composition());
         List<String> consume = stored.waitingKey() == null ? List.of() : List.of(stored.waitingKey());
         return delegate.save(failed, stored.version(), List.of(), consume).thenCompose(outcome ->
                 outcome == SaveOutcome.OK ? CompletableFuture.completedFuture(Optional.of(failed))
@@ -289,6 +289,6 @@ public final class RestrictedContentStateStore implements StateStore {
             RetryState retry) {
         return new InstanceSnapshot(s.instanceId(), s.definition(), s.position(), s.waitingKey(), context, s.status(),
                 s.version(), retry, s.updatedAt(), input, s.startedAt(), s.chainId(), s.suspendedAt(), listenState,
-                s.decisions(), s.sensitivity());
+                s.decisions(), s.sensitivity(), s.composition());
     }
 }

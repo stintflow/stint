@@ -188,6 +188,10 @@ public class DynamoDbStateStore implements StateStore {
         if (snap.decisions() != null) {
             item.put("decisions", AttributeValue.fromS(snap.decisions().toString()));
         }
+        // SDD 3a.8: the fan-out bookkeeping (optional attribute).
+        if (snap.composition() != null) {
+            item.put("composition", AttributeValue.fromS(snap.composition().toString()));
+        }
         // SDD 3a.5, RF1: the instance's data level (optional attribute).
         if (snap.sensitivity() != null) {
             item.put("sensitivity", AttributeValue.fromS(snap.sensitivity().wireName()));
@@ -399,6 +403,8 @@ public class DynamoDbStateStore implements StateStore {
         AttributeValue decisions = item.get("decisions");
         // SDD 3a.5, tolerant read: items written before SDD 3a.5 (or of instances without a level) have none.
         AttributeValue sensitivity = item.get("sensitivity");
+        // SDD 3a.8, tolerant read: items written before SDD 3a.8 have no fan-out bookkeeping.
+        AttributeValue composition = item.get("composition");
         return new InstanceSnapshot(
                 item.get("instanceId").s(),
                 WorkflowRef.parse(item.get("definition").s()),
@@ -415,7 +421,8 @@ public class DynamoDbStateStore implements StateStore {
                 traceparent == null ? null : Lineage.trace(traceparent.s(), tracestate == null ? null : tracestate.s()),
                 listenState == null ? null : Json.read(listenState.s().getBytes()),
                 decisions == null ? null : Json.read(decisions.s().getBytes()),
-                sensitivity == null ? null : Sensitivity.parseOrRestricted(sensitivity.s()));
+                sensitivity == null ? null : Sensitivity.parseOrRestricted(sensitivity.s()),
+                composition == null ? null : Json.read(composition.s().getBytes()));
     }
 
     private static void putIfSet(Map<String, AttributeValue> item, String name, String value) {

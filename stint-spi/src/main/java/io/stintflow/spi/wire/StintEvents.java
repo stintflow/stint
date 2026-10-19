@@ -97,6 +97,15 @@ public final class StintEvents {
     public static final String TYPE_INSTANCE_CANCEL = "io.stintflow.instance.cancel.v1";
 
     /**
+     * SDD 3a.8: the engine's own entries in its outbox, never published on a bus (the relay hands them to the engine):
+     * a child of a {@code for} to start, a child to cancel (its parent stopped waiting for it), and a child that
+     * reached a terminal state, addressed to its parent.
+     */
+    public static final String TYPE_CHILD_START = "io.stintflow.instance.child-start.v1";
+    public static final String TYPE_CHILD_CANCEL = "io.stintflow.instance.child-cancel.v1";
+    public static final String TYPE_CHILD_FINISHED = "io.stintflow.instance.child-finished.v1";
+
+    /**
      * SDD 2.4, sec. 8e (Stint extension): the synthetic event a schedule occurrence starts an instance with.
      * Internal to the start — never published on a bus.
      */

@@ -261,6 +261,31 @@ The same can be asked by an event: `io.stintflow.instance.cancel.v1`, `subject` 
 next to the other reactions: it acts only on events from the `source`s it lists (no default; an empty set refuses
 everything), and audits a refusal.
 
+## Fan-out: a concurrent `for` over `run: workflow` (SDD 3a.8)
+
+```yaml
+- fan:
+    for: { each: sdd, in: '${ .sdds }', at: i }
+    do:
+      - deliver:
+          run:
+            workflow: { namespace: delivery, name: sdd-delivery, version: '1.0.0', input: '${ {sdd: $sdd, i: $i} }' }
+    metadata:
+      x-stint-concurrency: 3        # at most 3 children at once (1..40; default 1 = in series, as DSL 1.0)
+      x-stint-join: all             # all (default) | any | collect
+      x-stint-max-iterations: 50    # default 50; the engine's ceiling is 200
+    export: { as: '${ {results: .} }' }
+```
+
+Each item starts a **child instance** of `run.workflow`, started by the engine with the id `<parent>:<pointer>:<index>`
+(so a redelivery starts nothing twice), with its own snapshot, memory, trace, retries and dead-letter handling. The
+parent keeps only the state of the join. `all` ends when every child succeeded (output: the outputs in the order of
+`in`) and fails on the first failure, cancelling the rest; `any` ends on the first success (`{index, output}`),
+cancels the rest and fails only if every child failed; `collect` waits for all and returns
+`[{index, status, output | error}]`. More items than the limit fail the `for` before any child starts. Cancelling the
+parent (SDD 3a.11) cancels its running children, and theirs. The engine's own entries (start, cancel, end of a child)
+travel through the outbox, so call `outboxRelay().start(...)` in production. A restricted instance cannot fan out.
+
 ## Schedules and long timers (SDD 2.4)
 
 ```yaml

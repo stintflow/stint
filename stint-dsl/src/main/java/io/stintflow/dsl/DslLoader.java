@@ -30,6 +30,7 @@ import io.stintflow.core.model.DataFlow;
 import io.stintflow.core.model.DoNode;
 import io.stintflow.core.model.EmitNode;
 import io.stintflow.core.model.FlowDirective;
+import io.stintflow.core.model.ForRunNode;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.RetryPolicy;
 import io.stintflow.core.model.Schedule;
@@ -149,8 +150,21 @@ public final class DslLoader {
                 "switch", Set.of("switch"),
                 "try", Set.of("try", "catch"),
                 "emit", Set.of("emit"),
-                "listen", Set.of("listen", "timeout"));
+                "listen", Set.of("listen", "timeout"),
+                "for", Set.of("for", "do"));   // SDD 3a.8
         private static final Set<String> CALL_REMOTE_WITH_KEYS = Set.of("task", "input");
+        /** SDD 3a.8: {@code for} over {@code run: workflow}, and the Stint extensions in its metadata. */
+        private static final Set<String> FOR_KEYS = Set.of("each", "in", "at");
+        private static final Set<String> FOR_TASK_KEYS = Set.of("run", "metadata");
+        private static final Set<String> RUN_KEYS = Set.of("workflow");
+        private static final Set<String> RUN_WORKFLOW_KEYS = Set.of("namespace", "name", "version", "input");
+        private static final Set<String> FOR_METADATA = Set.of("x-stint-concurrency", "x-stint-join",
+                "x-stint-on-failure", "x-stint-max-iterations");
+        private static final java.util.regex.Pattern FOR_VARIABLE = java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+        static final int DEFAULT_FOR_ITERATIONS = 50;
+        /** A save carries a start and a wait per child of a window (a transaction holds 100 items). */
+        static final int MAX_FOR_CONCURRENCY = 40;
+        static final int MAX_FOR_ITERATIONS = 1000;
         /** SDD 3a.1: {@code call: decision} (Stint extension) — its own task key, {@code with} keys and option keys. */
         private static final Set<String> DECISION_WITH_KEYS = Set.of("task", "kind", "input", "options");
         private static final Set<String> DECISION_OPTION_KEYS = Set.of("description", "then");
@@ -966,7 +980,10 @@ public final class DslLoader {
             if (body.has("listen")) {
                 return compileListen(name, body, pointer);
             }
-            for (String unsupportedKey : List.of("fork", "wait", "for")) {
+            if (body.has("for")) {
+                return compileForRun(name, body, pointer);   // SDD 3a.8
+            }
+            for (String unsupportedKey : List.of("fork", "wait")) {
                 if (body.has(unsupportedKey)) {
                     unsupported(pointer + "/" + unsupportedKey,
                             "task construct '" + unsupportedKey + "' is not supported in this phase (Fase 2)");
@@ -975,6 +992,118 @@ public final class DslLoader {
             }
             hardError(pointer, "task has no recognized construct (call/set/switch/try/emit/listen)", null);
             return null;
+        }
+
+        /**
+         * SDD 3a.8: {@code for} over one {@code run: workflow} — the concurrent fan-out. DSL 1.0 {@code for.each/in/at}
+         * and {@code run.workflow}; the concurrency, join and limit are Stint extensions in the task's {@code metadata}
+         * ({@code x-stint-concurrency}, {@code x-stint-join}, {@code x-stint-on-failure}, {@code x-stint-max-iterations}).
+         * A {@code for} whose body is anything else is not supported (sequential loops are written with {@code then}).
+         */
+        private TaskNode compileForRun(String name, JsonNode body, String pointer) {
+            String forPointer = pointer + "/for";
+            JsonNode spec = body.get("for");
+            if (!spec.isObject()) {
+                hardError(forPointer, "'for' must be an object with 'each' and 'in'", null);
+                return null;
+            }
+            checkKeys(spec, forPointer, FOR_KEYS);
+            if (!spec.hasNonNull("in")) {
+                hardError(forPointer + "/in", "'for' requires 'in' (an expression over an array)", null);
+                return null;
+            }
+            String each = spec.hasNonNull("each") ? spec.get("each").asText() : "item";
+            String at = spec.hasNonNull("at") ? spec.get("at").asText() : null;
+            for (String variable : new String[] {each, at}) {
+                if (variable != null && !FOR_VARIABLE.matcher(variable).matches()) {
+                    hardError(forPointer, "'" + variable + "' is not a valid loop variable name", null);
+                    return null;
+                }
+            }
+            Expr in = compileAndValidate(TemplateCompiler.compileBareExpression(spec.get("in").asText()),
+                    forPointer + "/in");
+
+            JsonNode tasks = body.get("do");
+            if (tasks == null || !tasks.isArray() || tasks.size() != 1 || !tasks.get(0).isObject()
+                    || tasks.get(0).size() != 1) {
+                hardError(pointer + "/do", "a 'for' takes exactly one task, a 'run: workflow' (SDD 3a.8)", null);
+                return null;
+            }
+            String taskName = tasks.get(0).fieldNames().next();
+            JsonNode task = tasks.get(0).get(taskName);
+            String taskPointer = pointer + "/do/0/" + taskName;
+            if (!task.isObject() || !task.has("run")) {
+                hardError(taskPointer, "the task of a 'for' must be 'run: workflow' (SDD 3a.8)", null);
+                return null;
+            }
+            checkKeys(task, taskPointer, FOR_TASK_KEYS);
+            JsonNode run = task.get("run");
+            checkKeys(run, taskPointer + "/run", RUN_KEYS);
+            JsonNode workflow = run.get("workflow");
+            if (workflow == null || !workflow.isObject()) {
+                unsupported(taskPointer + "/run", "only 'run: workflow' is supported in a 'for' (SDD 3a.8)");
+                return null;
+            }
+            checkKeys(workflow, taskPointer + "/run/workflow", RUN_WORKFLOW_KEYS);
+            for (String required : List.of("namespace", "name", "version")) {
+                if (!workflow.hasNonNull(required)) {
+                    hardError(taskPointer + "/run/workflow/" + required, "'run.workflow." + required
+                            + "' is required", null);
+                    return null;
+                }
+            }
+            Expr input = workflow.has("input")
+                    ? compileAndValidate(TemplateCompiler.compileTemplate(workflow.get("input")),
+                            taskPointer + "/run/workflow/input")
+                    : null;
+            ForRunNode.Run runSpec = new ForRunNode.Run(workflow.get("namespace").asText(),
+                    workflow.get("name").asText(), workflow.get("version").asText(), input);
+
+            int concurrency = 1;
+            int maxIterations = DEFAULT_FOR_ITERATIONS;
+            ForRunNode.Join join = ForRunNode.Join.ALL;
+            JsonNode metadata = body.get("metadata");
+            if (metadata != null && metadata.isObject()) {
+                for (Iterator<String> it = metadata.fieldNames(); it.hasNext(); ) {
+                    String key = it.next();
+                    if (key.startsWith("x-stint-") && !FOR_METADATA.contains(key)) {
+                        hardError(pointer + "/metadata/" + key, "'" + key + "' is not a Stint extension of 'for' "
+                                + FOR_METADATA, null);
+                    }
+                }
+                if (metadata.has("x-stint-concurrency")) {
+                    concurrency = boundedInt(metadata.get("x-stint-concurrency"), 1, MAX_FOR_CONCURRENCY,
+                            pointer + "/metadata/x-stint-concurrency", concurrency);
+                }
+                if (metadata.has("x-stint-max-iterations")) {
+                    maxIterations = boundedInt(metadata.get("x-stint-max-iterations"), 1, MAX_FOR_ITERATIONS,
+                            pointer + "/metadata/x-stint-max-iterations", maxIterations);
+                }
+                if (metadata.has("x-stint-join")) {
+                    String value = metadata.get("x-stint-join").asText();
+                    switch (value) {
+                        case "all" -> join = ForRunNode.Join.ALL;
+                        case "any" -> join = ForRunNode.Join.ANY;
+                        case "collect" -> join = ForRunNode.Join.COLLECT;
+                        default -> hardError(pointer + "/metadata/x-stint-join",
+                                "'" + value + "' is not a join (all, any, collect)", null);
+                    }
+                }
+                if (metadata.has("x-stint-on-failure") && !"failFast".equals(metadata.get("x-stint-on-failure").asText())) {
+                    hardError(pointer + "/metadata/x-stint-on-failure", "only 'failFast' is supported; to collect "
+                            + "failures use 'x-stint-join: collect' (SDD 3a.8, 5.1)", null);
+                }
+            }
+            return new ForRunNode(name, pointer, compileDataFlow(body, pointer, null, null), compileThen(body), in,
+                    each, at, runSpec, concurrency, join, maxIterations);
+        }
+
+        private int boundedInt(JsonNode value, int min, int max, String pointer, int fallback) {
+            if (!value.isInt() || value.asInt() < min || value.asInt() > max) {
+                hardError(pointer, "must be an integer from " + min + " to " + max, null);
+                return fallback;
+            }
+            return value.asInt();
         }
 
         private TaskNode compileCallRemote(String name, JsonNode body, String pointer) {
@@ -1474,7 +1603,9 @@ public final class DslLoader {
             if (body == null || !body.isObject()) {
                 return;
             }
-            List<String> constructs = TASK_CONSTRUCTS.stream().filter(body::has).toList();
+            List<String> constructs = TASK_CONSTRUCTS.stream().filter(body::has)
+                    .filter(c -> !(c.equals("do") && body.has("for")))   // SDD 3a.8: a for carries its body in do
+                    .toList();
             if (constructs.size() > 1) {
                 unsupported(pointer, "a task declares more than one construct " + constructs
                         + "; only one would be used (SDD 2.9)");
