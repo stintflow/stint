@@ -23,6 +23,7 @@ import io.stintflow.spi.InstanceSnapshot.InstanceStatus;
 import io.stintflow.spi.Lineage;
 import io.stintflow.spi.OutboxEntry;
 import io.stintflow.spi.RetryState;
+import io.stintflow.spi.Sensitivity;
 import io.stintflow.spi.SaveOutcome;
 import io.stintflow.spi.StateStore;
 import io.stintflow.spi.Wait;
@@ -40,6 +41,7 @@ import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
+import software.amazon.awssdk.services.dynamodb.model.Update;
 
 /**
  * {@link StateStore} backed by two DynamoDB tables: {@code stint-instances} (PK {@code instanceId})
@@ -62,7 +64,8 @@ import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledExcepti
  * {@code eventId}, numeric {@code expiresAt} in epoch seconds usable as the table's native TTL attribute).
  * Reads are strongly consistent and ignore expired entries — the native TTL deletes lazily and only cleans
  * up. A save deletes the entries it consumed in its transaction. The instance item keeps the engine's
- * {@code listen} bookkeeping as the optional {@code listenState} attribute (JSON).
+ * {@code listen} bookkeeping as the optional {@code listenState} attribute (JSON), and (SDD 3a.1) the decision
+ * records as the optional {@code decisions} attribute (JSON).
  */
 @ApplicationScoped
 public class DynamoDbStateStore implements StateStore {
@@ -127,10 +130,14 @@ public class DynamoDbStateStore implements StateStore {
             List<TransactWriteItem> items = new ArrayList<>();
             items.add(TransactWriteItem.builder().put(instancePut(snapshot, expectedVersion)).build());
             for (Wait toAdd : addWaits) {
-                items.add(TransactWriteItem.builder().put(waitPut(toAdd)).build());
+                items.add(consumeWaitKeys.contains(toAdd.waitKey())
+                        ? TransactWriteItem.builder().update(waitReopen(toAdd)).build()
+                        : TransactWriteItem.builder().put(waitPut(toAdd)).build());
             }
             for (String key : consumeWaitKeys) {
-                items.add(TransactWriteItem.builder().delete(waitDelete(key)).build());
+                if (addWaits.stream().noneMatch(w -> w.waitKey().equals(key))) {
+                    items.add(TransactWriteItem.builder().delete(waitDelete(key)).build());
+                }
             }
             for (OutboxEntry entry : addOutbox) {
                 items.add(TransactWriteItem.builder().put(outboxPut(entry)).build());
@@ -178,6 +185,17 @@ public class DynamoDbStateStore implements StateStore {
         if (snap.listenState() != null) {
             item.put("listenState", AttributeValue.fromS(snap.listenState().toString()));
         }
+        if (snap.decisions() != null) {
+            item.put("decisions", AttributeValue.fromS(snap.decisions().toString()));
+        }
+        // SDD 3a.8: the fan-out bookkeeping (optional attribute).
+        if (snap.composition() != null) {
+            item.put("composition", AttributeValue.fromS(snap.composition().toString()));
+        }
+        // SDD 3a.5, RF1: the instance's data level (optional attribute).
+        if (snap.sensitivity() != null) {
+            item.put("sensitivity", AttributeValue.fromS(snap.sensitivity().wireName()));
+        }
 
         Put.Builder builder = Put.builder().tableName(instancesTable).item(item);
         if (expectedVersion == 0) {
@@ -198,6 +216,26 @@ public class DynamoDbStateStore implements StateStore {
         item.put("createdAt", AttributeValue.fromN(Long.toString(toAdd.createdAt().toEpochMilli())));
         return Put.builder().tableName(waitsTable).item(item)
                 .conditionExpression("attribute_not_exists(waitKey)")
+                .build();
+    }
+
+    /**
+     * SDD 3a.10: a key consumed and added in the same save is one update of the existing wait — a Delete and a
+     * Put of one item can't share a {@code TransactWriteItems}. {@code gen} is optional: a wait written before
+     * it existed counts as 0.
+     */
+    private Update waitReopen(Wait toAdd) {
+        return Update.builder().tableName(waitsTable)
+                .key(Map.of("waitKey", AttributeValue.fromS(toAdd.waitKey())))
+                .updateExpression("SET #pos = :pos, createdAt = :created, gen = if_not_exists(gen, :zero) + :one")
+                .conditionExpression("attribute_exists(waitKey) AND instanceId = :self")
+                .expressionAttributeNames(Map.of("#pos", "position"))
+                .expressionAttributeValues(Map.of(
+                        ":pos", AttributeValue.fromS(toAdd.position()),
+                        ":created", AttributeValue.fromN(Long.toString(toAdd.createdAt().toEpochMilli())),
+                        ":self", AttributeValue.fromS(toAdd.instanceId()),
+                        ":zero", AttributeValue.fromN("0"),
+                        ":one", AttributeValue.fromN("1")))
                 .build();
     }
 
@@ -361,6 +399,12 @@ public class DynamoDbStateStore implements StateStore {
         AttributeValue tracestate = item.get("suspendedTracestate");
         // SDD 2.3, tolerant read: items written before SDD 2.3 have no listen bookkeeping.
         AttributeValue listenState = item.get("listenState");
+        // SDD 3a.1, tolerant read: items written before SDD 3a.1 have no decision records.
+        AttributeValue decisions = item.get("decisions");
+        // SDD 3a.5, tolerant read: items written before SDD 3a.5 (or of instances without a level) have none.
+        AttributeValue sensitivity = item.get("sensitivity");
+        // SDD 3a.8, tolerant read: items written before SDD 3a.8 have no fan-out bookkeeping.
+        AttributeValue composition = item.get("composition");
         return new InstanceSnapshot(
                 item.get("instanceId").s(),
                 WorkflowRef.parse(item.get("definition").s()),
@@ -375,7 +419,10 @@ public class DynamoDbStateStore implements StateStore {
                 startedAt == null ? null : Instant.ofEpochMilli(Long.parseLong(startedAt.n())),
                 chainId == null ? null : chainId.s(),
                 traceparent == null ? null : Lineage.trace(traceparent.s(), tracestate == null ? null : tracestate.s()),
-                listenState == null ? null : Json.read(listenState.s().getBytes()));
+                listenState == null ? null : Json.read(listenState.s().getBytes()),
+                decisions == null ? null : Json.read(decisions.s().getBytes()),
+                sensitivity == null ? null : Sensitivity.parseOrRestricted(sensitivity.s()),
+                composition == null ? null : Json.read(composition.s().getBytes()));
     }
 
     private static void putIfSet(Map<String, AttributeValue> item, String name, String value) {

@@ -2,6 +2,9 @@ package io.stintflow.aws;
 
 import java.nio.charset.StandardCharsets;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import io.stintflow.spi.wire.StintEvents;
 import io.stintflow.wire.CeWire;
 import io.stintflow.wire.DefaultCloudEventCodec;
 import io.stintflow.spi.TaskResultHandler;
@@ -29,6 +32,23 @@ public abstract class AbstractSqsResultTransport implements TaskTransport {
     protected final CloudEventCodec codec = new DefaultCloudEventCodec();
 
     private SqsPollLoop loop;
+
+    /**
+     * SDD 3a.9: {@code event} with the {@code stintreplyto} extension, or unchanged when {@code replyTo} is null — an
+     * invoke of an engine with no reply name is byte for byte what it was.
+     */
+    protected static CloudEvent withReplyTo(CloudEvent event, String replyTo) {
+        return replyTo == null ? event : CloudEventBuilder.from(event).withExtension(StintEvents.EXT_REPLY_TO, replyTo)
+                .build();
+    }
+
+    /** SDD 3a.9: {@code name} if it is a valid reply name (or null), else an {@link IllegalArgumentException}. */
+    protected static String checkedReplyTo(String name) {
+        if (name != null && !StintEvents.REPLY_TO_NAME.matcher(name).matches()) {
+            throw new IllegalArgumentException("A reply name is [A-Za-z0-9_.-]{1,80}, got " + name);
+        }
+        return name;
+    }
 
     /** Subclasses provide the SQS client and the result-queue URL used for inbound results. */
     protected abstract SqsClient sqs();

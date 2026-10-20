@@ -1,0 +1,372 @@
+{
+  "reflection": [
+    {
+      "type": "dev.langchain4j.data.message.AiMessage$Builder",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.AiMessage",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.AudioContent",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.ChatMessage",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.ChatMessageType",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.Content",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.ContentType",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.CustomMessage",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.ImageContent$DetailLevel",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.ImageContent",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$AiMessageMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$AudioContentMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$AudioMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$ChatMessageMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$ContentMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$CustomMessageMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$ImageContentMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$ImageMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$PdfFileContentMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$PdfFileMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$SystemMessageMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$TextContentMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$ToolExecutionRequestMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$ToolExecutionResultMessageMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$UserMessageMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$VideoContentMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec$VideoMixin",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.JacksonChatMessageJsonCodec",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.PdfFileContent",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.SystemMessage",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.TextContent",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.ToolExecutionResultMessage$Builder",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.ToolExecutionResultMessage",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.UserMessage$Builder",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.UserMessage",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.message.VideoContent",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.agent.tool.ToolExecutionRequest$Builder",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.agent.tool.ToolExecutionRequest",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.image.Image$Builder",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.image.Image",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.audio.Audio$Builder",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.audio.Audio",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.video.Video$Builder",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.video.Video",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.pdf.PdfFile$Builder",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "dev.langchain4j.data.pdf.PdfFile",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "allPublicConstructors": true,
+      "allPublicMethods": true
+    }
+  ]
+}

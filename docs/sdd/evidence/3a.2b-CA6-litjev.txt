@@ -1,0 +1,43 @@
+SDD 3a.2b, CA6 — manual run of the example's triage mode against a real LitJev (12/10/2026)
+
+Hardware: AMD Ryzen 5 3600 (6c/12t), 32 GB RAM (WSL2 sees 15 GB), NVIDIA GeForce RTX 2060 SUPER 8 GB (driver 610.88), Windows 11 Pro + WSL2 Ubuntu
+LitJev: github.com/zhengxuyu/litjev @ 2cd915aff989b37bb1c46ef5ae480c4a01501404 (Apache-2.0), backend transformers, readout content, uv sync --locked --python 3.13
+Runtime: CPython 3.13 (uv), torch 2.11.0+cu128 (CUDA available), transformers 5.17.0
+Model: Qwen/Qwen3.5-2B @ 15852e8c16360a2fea060d615a32b45270f8a8fc (Apache-2.0), --dtype float16
+Adapter: JevDecisionAdapter.server(LITJEV), base-uri http://127.0.0.1:8000, confidence source MAX_PROBABILITY (default), threshold 0.7 (default)
+Workflow: meeting-triage (classify-meeting choice ata/adr/runbook; is-urgent boolean with true/false descriptions)
+Data: docs/manual/local-decision/meetings (15 synthetic pt-BR meetings: 5 ata, 5 adr, 5 runbook; 7 urgent)
+
+First load: model download (~4.6 GB) and load took ~20 min (1223 s for the first request).
+Memory: LitJev process RSS 4.2 GiB (4,417,932 KB); GPU memory used on the device peaked at 7,845 MiB during the run, against ~2,700-2,900 MiB used before the model loaded (the Windows desktop): ~5 GB for LitJev.
+
+Probe of noul criteria (LitJev 2cd915a, content readout):
+  noul without criteria             -> 422 {"detail":"sequence item 0: expected str instance, NoneType found"}
+  noul with criteria true only      -> 422 (same)
+  noul with criteria true and false -> 200 {"type":"noul","noul":0.217...}
+  usage.input_tokens is 0 on the transformers backend too
+
+Run (java -jar quarkus-run.jar triage docs/manual/local-decision/meetings), exit code 0:
+TRIAGE adapter=AdapterDescriptor[id=litjev, provider=litjev, model=Qwen/Qwen3.5-2B, version=jev-adapter/1;server=litjev@2cd915a;readout=content, remote=false]
+TRIAGE 01-ata-planejamento.json doc ata->ata (p 0.981, gini 0.943, certain, 4703 ms) urgent false->false (0.941, certain, 415 ms)
+TRIAGE 02-ata-retrospectiva.json doc ata->ata (p 0.974, gini 0.925, certain, 7919 ms) urgent false->false (0.854, certain, 410 ms)
+TRIAGE 03-ata-alinhamento-cliente.json doc ata->ata (p 0.951, gini 0.859, certain, 846 ms) urgent true->false MISS (0.687, uncertain, 713 ms)
+TRIAGE 04-ata-onboarding.json doc ata->ata (p 0.963, gini 0.891, certain, 810 ms) urgent false->false (0.901, certain, 515 ms)
+TRIAGE 05-ata-incidente-revisao.json doc ata->ata (p 0.992, gini 0.975, certain, 380 ms) urgent true->false MISS (0.840, certain, 351 ms)
+TRIAGE 06-adr-fila-mensagens.json doc adr->adr (p 0.882, gini 0.687, certain, 406 ms) urgent false->false (0.924, certain, 372 ms)
+TRIAGE 07-adr-banco-dados.json doc adr->ata MISS (p 0.892, gini 0.708, certain, 727 ms) urgent false->false (0.931, certain, 744 ms)
+TRIAGE 08-adr-autenticacao.json doc adr->ata MISS (p 0.928, gini 0.799, certain, 629 ms) urgent true->false MISS (0.730, certain, 558 ms)
+TRIAGE 09-adr-monorepo.json doc adr->ata MISS (p 0.556, gini 0.251, uncertain, 202 ms) urgent false->false (0.863, certain, 161 ms)
+TRIAGE 10-adr-versionamento-api.json doc adr->ata MISS (p 0.874, gini 0.664, certain, 292 ms) urgent true->false MISS (0.873, certain, 169 ms)
+TRIAGE 11-runbook-reinicio-servico.json doc runbook->ata MISS (p 0.878, gini 0.675, certain, 416 ms) urgent true->false MISS (0.854, certain, 368 ms)
+TRIAGE 12-runbook-backup.json doc runbook->ata MISS (p 0.757, gini 0.425, certain, 447 ms) urgent false->false (0.877, certain, 393 ms)
+TRIAGE 13-runbook-rotacao-chaves.json doc runbook->ata MISS (p 0.967, gini 0.905, certain, 671 ms) urgent true->false MISS (0.810, certain, 462 ms)
+TRIAGE 14-runbook-fila-travada.json doc runbook->ata MISS (p 0.926, gini 0.791, certain, 184 ms) urgent true->false MISS (0.843, certain, 155 ms)
+TRIAGE 15-runbook-deploy.json doc runbook->ata MISS (p 0.728, gini 0.369, certain, 482 ms) urgent false->false (0.931, certain, 358 ms)
+TRIAGE doc: 6/15 hits; urgent: 8/15 hits
+TRIAGE doc confidence (highest probability), hits:   n=6 min 0.882 median 0.963 max 0.992
+TRIAGE doc confidence (highest probability), misses: n=9 min 0.556 median 0.878 max 0.967
+TRIAGE doc confidence (Gini), all:                   n=15 min 0.251 median 0.791 max 0.975
+TRIAGE urgent confidence, hits:   n=8 min 0.854 median 0.901 max 0.941
+TRIAGE urgent confidence, misses: n=7 min 0.687 median 0.840 max 0.873
+TRIAGE latency per decision (ms): n=30 min 154.902 median 414.985 max 7919.443, p95 4702.985

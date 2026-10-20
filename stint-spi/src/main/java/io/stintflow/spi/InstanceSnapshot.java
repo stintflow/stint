@@ -31,6 +31,14 @@ import com.fasterxml.jackson.databind.JsonNode;
  * @param listenState the engine's opaque {@code listen} bookkeeping (SDD 2.3, sec. 8b/8c): the active wait's
  *                    keys and the events it already consumed, plus the ids of recently consumed events;
  *                    {@code null} when the instance never listened
+ * @param decisions   SDD 3a.1, RF5: what the engine recorded about the results it checked against a contract (a
+ *                    decision's provenance), by the pointer of the task — an object, or {@code null} when none
+ * @param sensitivity SDD 3a.5, RF1: the instance's level ({@link Sensitivity}) — only rises, lowered only by a verified
+ *                    redaction; {@code null} for an instance that has none (no policy, no level on its events)
+ * @param composition SDD 3a.8: the engine's opaque bookkeeping of an instance that fans out with {@code for}/{@code run} (the
+ *                    state of the join, under {@code for}) or that was started by one (the link to its parent, under
+ *                    {@code parent}); {@code null} for an instance that does neither, and for every snapshot written
+ *                    before SDD 3a.8
  */
 public record InstanceSnapshot(
         String instanceId,
@@ -46,14 +54,44 @@ public record InstanceSnapshot(
         Instant startedAt,
         String chainId,
         Lineage suspendedAt,
-        JsonNode listenState) {
+        JsonNode listenState,
+        JsonNode decisions,
+        Sensitivity sensitivity,
+        JsonNode composition) {
+
+    /** The pre-SDD-3a.8 shape: no composition (the instance neither fans out nor was started by a fan-out). */
+    public InstanceSnapshot(String instanceId, WorkflowRef definition, String position, String waitingKey,
+                            JsonNode context, InstanceStatus status, long version, RetryState retryState,
+                            Instant updatedAt, JsonNode input, Instant startedAt, String chainId, Lineage suspendedAt,
+                            JsonNode listenState, JsonNode decisions, Sensitivity sensitivity) {
+        this(instanceId, definition, position, waitingKey, context, status, version, retryState, updatedAt, input,
+                startedAt, chainId, suspendedAt, listenState, decisions, sensitivity, null);
+    }
+
+    /** The pre-SDD-3a.5 shape: no sensitivity level (an instance without a policy, or written before 3a.5). */
+    public InstanceSnapshot(String instanceId, WorkflowRef definition, String position, String waitingKey,
+                            JsonNode context, InstanceStatus status, long version, RetryState retryState,
+                            Instant updatedAt, JsonNode input, Instant startedAt, String chainId, Lineage suspendedAt,
+                            JsonNode listenState, JsonNode decisions) {
+        this(instanceId, definition, position, waitingKey, context, status, version, retryState, updatedAt, input,
+                startedAt, chainId, suspendedAt, listenState, decisions, null, null);
+    }
+
+    /** The pre-SDD-3a.1 shape: no decision records. 
+    public InstanceSnapshot(String instanceId, WorkflowRef definition, String position, String waitingKey,
+                            JsonNode context, InstanceStatus status, long version, RetryState retryState,
+                            Instant updatedAt, JsonNode input, Instant startedAt, String chainId, Lineage suspendedAt,
+                            JsonNode listenState) {
+        this(instanceId, definition, position, waitingKey, context, status, version, retryState, updatedAt, input,
+                startedAt, chainId, suspendedAt, listenState, null);
+    }
 
     /** The pre-SDD-2.3 shape: no {@code listen} bookkeeping. */
     public InstanceSnapshot(String instanceId, WorkflowRef definition, String position, String waitingKey,
                             JsonNode context, InstanceStatus status, long version, RetryState retryState,
                             Instant updatedAt, JsonNode input, Instant startedAt, String chainId, Lineage suspendedAt) {
         this(instanceId, definition, position, waitingKey, context, status, version, retryState, updatedAt, input,
-                startedAt, chainId, suspendedAt, null);
+                startedAt, chainId, suspendedAt, null, null);
     }
 
     /** The pre-SDD-2.5 shape: no chain, no trace context. */
@@ -61,7 +99,7 @@ public record InstanceSnapshot(
                             JsonNode context, InstanceStatus status, long version, RetryState retryState,
                             Instant updatedAt, JsonNode input, Instant startedAt) {
         this(instanceId, definition, position, waitingKey, context, status, version, retryState, updatedAt, input,
-                startedAt, null, null, null);
+                startedAt, null, null, null, null);
     }
 
     public enum InstanceStatus {RUNNING, WAITING, COMPLETED, FAILED, ABORTED}

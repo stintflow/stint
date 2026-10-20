@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "runbook",
+    "urgent": true
+  },
+  "transcript": "Tema: como reiniciar o serviço de faturas\nPessoa A: o serviço está fora do ar agora; vamos escrever os passos enquanto executamos.\nPessoa B: passo um, drenar o tráfego do nó; passo dois, reiniciar o processo.\nPessoa C: passo três, conferir o painel de saúde; passo quatro, devolver o tráfego.\nPessoa A: se o painel não ficar verde em cinco minutos, acionar o plantão."
+}

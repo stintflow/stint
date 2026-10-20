@@ -31,6 +31,59 @@
             <groupId>io.github.stintflow</groupId>
             <artifactId>stint-aws</artifactId>
         </dependency>
+        <!-- SDD 3a.3: LLM workers end to end (fake model only), and their DynamoDB conversation store on floci -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-langchain4j</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-aws-conversations</artifactId>
+        </dependency>
+        <!-- SDD 3a.5: the reference redactor end to end -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-redaction</artifactId>
+        </dependency>
+        <!-- SDD 3a.6: the milestone's workers and corpus, on floci with the SQS binding -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-example-product-meeting</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- SDD 3a.2: decision adapters end to end (fake adapter, LLM over a fake model, Jev over a fake server) -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-decision-jev</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-decision-jev</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <!-- SDD 3a.7: the SQS worker binding, and its manual scheduler for the floci ITs -->
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-aws-worker</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-aws-worker</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-otel</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- reuse the build-report workflow + handlers -->
         <dependency>
             <groupId>io.github.stintflow</groupId>
@@ -77,6 +130,12 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>sns</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- SDD 3a.5: a KMS key on floci, for SSE-KMS -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kms</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

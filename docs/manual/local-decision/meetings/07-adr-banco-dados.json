@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "adr",
+    "urgent": false
+  },
+  "transcript": "Tema: banco de dados do novo serviço de catálogo\nPessoa A: o contexto é que o catálogo tem leituras muito mais frequentes que escritas.\nPessoa B: comparamos um banco relacional e um banco de documentos.\nPessoa C: a decisão é usar o banco relacional com réplicas de leitura, pela consistência.\nPessoa A: vamos revisar a decisão daqui a seis meses com dados de uso."
+}

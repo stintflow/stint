@@ -1,0 +1,17 @@
+SDD 3a.2, CA12 — native build and run of examples/stint-example-ai-worker with the LLM and Jev decision adapters (12/10/2026)
+
+Versions: Quarkus 3.33.2, dev.langchain4j:langchain4j 1.11.7, Jev adapter over the JDK HttpClient (no third-party client), JDK 25.0.3 (build), Mandrel 25.0.4.1 (native)
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-ai-worker
+[io.quarkus.deployment.pkg.steps.NativeImageBuildStep] Running Quarkus native-image plugin on MANDREL 25.0.4.1 JDK 25.0.4.1+1-LTS
+                        5,4s (8,5% of total time) in 879 GCs | Peak RSS: 2,55GB | CPU load: 9,02
+Finished generating 'stint-example-ai-worker-0.1.0-SNAPSHOT-runner' in 1m 3s.
+BUILD SUCCESS
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0), exit code 0. The Jev adapter calls an in-process fake of POST /v1/systemone on 127.0.0.1 (no account, no key):
+INFO  [io.quarkus] (main) stint-example-ai-worker 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.005s. 
+INFO  [io.stintflow.worker.decision.DecisionUsageSink] () Decision usage of task /do/1/classify in instance 0da74062-e7e0-440b-a745-5ddc08869394 (chain chn-35b50b53-86df-3b8d-9cdc-4589fd739ba0, attempt 1): adapter=llm, provider=fake, model=fake-meeting-rules, calls=1, inputTokens=41, outputTokens=8, latencyMs=0, estimatedCost=null
+INFO  [io.stintflow.worker.decision.DecisionUsageSink] (ForkJoinPool.commonPool-worker-1) Decision usage of task /do/2/urgent in instance 0da74062-e7e0-440b-a745-5ddc08869394 (chain chn-35b50b53-86df-3b8d-9cdc-4589fd739ba0, attempt 1): adapter=jev, provider=typesafe, model=jev-fake, calls=1, inputTokens=40, outputTokens=1, latencyMs=3, estimatedCost=null
+INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/3/summarize in instance 0da74062-e7e0-440b-a745-5ddc08869394 (chain chn-35b50b53-86df-3b8d-9cdc-4589fd739ba0, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=73, outputTokens=10, toolCalls=0, latencyMs=0, finishReason=STOP
+INFO  [io.stintflow.worker.langchain4j.UsageSink] () LLM usage of task /do/4/extract in instance 0da74062-e7e0-440b-a745-5ddc08869394 (chain chn-35b50b53-86df-3b8d-9cdc-4589fd739ba0, attempt 1): model=fake-meeting-rules, calls=1, inputTokens=119, outputTokens=29, toolCalls=0, latencyMs=0, finishReason=STOP
+AI-WORKER result={"transcript":"Topic: quarterly planning\nSpeaker A: the release slips one week.\nSpeaker B: I will update the roadmap.\nSpeaker A: and I will tell the support team.","doc":"ata","urgent":false,"summary":{"topic":"quarterly planning","speakers":2},"actions":{"items":["Speaker B: I will update the roadmap.","Speaker A: and I will tell the support team."],"contextMessages":3}}
+AI-WORKER OK

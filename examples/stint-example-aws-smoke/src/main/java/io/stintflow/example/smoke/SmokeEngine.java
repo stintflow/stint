@@ -1,18 +1,14 @@
 package io.stintflow.example.smoke;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.InstantSource;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import io.cloudevents.CloudEvent;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import io.stintflow.aws.DynamoDbStateStore;
@@ -22,6 +18,7 @@ import io.stintflow.aws.EventBridgeSchedulerTimerService;
 import io.stintflow.aws.S3BlobStore;
 import io.stintflow.aws.SqsDelayTimerService;
 import io.stintflow.aws.SqsTaskTransport;
+import io.stintflow.aws.worker.SqsWorkerBinding;
 import io.stintflow.core.DelayRoutingTimerService;
 import io.stintflow.core.WorkflowDefinition;
 import io.stintflow.core.WorkflowEngine;
@@ -33,7 +30,6 @@ import io.stintflow.dsl.DslLoader;
 import io.stintflow.dsl.LoadOptions;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.WorkflowRef;
-import io.stintflow.wire.CeWire;
 import io.stintflow.wire.Json;
 import io.stintflow.worker.TaskHandlerRegistry;
 import io.stintflow.worker.WorkerRuntime;
@@ -45,12 +41,12 @@ import software.amazon.awssdk.services.eventbridge.EventBridgeClient;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.scheduler.SchedulerClient;
 import software.amazon.awssdk.services.sqs.SqsClient;
-import software.amazon.awssdk.services.sqs.model.Message;
 
 /**
  * SDD 2.7: the engine of the smoke app, wired from the clients the Quarkus AWS extensions produce. It uses:
  * <ul>
- *   <li>tasks over SQS, with an in-process worker loop standing in for a deployed worker;</li>
+ *   <li>tasks over SQS, with an in-process worker standing in for a deployed one — the SQS worker binding of
+ *       SDD 3a.7, four deliveries at a time;</li>
  *   <li>state, waits and outbox in DynamoDB;</li>
  *   <li>blobs in S3;</li>
  *   <li>facts on the EventBridge domain bus;</li>
@@ -94,12 +90,7 @@ public class SmokeEngine {
     String bucket;
 
     private WorkflowEngine engine;
-    private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "smoke-worker");
-        t.setDaemon(true);
-        return t;
-    });
-    private volatile boolean running = true;
+    private SqsWorkerBinding worker;
 
     void onStart(@Observes StartupEvent event) throws Exception {
         BlobStore blobs = new S3BlobStore(s3, bucket);
@@ -123,34 +114,18 @@ public class SmokeEngine {
             out.put("chainId", ctx.chainId());
             return java.util.concurrent.CompletableFuture.completedFuture(out);
         }), blobs);
-        worker.submit(() -> workLoop(runtime));
+        worker = SqsWorkerBinding.builder().sqs(sqs).invokeQueueUrl(invokeQueue).resultQueueUrl(resultQueue)
+                .runtime(runtime).concurrency(4).waitTime(Duration.ofSeconds(5)).build().start();
     }
 
     void onStop(@Observes ShutdownEvent event) {
-        running = false;
-        worker.shutdownNow();
+        if (worker != null) {
+            worker.close();
+        }
     }
 
     public WorkflowEngine engine() {
         return engine;
     }
 
-    /** A prototype worker binding: invoke queue -> worker runtime -> result queue, acked after the result is sent. */
-    private void workLoop(WorkerRuntime runtime) {
-        while (running) {
-            try {
-                for (Message m : sqs.receiveMessage(r -> r.queueUrl(invokeQueue).waitTimeSeconds(5)).messages()) {
-                    CloudEvent result = runtime.handle(CeWire.fromJson(m.body().getBytes(StandardCharsets.UTF_8)))
-                            .toCompletableFuture().get(30, TimeUnit.SECONDS);
-                    sqs.sendMessage(r -> r.queueUrl(resultQueue)
-                            .messageBody(new String(CeWire.toJson(result), StandardCharsets.UTF_8)));
-                    sqs.deleteMessage(r -> r.queueUrl(invokeQueue).receiptHandle(m.receiptHandle()));
-                }
-            } catch (Exception e) {
-                if (running) {
-                    org.jboss.logging.Logger.getLogger(SmokeEngine.class).warn("Worker poll failed", e);
-                }
-            }
-        }
-    }
 }

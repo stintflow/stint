@@ -6,7 +6,7 @@ package io.stintflow.core.model;
  * for later SDDs, not implemented here.
  */
 public sealed interface TaskNode permits DoNode, CallRemoteNode, SetNode, SwitchNode, TryNode, EmitNode,
-        ListenNode {
+        ListenNode, ForRunNode {
 
     /** The task's name, as it appears as the single key of its {@code do} list entry. */
     String name();

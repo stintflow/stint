@@ -1,0 +1,15 @@
+id: m-001
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: af_heart }, { id: s2, voice: am_adam } ]
+script:
+  - { speaker: s1, text: "Thanks for joining the weekly recap of the checkout project. Let's go through the action items." }
+  - { speaker: s2, text: "SYNTH-PII-0101 Rivera shared the new mockups. Send questions to SYNTH-PII-0102@example.com." }
+  - { speaker: s1, text: "I will update the checkout copy by Friday." }
+  - { speaker: s2, text: "I will schedule the usability test with five customers." }
+expected:
+  docType: ata
+  urgent: false
+  items: [ "I will update the checkout copy by Friday.", "I will schedule the usability test with five customers." ]
+  review: false
+pii: [ SYNTH-PII-0101, SYNTH-PII-0102 ]

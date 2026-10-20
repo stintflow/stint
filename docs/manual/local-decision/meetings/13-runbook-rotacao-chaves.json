@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "runbook",
+    "urgent": true
+  },
+  "transcript": "Tema: rotação das chaves de acesso\nPessoa A: uma chave de teste foi exposta hoje; o procedimento precisa rodar agora, não no trimestre.\nPessoa B: passo um, gerar a nova chave no cofre; passo dois, publicar para os serviços.\nPessoa C: passo três, aguardar a confirmação de uso; passo quatro, revogar a chave antiga.\nPessoa A: em caso de erro, voltar para a chave antiga e abrir um chamado."
+}

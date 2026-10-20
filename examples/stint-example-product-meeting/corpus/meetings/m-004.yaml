@@ -1,0 +1,14 @@
+id: m-004
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: am_adam }, { id: s2, voice: af_heart } ]
+script:
+  - { speaker: s1, text: "We need a decision record for the event bus. The options were a queue per service or one shared topic." }
+  - { speaker: s2, text: "We decided to adopt one shared topic with schemas. SYNTH-PII-0401 Novak raised the ordering concern." }
+  - { speaker: s1, text: "I will write down the consequences for consumers." }
+expected:
+  docType: adr
+  urgent: false
+  items: [ "I will write down the consequences for consumers." ]
+  review: false
+pii: [ SYNTH-PII-0401 ]

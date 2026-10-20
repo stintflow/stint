@@ -1,0 +1,16 @@
+SDD 3a.4 — native build and run of examples/stint-example-ai-worker with the example review channel (13/10/2026)
+
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-ai-worker
+[INFO] [io.quarkus.deployment.pkg.steps.NativeImageBuildStep] Running Quarkus native-image plugin on MANDREL 25.0.4.1 JDK 25.0.4.1+1-LTS
+                        5,4s (8,4% of total time) in 828 GCs | Peak RSS: 2,51GB | CPU load: 9,08
+Finished generating 'stint-example-ai-worker-0.1.0-SNAPSHOT-runner' in 1m 4s.
+[INFO] BUILD SUCCESS
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0), exit code 0. After meeting-notes, meeting-review asks the business representative to approve two items; the program answers through the channel's HTTP endpoint (JDK HttpServer, loopback), rejecting item-2 with a note by pointer; the flow goes to revise and the correction is exported as JSONL.
+2026-10-13 21:28:01,579 INFO  [io.quarkus] (main) stint-example-ai-worker 0.1.0-SNAPSHOT native (powered by Quarkus 3.33.2) started in 0.009s. 
+AI-WORKER result={"transcript":"Topic: quarterly planning\nSpeaker A: the release slips one week.\nSpeaker B: I will update the roadmap.\nSpeaker A: and I will tell the support team.","doc":"ata","urgent":false,"summary":{"topic":"quarterly planning","speakers":2},"actions":{"items":["Speaker B: I will update the roadmap.","Speaker A: and I will tell the support team."],"contextMessages":3}}
+AI-WORKER urgent decision={"kind":"boolean","value":false,"confidence":0.8,"uncertain":false,"provenance":{"adapter":"litjev","provider":"litjev","model":"synthetic/qwen-checkpoint","version":"jev-adapter/1;server=litjev"},"attempt":1,"correlationId":"000cdc4b-5a52-4a6b-97e6-5da70887f4da","decidedAt":"2026-10-13T21:28:01.607567868Z","count":1}
+AI-WORKER open reviews=[{"kind":"approval","options":[],"items":["item-1","item-2"],"materialRef":"file:///synthetic/minutes-1.md","reviewId":"2183472d-5786-41b8-8d36-671810c0681f:/do/0/approveMinutes:1","role":"business-rep","deadline":"2026-10-14T21:28:01.621770696Z","definition":"examples:meeting-review:1.0.0","pointer":"/do/0/approveMinutes"}]
+AI-WORKER review answer status=202 result={"verdict":"rejected","rejected":["item-2"],"noteRef":"file:///synthetic/note-1.md","revise":true}
+AI-WORKER corrections.jsonl={"definition":"examples:meeting-review:1.0.0","instanceId":"2183472d-5786-41b8-8d36-671810c0681f","pointer":"/do/0/approveMinutes","reviewId":"2183472d-5786-41b8-8d36-671810c0681f:/do/0/approveMinutes:1","kind":"approval","sensitivity":"internal","materialRef":"file:///synthetic/minutes-1.md","decision":null,"human":{"verdict":"rejected","rejectedItems":["item-2"],"noteRef":"file:///synthetic/note-1.md"},"role":"business-rep","reviewer":"rev-demo","requestedAt":"2026-10-13T21:28:01.621770696Z","reviewedAt":"2026-10-13T21:28:01.624770045Z","escalated":false}
+AI-WORKER OK

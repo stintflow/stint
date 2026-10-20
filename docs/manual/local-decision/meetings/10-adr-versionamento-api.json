@@ -1,0 +1,7 @@
+{
+  "label": {
+    "doc": "adr",
+    "urgent": true
+  },
+  "transcript": "Tema: versionamento da API pública\nPessoa A: um parceiro quebrou a integração esta manhã por causa de uma mudança de campo.\nPessoa B: decidimos versionar a API pelo caminho da URL, a partir da próxima publicação, que é hoje.\nPessoa C: a versão antiga fica disponível por seis meses.\nPessoa A: registramos a decisão e as opções descartadas."
+}

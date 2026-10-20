@@ -5,6 +5,7 @@ import java.util.List;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import io.stintflow.core.model.CallRemoteNode;
+import io.stintflow.core.model.ForRunNode;
 import io.stintflow.core.model.ListenNode;
 import io.stintflow.core.model.TryNode;
 
@@ -54,6 +55,19 @@ public sealed interface InterpretResult {
         }
     }
 
+    /**
+     * SDD 3a.8: the walk reached a {@code for} over {@code run: workflow}. {@code items} is what its {@code in} evaluated
+     * to (the engine checks it is an array within the limit), {@code input} the task input the children's inputs are
+     * evaluated against.
+     */
+    record SuspendOnFor(ForRunNode node, String pointer, JsonNode items, JsonNode input, JsonNode context,
+                        List<Emitted> emitted) implements InterpretResult {
+        @Override
+        public InterpretResult withEmitted(List<Emitted> emitted) {
+            return new SuspendOnFor(node, pointer, items, input, context, List.copyOf(emitted));
+        }
+    }
+
     record Complete(String pointer, JsonNode context, List<Emitted> emitted) implements InterpretResult {
         @Override
         public InterpretResult withEmitted(List<Emitted> emitted) {
@@ -80,6 +94,11 @@ public sealed interface InterpretResult {
     static InterpretResult suspendOnListen(ListenNode listen, TryNode tryNode, String pointer, JsonNode input,
             JsonNode context) {
         return new SuspendOnListen(listen, tryNode, pointer, input, context, List.of());
+    }
+
+    static InterpretResult suspendOnFor(ForRunNode node, String pointer, JsonNode items, JsonNode input,
+            JsonNode context) {
+        return new SuspendOnFor(node, pointer, items, input, context, List.of());
     }
 
     static InterpretResult complete(String pointer, JsonNode context) {

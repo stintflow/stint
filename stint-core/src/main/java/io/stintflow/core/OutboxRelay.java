@@ -13,6 +13,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import io.cloudevents.CloudEvent;
 import io.stintflow.spi.EventPublisher;
@@ -48,6 +49,8 @@ public final class OutboxRelay {
     private final InstantSource clock;
     private final Duration grace;
     private final int batch;
+    /** SDD 3a.8: handles the engine's own entries (types under {@code io.stintflow.instance.}); {@code null} = none. */
+    private final Function<CloudEvent, CompletionStage<Void>> internal;
 
     private ScheduledExecutorService scheduler;
 
@@ -56,6 +59,17 @@ public final class OutboxRelay {
     }
 
     public OutboxRelay(StateStore state, EventPublisher publisher, InstantSource clock, Duration grace, int batch) {
+        this(state, publisher, clock, grace, batch, null);
+    }
+
+    /**
+     * SDD 3a.8: as above, plus a handler for the engine's own entries — a child to start, to cancel, a child that
+     * finished — which travel through the same outbox but are acted on in the engine, never published. {@code publisher}
+     * may then be {@code null}: an engine that fans out but emits no facts.
+     */
+    public OutboxRelay(StateStore state, EventPublisher publisher, InstantSource clock, Duration grace, int batch,
+            Function<CloudEvent, CompletionStage<Void>> internal) {
+        this.internal = internal;
         this.state = state;
         this.publisher = publisher;
         this.clock = clock;
@@ -116,6 +130,29 @@ public final class OutboxRelay {
         }
     }
 
+    /** The type prefix of the engine's own entries (SDD 3a.8). */
+    static final String INTERNAL_PREFIX = "io.stintflow.instance.";
+
+    /** Act on the entry in the engine, then remove it; {@code false} (and the entry kept) on any failure. */
+    private CompletionStage<Boolean> handleInternal(OutboxEntry entry, CloudEvent event) {
+        CompletionStage<Void> handled;
+        try {
+            handled = internal.apply(event);
+        } catch (RuntimeException e) {
+            handled = CompletableFuture.failedFuture(e);
+        }
+        return handled
+                .thenCompose(v -> state.removeOutbox(entry.eventId()))
+                .handle((v, ex) -> {
+                    if (ex != null) {
+                        LOG.log(Level.WARNING, "Internal entry " + entry.eventId() + " (" + event.getType()
+                                + ") failed; it stays in the outbox", ex);
+                        return false;
+                    }
+                    return true;
+                });
+    }
+
     /** Publish, then remove; {@code false} (and the entry kept) on any failure. */
     private CompletionStage<Boolean> publishOne(OutboxEntry entry) {
         CloudEvent event;
@@ -123,6 +160,13 @@ public final class OutboxRelay {
             event = CeWire.fromJson(entry.event().getBytes(StandardCharsets.UTF_8));
         } catch (RuntimeException e) {
             LOG.log(Level.ERROR, "Outbox entry " + entry.eventId() + " is not a valid CloudEvent", e);
+            return CompletableFuture.completedFuture(false);
+        }
+        if (internal != null && event.getType().startsWith(INTERNAL_PREFIX)) {
+            return handleInternal(entry, event);
+        }
+        if (publisher == null) {
+            LOG.log(Level.ERROR, "Fact {0} cannot be published: this engine has no EventPublisher", entry.eventId());
             return CompletableFuture.completedFuture(false);
         }
         if (StintEvents.isReservedType(event.getType())) {

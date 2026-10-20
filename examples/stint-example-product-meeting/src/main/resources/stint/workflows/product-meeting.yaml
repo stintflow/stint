@@ -1,0 +1,138 @@
+# SDD 3a.6: the Phase 3a milestone. A meeting's recording (by pointer) becomes approved, published minutes:
+# transcription -> redaction -> decisions (document type, with a human review when unsure; urgency) -> structuring by
+# an LLM -> approval item by item -> publishing to the one allowed space -> facts (ids and pointers only).
+# The raw audio and its transcript are restricted (SDD 3a.5, E1): only 'transcribe' and 'redactor' see them, and the
+# redaction's export drops the raw transcript's pointer.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: product-meeting
+  version: '1.0.0'
+  metadata:
+    x-stint-policy:
+      sensitivity:
+        from: '${ .[0].data.label }'
+      routes:
+        restricted: [transcribe, redactor]
+        confidential: [redactor, decide-doc-type, decide-urgency, structure-minutes, publish-page]
+        internal: ['*']
+      retention:
+        restricted: { days: 7 }
+        raw-audio: { days: 7 }
+        raw-transcript: { days: 7 }
+        minutes: { days: 90 }
+      review:
+        sources: [https://review-channel.example]
+schedule:
+  on:
+    one:
+      with: { type: io.stintflow.examples.meeting-recorded.v1 }
+do:
+  - meeting:
+      set: '${ .[0].data | {meetingId: .meetingId, audioRef: .audioRef, language: .language} }'
+      export: { as: '${ . }' }
+  - transcribe:
+      try:
+        - run:
+            call: remote
+            with:
+              task: transcribe
+              input: '${ {audioRef: $context.audioRef, language: $context.language} }'
+            timeout: { after: { minutes: 30 } }
+            export: { as: '${ $context + {transcriptRef: .transcriptRef, audioSeconds: .durationSeconds} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
+        retry:
+          delay: { seconds: 30 }
+          backoff: { exponential: {} }
+          limit:
+            attempt: { count: 5 }
+  - redact:
+      call: redact
+      with:
+        task: redactor
+        input: '${ $context.transcriptRef }'
+        lowersTo: confidential
+      onDoubt: humanCheck
+      export: { as: '${ {meetingId: $context.meetingId, redacted: .output} }' }
+  - docType:
+      call: decision
+      with:
+        task: decide-doc-type
+        kind: choice
+        input: '${ {text: $context.redacted} }'
+        options:
+          - ata: { description: "Meeting minutes" }
+          - adr: { description: "An architecture decision record" }
+          - runbook: { description: "Operating steps" }
+      onUncertain:
+        review:
+          role: business-rep
+          material: '${ "stint-review://meetings/" + $context.meetingId }'
+          deadline: { hours: 24 }
+          remind: { hours: 20 }
+          escalate: { role: tech-rep, after: { hours: 24 } }
+          onTimeout: { value: ata }
+      export: { as: '${ $context + {docType: .value, docTypeReviewed: (.reviewed != null)} }' }
+  - urgency:
+      call: decision
+      with:
+        task: decide-urgency
+        kind: boolean
+        input: '${ {text: $context.redacted} }'
+        options:
+          - "true": { description: "Something must be done today: an outage, a failure or an urgent request" }
+          - "false": { description: "Nothing needs action today" }
+      export: { as: '${ $context + {urgent: .value} }' }
+  - structure:
+      call: remote
+      with:
+        task: structure-minutes
+        input: '${ {text: $context.redacted, docType: $context.docType, meetingId: $context.meetingId} }'
+      timeout: { after: { minutes: 10 } }
+      export: { as: '${ $context + {minutesRef: .minutesRef, itemIds: .itemIds} }' }
+  - approve:
+      call: review
+      with:
+        kind: approval
+        role: business-rep
+        material: '${ $context.minutesRef }'
+        items: '${ $context.itemIds }'
+        deadline: { hours: 48 }
+        remind: { hours: 40 }
+      onReject: rejected
+      export: { as: '${ $context + {verdict: .verdict, rejectedItems: .rejectedItems} }' }
+      then: publish
+  - publish:
+      call: remote
+      with:
+        task: publish-page
+        input: '${ {space: "PRODUCT", key: $context.meetingId, documentRef: $context.minutesRef, title: ("Minutes " + $context.meetingId + " (" + $context.docType + ")"), labels: [("doc-" + $context.docType)]} }'
+      export: { as: '${ $context + {pageId: .id, pageUrl: .url} }' }
+  - published:
+      emit:
+        event:
+          with:
+            source: https://product-meeting.example
+            type: io.stintflow.examples.minutes-published.v1
+            subject: '${ $context.meetingId }'
+            data: '${ {meetingId: $context.meetingId, pageId: $context.pageId, pageUrl: $context.pageUrl, docType: $context.docType, urgent: $context.urgent} }'
+      then: end
+  - rejected:
+      emit:
+        event:
+          with:
+            source: https://product-meeting.example
+            type: io.stintflow.examples.minutes-rejected.v1
+            subject: '${ $context.meetingId }'
+            data: '${ {meetingId: $context.meetingId, rejectedItems: $context.rejectedItems} }'
+      then: end
+  - humanCheck:
+      emit:
+        event:
+          with:
+            source: https://product-meeting.example
+            type: io.stintflow.examples.redaction-doubt.v1
+            subject: '${ $context.meetingId }'
+            data: '${ {meetingId: $context.meetingId} }'

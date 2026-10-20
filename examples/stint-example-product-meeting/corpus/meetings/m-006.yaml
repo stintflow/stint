@@ -1,0 +1,14 @@
+id: m-006
+language: en
+label: restricted                   # a raw recording is restricted; the redaction lowers it
+speakers: [ { id: s1, voice: am_michael }, { id: s2, voice: af_bella } ]
+script:
+  - { speaker: s1, text: "Let's write the runbook for restarting the search cluster, step by step." }
+  - { speaker: s2, text: "First drain the nodes, then restart them one at a time. SYNTH-PII-0601 Haddad knows the dashboards." }
+  - { speaker: s1, text: "I will add the health checks to the runbook." }
+expected:
+  docType: runbook
+  urgent: false
+  items: [ "I will add the health checks to the runbook." ]
+  review: false
+pii: [ SYNTH-PII-0601 ]

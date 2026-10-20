@@ -1,0 +1,4 @@
+# SDD 3a.2, CA4: the only names a test JVM may resolve (-Djdk.net.hosts.file, set in the parent pom).
+# floci, the fake Jev server and the Quarkus test apps are all on localhost; any provider host fails to resolve.
+127.0.0.1 localhost
+::1 localhost
