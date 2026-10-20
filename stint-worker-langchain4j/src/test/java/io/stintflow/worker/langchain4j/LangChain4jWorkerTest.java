@@ -157,12 +157,14 @@ class LangChain4jWorkerTest {
     @Test
     void each_exchange_expires_after_the_retention() {
         Fakes.Clock clock = new Fakes.Clock();
-        LangChain4jWorker worker = LangChain4jWorker.builder().chatModel(ScriptedModel.echoing()).conversations(store)
+        // the store reads time from the same fake clock: with the system clock this test expired on 19/10/2026
+        InMemoryConversationStore timed = new InMemoryConversationStore(clock);
+        LangChain4jWorker worker = LangChain4jWorker.builder().chatModel(ScriptedModel.echoing()).conversations(timed)
                 .clock(clock).retention(Duration.ofDays(7)).build();
 
         run(worker.handler(Chat.class, (ai, t) -> ai.reply("x")), task("i-A", "/do/0/a", "c-1"));
 
-        assertThat(store.committed(MemoryKey.instance("i-A")).toCompletableFuture().join()).singleElement()
+        assertThat(timed.committed(MemoryKey.instance("i-A")).toCompletableFuture().join()).singleElement()
                 .satisfies(e -> {
                     assertThat(e.committedAt()).isEqualTo(Fakes.T0);
                     assertThat(e.expiresAt()).isEqualTo(Fakes.T0.plus(Duration.ofDays(7)));

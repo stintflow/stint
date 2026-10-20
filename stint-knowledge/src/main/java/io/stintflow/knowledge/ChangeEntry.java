@@ -23,10 +23,12 @@ import io.stintflow.spi.Sensitivity;
  * @param sensitivity   the level of the thing
  * @param contentHash   a SHA-256 of its content, or {@code null} for a restricted thing (its hash would be derived data)
  * @param reason        for an erasure or an expiry, a code; otherwise {@code null}
+ * @param elementType   what the thing is: the node type of an entity (e.g. {@code System}), the relation type, {@code Passage} or
+ *                      {@code Link} — what SDD 3b.6 counts by over time
  */
 public record ChangeEntry(long sequence, Instant at, String batchId, String instanceId, String chainId,
         String definition, String schemaVersion, Op op, Kind kind, String targetId, String documentId,
-        Sensitivity sensitivity, String contentHash, String reason) {
+        Sensitivity sensitivity, String contentHash, String reason, String elementType) {
 
     public enum Op { ADD, UPDATE, REMOVE, EXPIRE, ERASE }
 

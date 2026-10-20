@@ -167,6 +167,8 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
         final Map<String, Integer> counts = new TreeMap<>();
         final List<URI> created = new ArrayList<>();
         final List<URI> retired = new ArrayList<>();
+        /** The node type of the entity the next {@link #log} entry is about (set just before it). */
+        String entityType;
         boolean changed;
 
         Tx(KnowledgeScope scope, State s, String batchId, Source source, String schemaVersion) {
@@ -179,10 +181,17 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
 
         void log(Op op, Kind kind, String targetId, String documentId, Sensitivity level, String contentHash,
                 String reason) {
+            String elementType = switch (kind) {
+                case PASSAGE -> "Passage";
+                case LINK -> "Link";
+                case RELATION -> targetId.substring(0, targetId.indexOf('|'));
+                case ENTITY -> entityType;
+            };
             s.log.append(new ChangeEntry(s.log.nextSequence(), clock.instant(), batchId, source.instanceId(),
                     source.chainId(), source.definition() == null ? null : source.definition().canonical(),
                     schemaVersion, op, kind, targetId, documentId, level,
-                    level == Sensitivity.RESTRICTED ? null : contentHash, reason));
+                    level == Sensitivity.RESTRICTED ? null : contentHash, reason, elementType));
+            entityType = null;
             counts.merge(op + "." + kind, 1, Integer::sum);
             changed = true;
         }
@@ -462,6 +471,7 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
             tx.retired.add(existing.contentRef());
         }
         s.graph.putNode(new InMemoryGraph.Node(e.entityId(), e.type(), label, properties, ref, level, sources));
+        tx.entityType = e.type();
         tx.log(existing == null ? Op.ADD : Op.UPDATE, Kind.ENTITY, e.entityId(), doc, level,
                 PassageIds.sha256Hex(e.label() + '\0' + new TreeMap<>(e.properties())),
                 existing != null && sameContent ? "evidence" : null);
@@ -524,6 +534,7 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
         } else {
             s.graph.putNode(new InMemoryGraph.Node(entityId, node.type(), node.label(), node.properties(),
                     node.contentRef(), node.level(), sources));
+            tx.entityType = node.type();
             tx.log(Op.UPDATE, Kind.ENTITY, entityId, doc, node.level(), null, "evidence");
         }
     }
@@ -545,6 +556,7 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
         if (node.contentRef() != null) {
             tx.retired.add(node.contentRef());
         }
+        tx.entityType = node.type();
         tx.log(op, Kind.ENTITY, entityId, doc, node.level(), null, reason);
     }
 

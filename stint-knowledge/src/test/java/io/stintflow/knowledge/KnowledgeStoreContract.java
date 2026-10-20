@@ -313,6 +313,12 @@ public abstract class KnowledgeStoreContract {
         }
         assertThat(entries.toString()).doesNotContain("retries a failed payment").doesNotContain("Checkout Service");
         assertThat(entries).extracting(ChangeEntry::kind).contains(Kind.PASSAGE, Kind.ENTITY, Kind.RELATION, Kind.LINK);
+        // SDD 3b.6 counts nodes by type over time: the log says what each thing is, without its content
+        assertThat(entries).filteredOn(e -> e.kind() == Kind.ENTITY).extracting(ChangeEntry::elementType).containsOnly("System");
+        assertThat(entries).filteredOn(e -> e.kind() == Kind.RELATION).extracting(ChangeEntry::elementType)
+                .containsOnly("affects");
+        assertThat(entries).filteredOn(e -> e.kind() == Kind.PASSAGE).extracting(ChangeEntry::elementType)
+                .containsOnly("Passage");
         assertThat(log(store, SCOPE)).isEqualTo(entries);   // the same, read again
         assertThat(store.changes(SCOPE, 3, 2).toCompletableFuture().get(10, TimeUnit.SECONDS))
                 .extracting(ChangeEntry::sequence).containsExactly(4L, 5L);
