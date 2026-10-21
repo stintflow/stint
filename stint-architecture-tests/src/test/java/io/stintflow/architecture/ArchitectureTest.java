@@ -10,7 +10,12 @@ import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
+import io.stintflow.knowledge.DeleteRequest;
+import io.stintflow.knowledge.KnowledgeBatch;
+import io.stintflow.knowledge.KnowledgeStore;
+import io.stintflow.knowledge.ReindexRequest;
 import io.stintflow.spi.AreaKeys;
+import io.stintflow.spi.BlobStore;
 
 /**
  * SDD 1.5, RF5: the single consolidated architecture suite for the whole reactor, replacing the
@@ -40,7 +45,8 @@ class ArchitectureTest {
                 "io.stintflow.knowledge", "io.stintflow.knowledge.inmemory", "io.stintflow.knowledge.schema",
                 "io.stintflow.knowledge.extraction",
                 "io.stintflow.worker.redaction", "io.stintflow.worker.transcription",
-                "io.stintflow.worker.publishing", "io.stintflow.worker.knowledge"}) {
+                "io.stintflow.worker.publishing", "io.stintflow.worker.knowledge",
+                "io.stintflow.knowledge.inspector"}) {
             assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))
                     .as("classes imported from %s", pkg).isNotEmpty();
         }
@@ -216,6 +222,25 @@ class ArchitectureTest {
             .that().doNotHaveSimpleName("EnvelopeBlobStore")
             .should().callMethod(AreaKeys.class, "newDataKey", String.class)
             .orShould().callMethod(AreaKeys.class, "unwrap", String.class, byte[].class);
+
+    /**
+     * SDD 3b.6, 4.6 (CA9): the inspector looks and never touches. It does not depend on the store that writes, on a batch, on an
+     * erasure or a reindexation request, on the blob store, nor on the in-memory adapters — only on the inspection port and its
+     * types. And nothing of the engine side or the workers depends on it.
+     */
+    @ArchTest
+    static final ArchRule the_inspector_is_read_only = noClasses()
+            .that().resideInAPackage("io.stintflow.knowledge.inspector..")
+            .should().dependOnClassesThat(com.tngtech.archunit.core.domain.JavaClass.Predicates.belongToAnyOf(
+                    KnowledgeStore.class, KnowledgeBatch.class, DeleteRequest.class, ReindexRequest.class, BlobStore.class))
+            .orShould().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge.inmemory..", "io.stintflow.inmemory..",
+                    "io.stintflow.worker..", "io.stintflow.core..");
+
+    @ArchTest
+    static final ArchRule engine_side_and_workers_do_not_depend_on_the_inspector = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.dsl..", "io.stintflow.worker..")
+            .should().dependOnClassesThat().resideInAPackage("io.stintflow.knowledge.inspector..");
 
     /** SDD 3b.1, 4.1: the port and its types do not know the adapters; backends plug in beside them. */
     @ArchTest

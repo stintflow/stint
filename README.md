@@ -38,8 +38,9 @@ stint-dsl                YAML/JSON front-end: compiles the CNCF DSL 1.0 into sti
 stint-worker-sdk         uniform TaskHandler programming model (depends on stint-wire, not stint-core)
 stint-otel               OpenTelemetry implementation of the tracing port (the only module using OTel)
 stint-worker-redaction   reference redactor for `call: redact`: layered, deterministic, no AI library (SDD 3a.5)
-stint-knowledge          KnowledgeStore port, graph schema, extraction pieces, in-memory adapters (SDD 3b.1, 3b.2)
+stint-knowledge          KnowledgeStore port, graph schema, extraction pieces, in-memory adapters (SDD 3b.1, 3b.2); KnowledgeInspector port (SDD 3b.6)
 stint-worker-knowledge   knowledge-write (by pointer, allowed scopes, personal-data gate), knowledge-retrieve (SDD 3b.3), and erase / verify / reindex / resolve-person (SDD 3b.5)
+stint-knowledge-inspector read-only look at a base: timeline from the change log, metrics, duplicate candidates, GraphML, HTTP API and a page (SDD 3b.6)
 stint-worker-transcription  Transcriber port, transcribe handler, Whisper (OpenAI-compatible) adapter (SDD 3a.6)
 stint-worker-publishing  PagePublisher port, publish-page handler, Confluence REST adapter and fake (SDD 3a.6)
 connectors/
@@ -718,6 +719,13 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   is not in the base yet. The fact `embedding-changed` starts `knowledge-reindex`: `reindex` recomputes every vector with the model
   the worker serves in one atomic step (one `REINDEX` entry in the change log), and the old vectors are not consulted again.
   Changing the graph schema is a re-ingestion, not a reindexation.
+- **Looking at a base (3b.6).** `KnowledgeInspector` is a read-only port on the store (`view` of the structure now, `changes` of the
+  log); `stint-knowledge-inspector` builds on it alone — it cannot reach the store that writes, and ArchUnit says so. From the log
+  it rebuilds the structure at any past point (ids, types, levels, who wrote; a name only for what still exists and is not
+  restricted — the log never held one), counts growth by day, chain and definition, flags pairs of names that may be one thing
+  written two ways (it does not merge), and exports GraphML. A small HTTP server (JDK only) serves the API and a page; every call
+  asks `InspectorAccess` first, and a base that does not exist is refused like one that is not allowed. Run it over the synthetic
+  corpus with `KnowledgeInspectorMain` (operator `demo`).
 - **Key per area (3b.5b).** `EnvelopeBlobStore` wraps any `BlobStore`: every blob is encrypted with a data key of its own,
   wrapped by the key of its *area* (`AreaKeys`: `InMemoryAreaKeys`, or `KmsAreaKeys` on AWS KMS). The fact
   `area-erasure-requested` starts `area-key-destroy`, which destroys the area's key; from then on every copy of the area's blobs

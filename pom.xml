@@ -45,6 +45,7 @@
         <module>stint-knowledge</module>
         <module>stint-worker-redaction</module>
         <module>stint-worker-knowledge</module>
+        <module>stint-knowledge-inspector</module>
         <module>stint-worker-transcription</module>
         <module>stint-worker-publishing</module>
         <module>stint-otel</module>
@@ -179,6 +180,11 @@
             <dependency>
                 <groupId>io.github.stintflow</groupId>
                 <artifactId>stint-worker-knowledge</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.stintflow</groupId>
+                <artifactId>stint-knowledge-inspector</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

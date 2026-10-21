@@ -28,7 +28,7 @@ import io.stintflow.spi.Sensitivity;
  * SDD 3b.1: the in-memory composite (vector index, graph, change log) against the conformance suite, and what only it can show:
  * a failure before the state is published leaves no trace of the write, and no log entry is ever missing from a change.
  */
-class InMemoryKnowledgeStoreTest extends KnowledgeStoreContract {
+class InMemoryKnowledgeStoreTest extends KnowledgeInspectorContract {
 
     private final AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-10-19T12:00:00Z"));
     private Path blobDir;
@@ -44,6 +44,11 @@ class InMemoryKnowledgeStoreTest extends KnowledgeStoreContract {
         last = new CompositeKnowledgeStore(new DeterministicEmbedder(), new FilesystemBlobStore(blobDir, now::get),
                 withRestrictedClass ? new RetentionClass("restricted", Duration.ofDays(30)) : null, now::get);
         return last;
+    }
+
+    @Override
+    protected KnowledgeInspector inspector(KnowledgeStore store) {
+        return (KnowledgeInspector) store;
     }
 
     @Override

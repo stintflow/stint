@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stint knowledge inspector</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <h1>Knowledge inspector</h1>
+  <label>Operator <input id="operator" type="text" autocomplete="off" placeholder="who is looking"></label>
+  <label>Base <select id="base"></select></label>
+  <button id="reload" type="button">Reload</button>
+  <button id="export" type="button">Export GraphML</button>
+  <span id="status" role="status"></span>
+</header>
+<nav>
+  <button data-tab="graph" class="on" type="button">Graph</button>
+  <button data-tab="changes" type="button">Timeline</button>
+  <button data-tab="metrics" type="button">Metrics</button>
+  <button data-tab="duplicates" type="button">Duplicates</button>
+</nav>
+<main>
+  <section id="graph">
+    <div class="bar">
+      <button id="play" type="button">Play</button>
+      <input id="slider" type="range" min="0" max="0" value="0">
+      <span id="seq"></span>
+      <label>Highlight chain <select id="chain"><option value="">(none)</option></select></label>
+    </div>
+    <div class="split">
+      <svg id="canvas" role="img" aria-label="Knowledge graph"></svg>
+      <aside id="detail"><p class="muted">Select a node.</p></aside>
+    </div>
+    <p id="note" class="muted"></p>
+  </section>
+  <section id="changes" hidden>
+    <div class="bar">
+      <input id="f-chain" placeholder="chain"><input id="f-instance" placeholder="instance">
+      <input id="f-type" placeholder="element type"><input id="f-document" placeholder="document">
+      <button id="f-apply" type="button">Filter</button>
+    </div>
+    <table id="changes-table"></table>
+  </section>
+  <section id="metrics" hidden></section>
+  <section id="duplicates" hidden></section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

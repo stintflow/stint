@@ -34,10 +34,15 @@ import io.stintflow.knowledge.Entity;
 import io.stintflow.knowledge.EntityIds;
 import io.stintflow.knowledge.EntityMatch;
 import io.stintflow.knowledge.EntityQuery;
+import io.stintflow.knowledge.EdgeView;
+import io.stintflow.knowledge.GraphView;
 import io.stintflow.knowledge.KnowledgeBatch;
+import io.stintflow.knowledge.KnowledgeInspector;
 import io.stintflow.knowledge.KnowledgeScope;
 import io.stintflow.knowledge.KnowledgeStore;
 import io.stintflow.knowledge.KnowledgeValidationException;
+import io.stintflow.knowledge.NodeView;
+import io.stintflow.knowledge.ViewQuery;
 import io.stintflow.knowledge.Link;
 import io.stintflow.knowledge.Passage;
 import io.stintflow.knowledge.PassageIds;
@@ -67,7 +72,7 @@ import io.stintflow.spi.Sensitivity;
  * <p>
  * Meant for tests and the local mode: it copies a scope's state on every write, so it suits some thousands of passages per scope.
  */
-public final class CompositeKnowledgeStore implements KnowledgeStore {
+public final class CompositeKnowledgeStore implements KnowledgeStore, KnowledgeInspector {
 
     static final int MAX_PASSAGES = 500;
     static final int MAX_ENTITIES = 2_000;
@@ -819,6 +824,63 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
             matches.sort(Comparator.comparing(EntityMatch::entityId));
             return CompletableFuture.completedFuture(matches.size() > query.limit()
                     ? new ArrayList<>(matches.subList(0, query.limit())) : matches);
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    // --- inspection (SDD 3b.6) -------------------------------------------------------------------------------------
+
+    @Override
+    public CompletionStage<GraphView> view(KnowledgeScope scope, ViewQuery query) {
+        try {
+            State s = holder(scope).state;
+            // the sequence that added what is alive: the last ADD of an id that was not removed since
+            Map<String, Long> added = new java.util.HashMap<>();
+            for (ChangeEntry e : s.log.all()) {
+                if (e.kind() != ChangeEntry.Kind.ENTITY && e.kind() != ChangeEntry.Kind.RELATION) {
+                    continue;
+                }
+                switch (e.op()) {
+                    case ADD -> added.putIfAbsent(e.targetId(), e.sequence());
+                    case REMOVE, EXPIRE, ERASE -> added.remove(e.targetId());
+                    default -> { }
+                }
+            }
+            List<InMemoryGraph.Node> visible = new ArrayList<>();
+            Set<String> visibleIds = new HashSet<>();
+            for (InMemoryGraph.Node node : s.graph.nodes()) {
+                if (node.level().compareTo(query.ceiling()) <= 0) {
+                    visibleIds.add(node.id());
+                    if ((query.type() == null || query.type().equals(node.type()))
+                            && (query.afterNodeId() == null || node.id().compareTo(query.afterNodeId()) > 0)) {
+                        visible.add(node);
+                    }
+                }
+            }
+            visible.sort(Comparator.comparing(InMemoryGraph.Node::id));
+            boolean more = visible.size() > query.limit();
+            List<InMemoryGraph.Node> page = more ? visible.subList(0, query.limit()) : visible;
+            Set<String> pageIds = new HashSet<>();
+            List<NodeView> nodes = new ArrayList<>();
+            for (InMemoryGraph.Node node : page) {
+                pageIds.add(node.id());
+                // a restricted label rests in a blob this method never opens
+                String label = node.level() == Sensitivity.RESTRICTED || node.contentRef() != null ? null : node.label();
+                nodes.add(new NodeView(node.id(), node.type(), node.level(), label, added.getOrDefault(node.id(), 0L),
+                        node.sources().size()));
+            }
+            List<EdgeView> edges = new ArrayList<>();
+            for (InMemoryGraph.Edge edge : s.graph.edges()) {
+                if (pageIds.contains(edge.from()) && visibleIds.contains(edge.to())
+                        && edge.level().compareTo(query.ceiling()) <= 0) {
+                    edges.add(new EdgeView(edge.key(), edge.type(), edge.from(), edge.to(), edge.level(),
+                            added.getOrDefault(edge.key(), 0L)));
+                }
+            }
+            edges.sort(Comparator.comparing(EdgeView::key));
+            return CompletableFuture.completedFuture(new GraphView(nodes, edges,
+                    more ? page.get(page.size() - 1).id() : null, s.log.lastSequence()));
         } catch (RuntimeException e) {
             return CompletableFuture.failedFuture(e);
         }

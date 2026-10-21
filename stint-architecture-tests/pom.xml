@@ -88,6 +88,10 @@
         </dependency>
         <dependency>
             <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-knowledge-inspector</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
             <artifactId>stint-worker-transcription</artifactId>
         </dependency>
         <dependency>
