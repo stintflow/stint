@@ -129,11 +129,16 @@ public final class BatchAssembler {
 
     /** The batch of the whole document: all the windows added so far. */
     public Assembly build(String batchId, Source source) {
+        return build(batchId, source, null);
+    }
+
+    /** As {@link #build(String, Source)}, with the producer's {@code revision} of the document (SDD 3b.3, 4.3): an older one is {@code STALE}. */
+    public Assembly build(String batchId, Source source, Long revision) {
         List<Link> links = new ArrayList<>();
         mentionedIn.forEach((entityId, passageIds) -> passageIds.forEach(p -> links.add(new Link(p, entityId))));
         StringBuilder content = new StringBuilder();
         passages.forEach(p -> content.append(p.text()).append('\0'));
-        KnowledgeBatch batch = new KnowledgeBatch(batchId, documentId, PassageIds.sha256Hex(content.toString()), null, source,
+        KnowledgeBatch batch = new KnowledgeBatch(batchId, documentId, PassageIds.sha256Hex(content.toString()), revision, source,
                 schema.fullVersion(), passages, new ArrayList<>(entities.values()), new ArrayList<>(relations.values()), links);
         return new Assembly(batch, List.copyOf(candidates), Map.copyOf(resolutions));
     }

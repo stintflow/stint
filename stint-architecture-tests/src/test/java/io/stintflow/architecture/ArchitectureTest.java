@@ -38,7 +38,7 @@ class ArchitectureTest {
                 "io.stintflow.knowledge", "io.stintflow.knowledge.inmemory", "io.stintflow.knowledge.schema",
                 "io.stintflow.knowledge.extraction",
                 "io.stintflow.worker.redaction", "io.stintflow.worker.transcription",
-                "io.stintflow.worker.publishing"}) {
+                "io.stintflow.worker.publishing", "io.stintflow.worker.knowledge"}) {
             assertThat(classes.that(DescribedPredicate.describe(pkg, (JavaClass c) -> c.getPackageName().equals(pkg))))
                     .as("classes imported from %s", pkg).isNotEmpty();
         }
@@ -170,6 +170,23 @@ class ArchitectureTest {
             .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
                     "io.stintflow.dsl..", "io.stintflow.worker")
             .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge..");
+
+    /**
+     * SDD 3b.3, 4.9: the knowledge tasks (write and retrieve) run where the data is — no AI library, no cloud SDK, no
+     * OpenTelemetry, and not the engine; and nothing of the engine side depends on them.
+     */
+    @ArchTest
+    static final ArchRule knowledge_workers_have_no_ai_libs_cloud_sdks_or_engine = noClasses()
+            .that().resideInAnyPackage("io.stintflow.worker.knowledge..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "dev.langchain4j..", "io.quarkiverse.langchain4j..", "software.amazon..", "com.amazonaws..",
+                    "com.azure..", "com.google.cloud..", "io.opentelemetry..", "io.stintflow.core..", "io.stintflow.dsl..");
+
+    @ArchTest
+    static final ArchRule engine_side_does_not_depend_on_the_knowledge_workers = noClasses()
+            .that().resideInAnyPackage("io.stintflow.spi..", "io.stintflow.wire..", "io.stintflow.core..",
+                    "io.stintflow.dsl..", "io.stintflow.worker", "io.stintflow.knowledge..")
+            .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.worker.knowledge..");
 
     /** SDD 3b.1, 4.1: the port and its types do not know the adapters; backends plug in beside them. */
     @ArchTest

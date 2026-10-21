@@ -45,10 +45,13 @@ import io.stintflow.knowledge.extraction.PassageSplitter;
 import io.stintflow.knowledge.schema.KnowledgeSchema;
 import io.stintflow.knowledge.schema.SchemaRegistry;
 import io.stintflow.knowledge.schema.SchemaValidator;
+import io.stintflow.spi.BlobStore;
 import io.stintflow.spi.ErrorInfo.StandardType;
 import io.stintflow.spi.ExecutionTracer;
 import io.stintflow.spi.ModelProvider;
+import io.stintflow.spi.RetentionClass;
 import io.stintflow.spi.Sensitivity;
+import io.stintflow.wire.ClaimCheck;
 import io.stintflow.wire.Json;
 import io.stintflow.worker.TaskContext;
 import io.stintflow.worker.TaskFailure;
@@ -68,7 +71,9 @@ import io.stintflow.worker.decision.SensitivityPolicy;
  * the window can be about and asks the model for the structured answer (a JSON Schema generated from the knowledge schema when the
  * model supports one); checks the answer against the schema; resolves each mention to an existing id before it creates anything;
  * and assembles one {@code KnowledgeBatch}. The answer of the task is that batch (as JSON) beside the duplicate candidates, the
- * resolution counts and the estimated tokens. It writes nothing: the write is a step of its own (SDD 3b.3).
+ * resolution counts and the estimated tokens — or, with a blob store (SDD 3b.3), the pointer to the batch and its counts. The input
+ * may give a {@code textRef} (a pointer to the text, e.g. the approved minutes) and a {@code revision}. It writes nothing to the
+ * base: the write is a step of its own ({@code knowledge-write}).
  * <p>
  * <b>Failure.</b> An answer out of the schema fails the task with {@code validation} 400 — no partial batch, no repair call —
  * naming fields and rules, never values. A budget over {@link ExtractionLimits#maxTokensPerDocument()} stops with
@@ -98,6 +103,8 @@ public final class KnowledgeExtractionWorker implements TaskHandler {
     private final Function<Throwable, Optional<Duration>> retryAfter;
     private final Duration rateLimitRetryAfter;
     private final int passageChars;
+    private final BlobStore blobs;
+    private final RetentionClass batchClass;
 
     private KnowledgeExtractionWorker(Builder b) {
         this.chatModel = Objects.requireNonNull(b.chatModel, "chatModel is required");
@@ -114,6 +121,8 @@ public final class KnowledgeExtractionWorker implements TaskHandler {
         this.retryAfter = b.retryAfter;
         this.rateLimitRetryAfter = b.rateLimitRetryAfter;
         this.passageChars = b.passageChars;
+        this.blobs = b.blobs;
+        this.batchClass = b.batchClass;
     }
 
     public static Builder builder() {
@@ -166,7 +175,7 @@ public final class KnowledgeExtractionWorker implements TaskHandler {
                 : KnowledgeScope.of(ctx.definition());
         Sensitivity level = ctx.sensitivity() == null ? Sensitivity.RESTRICTED : ctx.sensitivity();
 
-        List<String> texts = passageTexts(in);
+        List<String> texts = passageTexts(in);   // reads the pointer, if the input gives one
         BatchAssembler assembler = new BatchAssembler(scope, schema, meetingId,
                 in.path("meeting").hasNonNull("heldOn") ? in.path("meeting").get("heldOn").asText() : null, level,
                 new EntityResolver(glossary, existing(scope, level)));
@@ -206,9 +215,21 @@ public final class KnowledgeExtractionWorker implements TaskHandler {
         }
 
         BatchAssembler.Assembly assembly = assembler.build("extract:" + ctx.instanceId() + ":" + ctx.taskId(),
-                new Source(ctx.instanceId(), ctx.chainId(), ctx.definition()));
+                new Source(ctx.instanceId(), ctx.chainId(), ctx.definition()),
+                in.hasNonNull("revision") ? in.get("revision").asLong() : null);
         ObjectNode result = Json.obj();
-        result.set("batch", KnowledgeBatchJson.toJson(assembly.batch()));
+        if (blobs != null) {
+            // SDD 3b.3, 4.3: the batch rests in a blob of its own class and the task answers with the pointer and the counts
+            byte[] bytes = Json.bytes(KnowledgeBatchJson.toJson(assembly.batch()));
+            result.put("batchRef", blobs.put(bytes, "knowledge/" + ctx.instanceId() + "-" + ctx.taskId().replace('/', '_')
+                    + ".json", batchClass).toCompletableFuture().join().toString());
+            ObjectNode counts = result.putObject("counts");
+            counts.put("passages", assembly.batch().passages().size()).put("entities", assembly.batch().entities().size())
+                    .put("relations", assembly.batch().relations().size()).put("links", assembly.batch().links().size());
+            result.put("schemaVersion", assembly.batch().schemaVersion());
+        } else {
+            result.set("batch", KnowledgeBatchJson.toJson(assembly.batch()));
+        }
         ArrayNode candidates = result.putArray("duplicateCandidates");
         for (BatchAssembler.DuplicateCandidate c : assembly.duplicateCandidates()) {
             ObjectNode node = candidates.addObject();
@@ -243,6 +264,8 @@ public final class KnowledgeExtractionWorker implements TaskHandler {
         List<String> texts = new ArrayList<>();
         if (in.has("passages")) {
             in.get("passages").forEach(p -> texts.add(p.asText()));
+        } else if (in.hasNonNull("textRef")) {
+            texts.addAll(PassageSplitter.splitText(textOf(in.get("textRef")), passageChars));
         } else if (in.has("turns")) {
             List<PassageSplitter.Turn> turns = new ArrayList<>();
             in.get("turns").forEach(t -> turns.add(new PassageSplitter.Turn(t.path("speaker").asText("speaker"),
@@ -250,9 +273,22 @@ public final class KnowledgeExtractionWorker implements TaskHandler {
             texts.addAll(PassageSplitter.split(turns, passageChars));
         }
         if (texts.isEmpty()) {
-            throw DecisionFailures.validation("The input has no 'turns' or 'passages' to extract from");
+            throw DecisionFailures.validation("The input has no 'textRef', 'turns' or 'passages' to extract from");
         }
         return texts;
+    }
+
+    /** SDD 3b.3, 4.3: the text a pointer (a URI string or a claim-check object) points at; this worker needs a blob store for it. */
+    private String textOf(JsonNode pointer) {
+        if (blobs == null) {
+            throw DecisionFailures.configuration(400, "This worker has no blob store to read 'textRef' from");
+        }
+        String uri = ClaimCheck.isPointer(pointer) ? pointer.get(ClaimCheck.POINTER_FIELD).asText() : pointer.asText();
+        try {
+            return new String(blobs.get(java.net.URI.create(uri)).toCompletableFuture().join(), StandardCharsets.UTF_8);
+        } catch (RuntimeException e) {
+            throw new TaskFailure(StandardType.COMMUNICATION.uri(), 503, "The text to extract from could not be read", null);
+        }
     }
 
     /** The existing entities the resolver reads: exact lookups in the base, if the worker has one. */
@@ -403,6 +439,8 @@ public final class KnowledgeExtractionWorker implements TaskHandler {
         private Function<Throwable, Optional<Duration>> retryAfter = t -> Optional.empty();
         private Duration rateLimitRetryAfter;
         private int passageChars = 1_500;
+        private BlobStore blobs;
+        private RetentionClass batchClass;
 
         private Builder() {
         }
@@ -469,6 +507,16 @@ public final class KnowledgeExtractionWorker implements TaskHandler {
         /** The most characters of a passage when the input gives turns to split. Default 1 500. */
         public Builder passageChars(int passageChars) {
             this.passageChars = passageChars;
+            return this;
+        }
+
+        /**
+         * SDD 3b.3, 4.3: a blob store for the claim-check: the input may give a {@code textRef} to read the text from, and the
+         * batch rests in a blob of {@code batchClass} — the answer then holds {@code batchRef} and the counts, not the batch.
+         */
+        public Builder blobs(BlobStore blobs, RetentionClass batchClass) {
+            this.blobs = Objects.requireNonNull(blobs, "blobs");
+            this.batchClass = Objects.requireNonNull(batchClass, "batchClass");
             return this;
         }
 

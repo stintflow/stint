@@ -117,7 +117,7 @@ do:
             source: https://product-meeting.example
             type: io.stintflow.examples.minutes-published.v1
             subject: '${ $context.meetingId }'
-            data: '${ {meetingId: $context.meetingId, pageId: $context.pageId, pageUrl: $context.pageUrl, docType: $context.docType, urgent: $context.urgent} }'
+            data: '${ {meetingId: $context.meetingId, pageId: $context.pageId, pageUrl: $context.pageUrl, docType: $context.docType, urgent: $context.urgent, label: "confidential", minutesRef: $context.minutesRef, publishedAtMillis: (now * 1000 | floor)} }'
       then: end
   - rejected:
       emit:

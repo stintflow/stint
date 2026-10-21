@@ -38,6 +38,8 @@ stint-dsl                YAML/JSON front-end: compiles the CNCF DSL 1.0 into sti
 stint-worker-sdk         uniform TaskHandler programming model (depends on stint-wire, not stint-core)
 stint-otel               OpenTelemetry implementation of the tracing port (the only module using OTel)
 stint-worker-redaction   reference redactor for `call: redact`: layered, deterministic, no AI library (SDD 3a.5)
+stint-knowledge          KnowledgeStore port, graph schema, extraction pieces, in-memory adapters (SDD 3b.1, 3b.2)
+stint-worker-knowledge   knowledge-write (by pointer, allowed scopes, personal-data gate) and knowledge-retrieve (SDD 3b.3)
 stint-worker-transcription  Transcriber port, transcribe handler, Whisper (OpenAI-compatible) adapter (SDD 3a.6)
 stint-worker-publishing  PagePublisher port, publish-page handler, Confluence REST adapter and fake (SDD 3a.6)
 connectors/
@@ -667,7 +669,7 @@ do:
 - Without a policy, a definition behaves as before 3a.5. `WorkflowRegistry.requirePolicy()` makes the policy
   mandatory: do that for agentic workflows.
 
-## Knowledge base: the port, the graph schema and the extraction (SDD 3b.1, 3b.2)
+## Knowledge base: the port, the graph schema, the extraction and the ingestion (SDD 3b.1, 3b.2, 3b.3)
 
 `stint-knowledge` holds what workers learn from meetings — passages of text, the entities they mention and the relations among
 them — behind one port, `KnowledgeStore`. It depends on the SPI alone (the engine never calls it) and ships in-memory adapters
@@ -696,6 +698,17 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   is a pseudonym only; with `x-stint-policy.pseudonyms: {stable: scope}` and a redactor that allows it
   (`RedactionHandler.allowingStablePseudonyms()`), the same person has the same 128-bit pseudonym in every meeting of the base,
   and the id to erase is computed from who they are.
+- **Ingestion (3b.3).** The fact `minutes-published` (it now carries `minutesRef`, `publishedAtMillis` and `label`) starts the
+  definition `knowledge-ingest` (`schedule.on`), which has two task steps, sequential on purpose: `extract-knowledge` reads the
+  approved minutes by pointer (`textRef`), extracts, and answers the pointer to the batch (`batchRef`, a blob of the class
+  `knowledge-batch`) with counts only; `knowledge-write` (module `stint-worker-knowledge`) writes it in the one atomic step of the
+  store. The worker serves only the scopes in its `ScopeAllowList` (empty refuses all), and `PiiGate` refuses a batch the reference
+  patterns of the redactor still match (`validation` 400, counts by type, never a value). A retry or a redelivery writes nothing
+  twice (`UNCHANGED`); an older revision is `STALE`; an erased document stays erased (`REJECTED_ERASED`) — none of them a failure.
+  The definition emits `io.stintflow.knowledge.document-indexed.v1` (ids and counts) or `ingest-rejected.v1` (an extraction out of
+  the schema; nothing is written). `knowledge-retrieve` takes the ceiling from the level of the instance, lowered — never raised —
+  by `maxLevel`, and audits each read by counts per level (`knowledge-read`), never by the question or a content.
+  `LangChain4jEmbedder` puts an `EmbeddingModel` behind the store's `Embedder`.
 - **Evaluation.** `corpus/kb/base.yaml` and the `kb:` sections of the synthetic corpus (121 mentions) are resolved in CI with no
   model: no wrong merge, at least 95 % resolved right, at least 90 % of the expected duplicate candidates flagged.
 

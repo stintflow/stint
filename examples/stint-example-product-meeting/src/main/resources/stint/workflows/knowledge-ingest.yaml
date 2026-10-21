@@ -1,0 +1,80 @@
+# SDD 3b.3: the knowledge base learns from the meeting. The fact 'minutes published' (approved minutes, already redacted
+# and signed off by a person) starts this definition, which reads the minutes by pointer, extracts the entities and
+# relations in the schema, and writes the batch to the base in one atomic step. Only ids, pointers and counts travel: the
+# text is in a blob, the batch is in a blob, and the facts it emits carry numbers. Sequential on purpose: the model call is
+# the only slow part, and the write must stay one step (vector, graph and change log together).
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: knowledge-ingest
+  version: '1.0.0'
+  metadata:
+    x-stint-policy:
+      sensitivity:
+        from: '${ .[0].data.label }'
+      routes:
+        restricted: [extract-knowledge, knowledge-write]
+        confidential: [extract-knowledge, knowledge-write]
+        internal: ['*']
+      retention:
+        knowledge-batch: { days: 7 }
+    x-stint-knowledge:
+      base: product-meetings
+      schema: meetings@1
+      glossary: product@1
+schedule:
+  on:
+    one:
+      with: { type: io.stintflow.examples.minutes-published.v1 }
+do:
+  - fact:
+      set: '${ .[0].data | {meetingId: .meetingId, minutesRef: .minutesRef, docType: .docType, publishedAtMillis: .publishedAtMillis} }'
+      export: { as: '${ . }' }
+  - extract:
+      try:
+        - run:
+            call: remote
+            with:
+              task: extract-knowledge
+              input: '${ {meeting: {meetingId: $context.meetingId}, textRef: $context.minutesRef, schema: "meetings@1", glossary: "product@1", scope: {namespace: "examples", base: "product-meetings"}, revision: $context.publishedAtMillis} }'
+            timeout: { after: { minutes: 15 } }
+            export: { as: '${ $context + {batchRef: .batchRef, counts: .counts, schemaVersion: .schemaVersion} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/validation }
+        then: rejected
+  - write:
+      try:
+        - run:
+            call: remote
+            with:
+              task: knowledge-write
+              input: '${ {batchRef: $context.batchRef, scope: {namespace: "examples", base: "product-meetings"}} }'
+            timeout: { after: { minutes: 5 } }
+            export: { as: '${ $context + {status: .status, lastSequence: .lastSequence, changes: .counts} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
+        retry:
+          delay: { seconds: 15 }
+          backoff: { exponential: {} }
+          limit:
+            attempt: { count: 5 }
+  - indexed:
+      emit:
+        event:
+          with:
+            source: https://knowledge-ingest.example
+            type: io.stintflow.knowledge.document-indexed.v1
+            subject: '${ $context.meetingId }'
+            data: '${ {meetingId: $context.meetingId, documentId: ("meeting:" + $context.meetingId), status: $context.status, lastSequence: $context.lastSequence, extracted: $context.counts, changes: $context.changes, schemaVersion: $context.schemaVersion} }'
+      then: end
+  - rejected:
+      emit:
+        event:
+          with:
+            source: https://knowledge-ingest.example
+            type: io.stintflow.knowledge.ingest-rejected.v1
+            subject: '${ $context.meetingId }'
+            data: '${ {meetingId: $context.meetingId, reason: "out-of-schema"} }'
+      then: end

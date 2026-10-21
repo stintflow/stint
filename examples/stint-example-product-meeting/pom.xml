@@ -45,6 +45,14 @@
         </dependency>
         <dependency>
             <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-worker-knowledge</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
+            <artifactId>stint-knowledge</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.stintflow</groupId>
             <artifactId>stint-worker-transcription</artifactId>
         </dependency>
         <dependency>
