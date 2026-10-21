@@ -30,7 +30,8 @@ public record ChangeEntry(long sequence, Instant at, String batchId, String inst
         String definition, String schemaVersion, Op op, Kind kind, String targetId, String documentId,
         Sensitivity sensitivity, String contentHash, String reason, String elementType) {
 
-    public enum Op { ADD, UPDATE, REMOVE, EXPIRE, ERASE }
+    /** {@code REINDEX} (SDD 3b.5): the base moved to another embedding model; one entry for the whole base. */
+    public enum Op { ADD, UPDATE, REMOVE, EXPIRE, ERASE, REINDEX }
 
     public enum Kind { PASSAGE, ENTITY, RELATION, LINK }
 }

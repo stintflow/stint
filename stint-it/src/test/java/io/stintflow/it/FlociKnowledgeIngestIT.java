@@ -130,6 +130,10 @@ class FlociKnowledgeIngestIT {
 
                     String id = engine.startFromEvent(ingest.ref(), fact).toCompletableFuture().get(30, TimeUnit.SECONDS);
                     awaitStatus(state, id, InstanceStatus.COMPLETED);
+                    long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                    while (facts.published().isEmpty() && System.nanoTime() < until) {
+                        Thread.sleep(50);   // the fact leaves a moment after the state is final
+                    }
 
                     assertThat(facts.published()).hasSize(1);
                     JsonNode indexed = Json.read(facts.published().getFirst().getData().toBytes());

@@ -30,6 +30,19 @@ public interface KnowledgeStore {
     /** Erases (SDD 3b.1, 4.7). */
     CompletionStage<DeleteReceipt> delete(KnowledgeScope scope, DeleteRequest request);
 
+    /** The model, the dimension, the counts and the schema versions of the base (SDD 3b.5, RF1). */
+    CompletionStage<BaseInfo> describe(KnowledgeScope scope);
+
+    /**
+     * Moves the base to another embedding model (SDD 3b.5, RF2): every vector is recomputed in one atomic step, so a reader sees
+     * the old base whole or the new one whole, and one {@code REINDEX} entry joins the log. Restricted passages whose blob expired
+     * have no text to embed and leave the index ({@code EXPIRE} entries).
+     */
+    CompletionStage<ReindexReceipt> reindex(KnowledgeScope scope, ReindexRequest request);
+
+    /** What the erasure of {@code request} left behind in every structure and blob (SDD 3b.5, RF6). */
+    CompletionStage<ErasureCheck> verifyErased(KnowledgeScope scope, DeleteRequest request);
+
     /** The log's entries with a sequence above {@code afterSequence}, oldest first, at most {@code limit}. */
     CompletionStage<List<ChangeEntry>> changes(KnowledgeScope scope, long afterSequence, int limit);
 

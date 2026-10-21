@@ -196,12 +196,16 @@ public final class ProductMeetingPipeline implements AutoCloseable {
         }
         return decisionsBuilder.build().registerAll(new TaskHandlerRegistry())
                 .register("transcribe", new TranscriptionHandler(metrics.recording(stack.transcriber()), blobs))
-                .register("redactor", new RedactionHandler(redactor, new Pseudonyms(
-                        "example-secret-not-for-real-data".getBytes(StandardCharsets.UTF_8)), blobs).allowingStablePseudonyms())
+                .register("redactor", new RedactionHandler(redactor, pseudonyms(), blobs).allowingStablePseudonyms())
                 .register("structure-minutes", new StructureHandler(writer, blobs))
                 .register("publish-page", new PublishHandler(ConfluencePagePublisher.builder()
                         .baseUri(confluenceBase).space(SPACE).email(CONFLUENCE_EMAIL).apiToken(CONFLUENCE_TOKEN)
                         .build(), blobs, SPACE));
+    }
+
+    /** The secret behind the pseudonyms of the example: the redactor's, and the one that finds a person to erase (SDD 3b.5). */
+    public static Pseudonyms pseudonyms() {
+        return new Pseudonyms("example-secret-not-for-real-data".getBytes(StandardCharsets.UTF_8));
     }
 
     /** The {@code meeting-recorded.v1} event of a meeting whose audio rests at {@code audioRef}. */

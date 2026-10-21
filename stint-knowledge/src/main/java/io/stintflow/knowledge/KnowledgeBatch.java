@@ -1,5 +1,6 @@
 package io.stintflow.knowledge;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Objects;
 
@@ -14,10 +15,19 @@ import java.util.Objects;
  *                      {@link WriteReceipt.Status#STALE}
  * @param source        where it comes from
  * @param schemaVersion the version of the graph schema the entities and relations follow; copied into the change log
+ * @param derivedFrom   pointers to the blobs the document came from (SDD 3b.5, 4.1): the store keeps them with the document and
+ *                      deletes them when it erases it. Not in the change log
  */
 public record KnowledgeBatch(String batchId, String documentId, String contentHash, Long revision, Source source,
         String schemaVersion, List<Passage> passages, List<Entity> entities, List<Relation> relations,
-        List<Link> links) {
+        List<Link> links, List<URI> derivedFrom) {
+
+    /** A batch that names no blob it came from. */
+    public KnowledgeBatch(String batchId, String documentId, String contentHash, Long revision, Source source,
+            String schemaVersion, List<Passage> passages, List<Entity> entities, List<Relation> relations,
+            List<Link> links) {
+        this(batchId, documentId, contentHash, revision, source, schemaVersion, passages, entities, relations, links, List.of());
+    }
 
     public KnowledgeBatch {
         Objects.requireNonNull(batchId, "batchId");
@@ -29,5 +39,12 @@ public record KnowledgeBatch(String batchId, String documentId, String contentHa
         entities = entities == null ? List.of() : List.copyOf(entities);
         relations = relations == null ? List.of() : List.copyOf(relations);
         links = links == null ? List.of() : List.copyOf(links);
+        derivedFrom = derivedFrom == null ? List.of() : List.copyOf(derivedFrom);
+    }
+
+    /** The same batch, naming the blobs it came from (SDD 3b.5). */
+    public KnowledgeBatch withDerivedFrom(List<URI> origins) {
+        return new KnowledgeBatch(batchId, documentId, contentHash, revision, source, schemaVersion, passages, entities,
+                relations, links, origins);
     }
 }

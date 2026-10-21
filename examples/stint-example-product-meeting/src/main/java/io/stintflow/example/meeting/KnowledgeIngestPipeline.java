@@ -25,6 +25,7 @@ import io.stintflow.inmemory.InMemoryStateStore;
 import io.stintflow.inmemory.InMemoryTaskTransport;
 import io.stintflow.inmemory.InMemoryTimerService;
 import io.stintflow.knowledge.DeterministicEmbedder;
+import io.stintflow.knowledge.Embedder;
 import io.stintflow.knowledge.KnowledgeScope;
 import io.stintflow.knowledge.extraction.Glossary;
 import io.stintflow.knowledge.inmemory.CompositeKnowledgeStore;
@@ -49,6 +50,10 @@ import io.stintflow.worker.langchain4j.KnowledgeExtractionWorker;
 public final class KnowledgeIngestPipeline implements AutoCloseable {
 
     public static final String WORKFLOW = "stint/workflows/knowledge-ingest.yaml";
+    public static final String ERASE_WORKFLOW = "stint/workflows/knowledge-erase.yaml";
+    public static final String REINDEX_WORKFLOW = "stint/workflows/knowledge-reindex.yaml";
+    public static final String ERASURE_REQUESTED = "io.stintflow.knowledge.erasure-requested.v1";
+    public static final String EMBEDDING_CHANGED = "io.stintflow.knowledge.embedding-changed.v1";
     public static final KnowledgeScope SCOPE = KnowledgeScope.named("examples", "product-meetings");
     public static final RetentionClass BATCH = new RetentionClass("knowledge-batch", Duration.ofDays(7));
     public static final RetentionClass RESTRICTED = new RetentionClass("restricted", Duration.ofDays(30));
@@ -59,6 +64,8 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     final CompositeKnowledgeStore store;
     final WorkflowEngine engine;
     final WorkflowDefinition definition;
+    final WorkflowDefinition eraseDefinition;
+    final WorkflowDefinition reindexDefinition;
     private final WorkerPool pool;
     /** The instance being run, once started. */
     volatile String current;
@@ -78,6 +85,15 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     /** @param timer the engine timers: a test ticks them to move a retry wait, with {@code clock} moved past its delay */
     public KnowledgeIngestPipeline(BlobStore blobs, ChatModel model, InstantSource clock, InMemoryTimerService timer,
             boolean piiGate) throws IOException {
+        this(blobs, model, clock, timer, piiGate, null);
+    }
+
+    /**
+     * @param reindexTarget the embedding model the worker of {@code knowledge-reindex} serves, or {@code null}: then there is no
+     *                      reindex route (SDD 3b.5)
+     */
+    public KnowledgeIngestPipeline(BlobStore blobs, ChatModel model, InstantSource clock, InMemoryTimerService timer,
+            boolean piiGate, Embedder reindexTarget) throws IOException {
         this.store = new CompositeKnowledgeStore(new DeterministicEmbedder(), blobs, RESTRICTED, clock);
         Corpus.KnowledgeBase base = Corpus.loadKnowledge().base();
         Glossary glossary = new Glossary("product", "1", base.glossary().stream()
@@ -87,6 +103,8 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
                 .chatModel(model).provider("fake", false).policy(SensitivityPolicy.fromProperties(java.util.Map.of()))
                 .glossaries(ref -> ref.equals("product@1") ? glossary : null).store(store).blobs(blobs, BATCH).build());
         KnowledgeWorkers.register(handlers, store, blobs, scopes, audit, clock);
+        KnowledgeWorkers.registerErasure(handlers, store, blobs, scopes, audit, clock, reindexTarget,
+                ProductMeetingPipeline.pseudonyms());
         if (!piiGate) {
             handlers.register(KnowledgeWorkers.WRITE_ROUTE, new io.stintflow.worker.knowledge.KnowledgeWriteHandler(store,
                     blobs, scopes, false));
@@ -107,23 +125,45 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
             return result;
         });
         WorkflowRegistry registry = new WorkflowRegistry().requirePolicy();
-        try (InputStream yaml = getClass().getClassLoader().getResourceAsStream(WORKFLOW)) {
-            definition = new DslLoader().load(yaml, "knowledge-ingest.yaml", LoadOptions.STRICT);
-        }
+        definition = load(WORKFLOW, "knowledge-ingest.yaml");
+        eraseDefinition = load(ERASE_WORKFLOW, "knowledge-erase.yaml");
+        reindexDefinition = load(REINDEX_WORKFLOW, "knowledge-reindex.yaml");
         registry.register(definition);
+        registry.register(eraseDefinition);
+        registry.register(reindexDefinition);
         this.engine = new WorkflowEngine(registry, transport, state, timer, blobs,
                 new TreeInterpreter(new JqExpressionEvaluator()), clock, facts, null,
                 io.stintflow.spi.ExecutionTracer.NOOP).auditLog(audit);
     }
 
-    /** The facts this definition emitted: {@code document-indexed} and {@code ingest-rejected}. */
+    private WorkflowDefinition load(String resource, String name) throws IOException {
+        try (InputStream yaml = getClass().getClassLoader().getResourceAsStream(resource)) {
+            return new DslLoader().load(yaml, name, LoadOptions.STRICT);
+        }
+    }
+
+    /** The facts the definitions emitted: {@code document-indexed} and {@code ingest-rejected}. */
     public List<CloudEvent> emitted() {
         return facts.published();
     }
 
     /** Starts the ingestion from the fact and waits for it to end. Redelivering the same fact starts the same instance. */
     public InstanceSnapshot ingest(CloudEvent published, Duration patience) throws Exception {
-        String id = engine.startFromEvent(definition.ref(), published).toCompletableFuture().get(30, TimeUnit.SECONDS);
+        return run(definition, published, patience);
+    }
+
+    /** SDD 3b.5: starts the erasure from the request and waits for it to end. */
+    public InstanceSnapshot erase(CloudEvent requested, Duration patience) throws Exception {
+        return run(eraseDefinition, requested, patience);
+    }
+
+    /** SDD 3b.5: starts the reindexation from the fact and waits for it to end. */
+    public InstanceSnapshot reindex(CloudEvent changed, Duration patience) throws Exception {
+        return run(reindexDefinition, changed, patience);
+    }
+
+    private InstanceSnapshot run(WorkflowDefinition which, CloudEvent fact, Duration patience) throws Exception {
+        String id = engine.startFromEvent(which.ref(), fact).toCompletableFuture().get(30, TimeUnit.SECONDS);
         current = id;
         long until = System.nanoTime() + patience.toNanos();
         InstanceSnapshot snapshot = state.load(id).toCompletableFuture().get(10, TimeUnit.SECONDS).orElseThrow();

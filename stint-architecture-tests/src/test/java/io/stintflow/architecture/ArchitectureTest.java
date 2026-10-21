@@ -188,6 +188,23 @@ class ArchitectureTest {
                     "io.stintflow.dsl..", "io.stintflow.worker", "io.stintflow.knowledge..")
             .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.worker.knowledge..");
 
+    /**
+     * SDD 3b.5, 4.5: the redactor does not know the base — finding a person from who they are is a task of the knowledge worker,
+     * which is handed the secret; and in that module only that task (and the registration that hands it over) touches the secret
+     * behind the pseudonyms.
+     */
+    @ArchTest
+    static final ArchRule the_redactor_does_not_know_the_knowledge_base = noClasses()
+            .that().resideInAnyPackage("io.stintflow.worker.redaction..")
+            .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge..", "io.stintflow.worker.knowledge..");
+
+    @ArchTest
+    static final ArchRule only_the_person_resolver_holds_the_pseudonym_secret = noClasses()
+            .that().resideInAPackage("io.stintflow.worker.knowledge")
+            .and().doNotHaveSimpleName("ResolvePersonHandler").and().doNotHaveSimpleName("KnowledgeWorkers")
+            .and().doNotHaveSimpleName("PiiGate")   // a throwaway instance with a secret of its own, to run the patterns
+            .should().dependOnClassesThat().haveFullyQualifiedName("io.stintflow.worker.redaction.Pseudonyms");
+
     /** SDD 3b.1, 4.1: the port and its types do not know the adapters; backends plug in beside them. */
     @ArchTest
     static final ArchRule the_knowledge_port_does_not_depend_on_its_in_memory_adapters = noClasses()

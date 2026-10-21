@@ -3,6 +3,7 @@ package io.stintflow.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +49,12 @@ public abstract class KnowledgeStoreContract {
     /** Removes what has expired from the index, if the backend keeps it apart from the blobs; returns how many things. */
     protected abstract int reapExpired(KnowledgeScope scope);
 
+    /** Puts a blob in the store's blob store (an ata, a batch) and returns its pointer. */
+    protected abstract URI putBlob(String content);
+
+    /** Whether the blob is still there. */
+    protected abstract boolean blobExists(URI uri);
+
     // --- a small way to build batches ----------------------------------------------------------------------------
 
     protected static final class B {
@@ -58,6 +65,7 @@ public abstract class KnowledgeStoreContract {
         final List<Relation> relations = new ArrayList<>();
         final List<Link> links = new ArrayList<>();
         Long revision;
+        final List<URI> derivedFrom = new ArrayList<>();
         String batchId;
         Source source = new Source("inst-1", "chain-1", new WorkflowRef("meetings", "notes", "1.0.0"));
 
@@ -97,6 +105,11 @@ public abstract class KnowledgeStoreContract {
             return this;
         }
 
+        B derivedFrom(URI... uris) {
+            derivedFrom.addAll(List.of(uris));
+            return this;
+        }
+
         B batchId(String id) {
             this.batchId = id;
             return this;
@@ -104,7 +117,8 @@ public abstract class KnowledgeStoreContract {
 
         KnowledgeBatch build() {
             String hash = PassageIds.sha256Hex(passages + "|" + entities + "|" + relations + "|" + links);
-            return new KnowledgeBatch(batchId, doc, hash, revision, source, SCHEMA, passages, entities, relations, links);
+            return new KnowledgeBatch(batchId, doc, hash, revision, source, SCHEMA, passages, entities, relations, links,
+                    derivedFrom);
         }
     }
 
@@ -500,6 +514,211 @@ public abstract class KnowledgeStoreContract {
         assertThat(later.dropped()).isEqualTo(2);   // the entity and the link
         assertThat(store.entities(SCOPE, new EntityQuery("Person", EntityIds.normalize("PERSON_5"), Sensitivity.RESTRICTED, 5))
                 .toCompletableFuture().get(10, TimeUnit.SECONDS)).isEmpty();
+    }
+
+    // --- SDD 3b.5: describe, reindex, verification and the blobs a document came from ------------------------------
+
+    /** Another model: 16 buckets, English and Portuguese. */
+    protected static final class OtherEmbedder implements Embedder {
+        private final Set<String> languages;
+
+        protected OtherEmbedder(Set<String> languages) {
+            this.languages = languages;
+        }
+
+        @Override
+        public float[] embed(String text) {
+            float[] vector = new float[16];
+            for (String word : EntityIds.normalize(text).split(" ")) {
+                if (!word.isEmpty()) {
+                    vector[Math.floorMod(word.hashCode(), 16)] += 1f;
+                }
+            }
+            return vector;
+        }
+
+        @Override
+        public int dimension() {
+            return 16;
+        }
+
+        @Override
+        public String model() {
+            return "other-bag-16";
+        }
+
+        @Override
+        public Set<String> languages() {
+            return languages;
+        }
+    }
+
+    protected static ReindexReceipt reindex(KnowledgeStore store, KnowledgeScope scope, String id, Embedder target)
+            throws Exception {
+        return store.reindex(scope, new ReindexRequest(id, target, "reindex:model")).toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    @Test
+    protected void ca3_describe_says_the_model_the_counts_and_the_schema_versions() throws Exception {
+        KnowledgeStore store = newStore(false);
+        assertThat(store.describe(SCOPE).toCompletableFuture().get(10, TimeUnit.SECONDS).model()).isNull();
+
+        write(store, SCOPE, checkout().build());
+        BaseInfo info = store.describe(SCOPE).toCompletableFuture().get(10, TimeUnit.SECONDS);
+
+        assertThat(info.model()).isEqualTo(new DeterministicEmbedder().model());
+        assertThat(info.dimension()).isEqualTo(DeterministicEmbedder.DIMENSION);
+        assertThat(info).extracting(BaseInfo::documents, BaseInfo::passages, BaseInfo::entities, BaseInfo::relations)
+                .containsExactly(1, 2, 2, 1);
+        assertThat(info.schemaVersions()).containsExactly(SCHEMA);
+    }
+
+    @Test
+    protected void ca3_a_reindexation_moves_every_vector_to_the_new_model_and_logs_it_once() throws Exception {
+        KnowledgeStore store = newStore(true);
+        write(store, SCOPE, checkout().build());
+        write(store, SCOPE, new B(SCOPE, "meeting:r1").passage("SYNTH-PII-0501 asked about the payment gateway.",
+                Sensitivity.RESTRICTED).build());
+        long before = log(store, SCOPE).size();
+        List<String> found = retrieve(store, SCOPE, "checkout retries payment", Sensitivity.RESTRICTED).stream()
+                .map(i -> i.origin().id()).toList();
+        assertThat(found).isNotEmpty();
+
+        ReindexReceipt receipt = reindex(store, SCOPE, "req-ri", new OtherEmbedder(Set.of("en")));
+
+        assertThat(receipt.status()).isEqualTo(ReindexReceipt.Status.APPLIED);
+        assertThat(receipt.fromModel()).isEqualTo(new DeterministicEmbedder().model());
+        assertThat(receipt.toModel()).isEqualTo("other-bag-16");
+        assertThat(receipt).extracting(ReindexReceipt::passages, ReindexReceipt::skipped).containsExactly(3, 0);
+        BaseInfo info = store.describe(SCOPE).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        assertThat(info.model()).isEqualTo("other-bag-16");
+        assertThat(info.dimension()).isEqualTo(16);
+        // the same passages come back, from the new vectors alone, restricted ones included
+        assertThat(retrieve(store, SCOPE, "checkout retries payment", Sensitivity.RESTRICTED).stream()
+                .map(i -> i.origin().id()).toList()).containsAll(found);
+        assertThat(retrieve(store, SCOPE, "payment gateway", Sensitivity.RESTRICTED))
+                .anyMatch(i -> i.content().contains("payment gateway"));
+        // one entry for the whole base, with models and no text
+        List<ChangeEntry> entries = log(store, SCOPE);
+        assertThat(entries.subList((int) before, entries.size())).singleElement().satisfies(e -> {
+            assertThat(e.op()).isEqualTo(Op.REINDEX);
+            assertThat(e.targetId()).isEqualTo(new DeterministicEmbedder().model() + "->other-bag-16");
+            assertThat(e.reason()).isEqualTo("reindex:model");
+            assertThat(e.sequence()).isEqualTo(receipt.lastSequence());
+        });
+        assertThat(entries.toString()).doesNotContain("SYNTH-PII");
+        // and again: the model is already the target
+        assertThat(reindex(store, SCOPE, "req-ri2", new OtherEmbedder(Set.of("en"))).status())
+                .isEqualTo(ReindexReceipt.Status.UNCHANGED);
+        assertThat(log(store, SCOPE)).hasSize(entries.size());
+    }
+
+    @Test
+    protected void ca3_a_reindexation_to_a_model_that_misses_a_language_of_the_base_changes_nothing() throws Exception {
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, checkout().build());
+        long before = log(store, SCOPE).size();
+
+        assertThatThrownBy(() -> reindex(store, SCOPE, "req-pt", new OtherEmbedder(Set.of("pt"))))
+                .hasCauseInstanceOf(KnowledgeValidationException.class);
+
+        assertThat(store.describe(SCOPE).toCompletableFuture().get(10, TimeUnit.SECONDS).model())
+                .isEqualTo(new DeterministicEmbedder().model());
+        assertThat(log(store, SCOPE)).hasSize((int) before);
+        assertThat(retrieve(store, SCOPE, "checkout payment", Sensitivity.INTERNAL)).isNotEmpty();
+    }
+
+    @Test
+    protected void ca3_a_restricted_passage_whose_blob_expired_leaves_the_index_in_a_reindexation() throws Exception {
+        KnowledgeStore store = newStore(true);
+        write(store, SCOPE, new B(SCOPE, "meeting:r2").passage("SYNTH-PII-0502 owns the launch plan.", Sensitivity.RESTRICTED)
+                .passage("The launch is on Tuesday.", Sensitivity.INTERNAL).build());
+        advanceClock(Duration.ofDays(31));
+
+        ReindexReceipt receipt = reindex(store, SCOPE, "req-ex", new OtherEmbedder(Set.of("en")));
+
+        assertThat(receipt).extracting(ReindexReceipt::passages, ReindexReceipt::skipped).containsExactly(1, 1);
+        assertThat(log(store, SCOPE)).filteredOn(e -> e.op() == Op.EXPIRE).hasSize(1);
+        assertThat(retrieve(store, SCOPE, "launch", Sensitivity.RESTRICTED)).singleElement()
+                .satisfies(i -> assertThat(i.content()).isEqualTo("The launch is on Tuesday."));
+    }
+
+    @Test
+    protected void ca7_the_verification_counts_what_an_erasure_should_have_removed_and_finds_the_tombstone() throws Exception {
+        KnowledgeStore store = newStore(true);
+        write(store, SCOPE, checkout().build());
+        DeleteRequest byDocument = new DeleteRequest.ByDocument("req-v", "erasure:document", "meeting:m-001");
+
+        ErasureCheck before = store.verifyErased(SCOPE, byDocument).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        assertThat(before.verified()).isFalse();
+        assertThat(before.tombstone()).isFalse();
+        assertThat(before.remaining()).containsKeys("DOCUMENT", "PASSAGE", "ENTITY", "RELATION", "LINK");
+
+        erase(store, SCOPE, byDocument);
+        ErasureCheck after = store.verifyErased(SCOPE, byDocument).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        assertThat(after.remaining()).isEmpty();
+        assertThat(after.tombstone()).isTrue();
+        assertThat(after.verified()).isTrue();
+
+        // by person, absent from the base: nothing to remove and the tombstone is in place all the same
+        DeleteRequest absent = new DeleteRequest.ByPerson("req-vp", "erasure:person", "e-nobody", null);
+        erase(store, SCOPE, absent);
+        assertThat(store.verifyErased(SCOPE, absent).toCompletableFuture().get(10, TimeUnit.SECONDS).verified()).isTrue();
+    }
+
+    @Test
+    protected void ca1_erasing_a_document_deletes_the_blobs_it_came_from_and_the_verification_sees_them_gone() throws Exception {
+        KnowledgeStore store = newStore(false);
+        URI batch = putBlob("batch of m-b1 with SYNTH-PII-0601");
+        URI minutes = putBlob("minutes of m-b1 with SYNTH-PII-0601");
+        URI other = putBlob("minutes of m-b2");
+        write(store, SCOPE, new B(SCOPE, "meeting:b1").passage("Plan the migration.", Sensitivity.INTERNAL)
+                .derivedFrom(batch, minutes).build());
+        write(store, SCOPE, new B(SCOPE, "meeting:b2").passage("Plan the retro.", Sensitivity.INTERNAL).derivedFrom(other).build());
+
+        DeleteRequest request = new DeleteRequest.ByDocument("req-b", "erasure:document", "meeting:b1");
+        erase(store, SCOPE, request);
+
+        assertThat(blobExists(batch)).isFalse();
+        assertThat(blobExists(minutes)).isFalse();
+        assertThat(blobExists(other)).isTrue();   // another document's origin stays
+        assertThat(store.verifyErased(SCOPE, request).toCompletableFuture().get(10, TimeUnit.SECONDS).verified()).isTrue();
+        assertThat(heldOutsideBlobs(SCOPE)).doesNotContain(batch.toString());   // the log never names a pointer
+    }
+
+    @Test
+    protected void ca1_the_blobs_of_every_publication_of_a_document_go_with_it() throws Exception {
+        KnowledgeStore store = newStore(false);
+        URI first = putBlob("first batch");
+        URI second = putBlob("second batch");
+        B doc = new B(SCOPE, "meeting:b3").passage("Same text twice.", Sensitivity.INTERNAL).derivedFrom(first);
+        write(store, SCOPE, doc.build());
+        // the same state republished from another batch: nothing changes in the base, the new origin is remembered
+        doc.derivedFrom(second);
+        assertThat(write(store, SCOPE, doc.build()).status()).isEqualTo(Status.UNCHANGED);
+
+        erase(store, SCOPE, new DeleteRequest.ByDocument("req-b3", "erasure:document", "meeting:b3"));
+
+        assertThat(blobExists(first)).isFalse();
+        assertThat(blobExists(second)).isFalse();
+    }
+
+    @Test
+    protected void ca1_erasing_a_person_deletes_the_blobs_of_the_documents_that_named_her_and_no_others() throws Exception {
+        KnowledgeStore store = newStore(false);
+        URI named = putBlob("minutes naming PERSON_aa");
+        URI unrelated = putBlob("minutes of the retro");
+        write(store, SCOPE, new B(SCOPE, "meeting:b4").passage("PERSON_aa owns the rollout.", Sensitivity.INTERNAL)
+                .entity("e-aa", "Person", "PERSON_aa", Sensitivity.INTERNAL).link(0, "e-aa").derivedFrom(named).build());
+        write(store, SCOPE, new B(SCOPE, "meeting:b5").passage("The retro was short.", Sensitivity.INTERNAL)
+                .derivedFrom(unrelated).build());
+
+        DeleteRequest request = new DeleteRequest.ByPerson("req-b4", "erasure:person", "e-aa", null);
+        erase(store, SCOPE, request);
+
+        assertThat(blobExists(named)).isFalse();
+        assertThat(blobExists(unrelated)).isTrue();
+        assertThat(store.verifyErased(SCOPE, request).toCompletableFuture().get(10, TimeUnit.SECONDS).verified()).isTrue();
     }
 
     // --- CA13: language ---------------------------------------------------------------------------------------------

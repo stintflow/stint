@@ -235,10 +235,11 @@ class KnowledgeIngestionTest {
             InstanceSnapshot again = ingest.ingest(CloudEventBuilder.v1(fact).withId("again-" + fact.getId()).build(),
                     Duration.ofSeconds(60));
 
-            assertThat(again.status()).isEqualTo(InstanceStatus.COMPLETED);
-            JsonNode last = data(ingest.emitted().stream().filter(e -> e.getType().equals(INDEXED)).reduce((a, b) -> b)
-                    .orElseThrow());
-            assertThat(last.path("status").asText()).isEqualTo("REJECTED_ERASED");
+            // SDD 3b.5, 8e: erasing the document also deleted the batch and the minutes it came from, so there is no text left
+            // to read again: the republication fails at the extraction, and nothing is written. (The tombstone that answers
+            // REJECTED_ERASED to a redelivered *batch* is the store's, and the contract tests it, 3b.1 CA12.)
+            assertThat(again.status()).isEqualTo(InstanceStatus.FAILED);
+            assertThat(ingest.emitted().stream().filter(e -> e.getType().equals(INDEXED))).hasSize(1);   // only the first
             assertThat(ingest.store.retrieve(KnowledgeIngestPipeline.SCOPE, new RetrievalQuery("checkout", 10,
                     Sensitivity.RESTRICTED)).toCompletableFuture().join()).isEmpty();
         }

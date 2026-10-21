@@ -49,7 +49,7 @@ do:
             call: remote
             with:
               task: knowledge-write
-              input: '${ {batchRef: $context.batchRef, scope: {namespace: "examples", base: "product-meetings"}} }'
+              input: '${ {batchRef: $context.batchRef, derivedFrom: [$context.minutesRef], scope: {namespace: "examples", base: "product-meetings"}} }'
             timeout: { after: { minutes: 5 } }
             export: { as: '${ $context + {status: .status, lastSequence: .lastSequence, changes: .counts} }' }
       catch:

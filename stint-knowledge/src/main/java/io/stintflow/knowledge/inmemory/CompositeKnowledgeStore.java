@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
+import io.stintflow.knowledge.BaseInfo;
 import io.stintflow.knowledge.ChangeEntry;
 import io.stintflow.knowledge.ChangeEntry.Kind;
 import io.stintflow.knowledge.ChangeEntry.Op;
@@ -28,6 +29,7 @@ import io.stintflow.knowledge.ContextItem;
 import io.stintflow.knowledge.DeleteReceipt;
 import io.stintflow.knowledge.DeleteRequest;
 import io.stintflow.knowledge.Embedder;
+import io.stintflow.knowledge.ErasureCheck;
 import io.stintflow.knowledge.Entity;
 import io.stintflow.knowledge.EntityIds;
 import io.stintflow.knowledge.EntityMatch;
@@ -40,6 +42,8 @@ import io.stintflow.knowledge.Link;
 import io.stintflow.knowledge.Passage;
 import io.stintflow.knowledge.PassageIds;
 import io.stintflow.knowledge.Relation;
+import io.stintflow.knowledge.ReindexReceipt;
+import io.stintflow.knowledge.ReindexRequest;
 import io.stintflow.knowledge.RetrievalQuery;
 import io.stintflow.knowledge.Source;
 import io.stintflow.knowledge.WriteReceipt;
@@ -108,7 +112,8 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
 
     /** What a document gave, so it can be replaced or erased as a whole. */
     private record Doc(String documentId, String contentHash, Long revision, String batchId, Source source,
-            Set<String> passageIds, Set<String> entityIds, Set<String> relationKeys, Set<String> links) {
+            Set<String> passageIds, Set<String> entityIds, Set<String> relationKeys, Set<String> links,
+            Set<String> derivedFrom) {
     }
 
     private static final class State {
@@ -119,8 +124,12 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
         final Set<String> erasedDocs;
         final Set<String> erasedEntities;
         final Set<String> erasureRequests;
+        /** Pointers (as text) to the blobs each erasure request retired, so {@link #verifyErased} can look for them. */
+        final Map<String, List<String>> erasedBlobs = new LinkedHashMap<>();
         String model;
         int dimension;
+        /** The embedder a reindexation put in charge of this scope, or {@code null}: then the store's own. */
+        Embedder embedder;
 
         State() {
             this(new InMemoryVectorIndex(), new InMemoryGraph(), new InMemoryChangeLog(), new LinkedHashMap<>(),
@@ -142,9 +151,12 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
         }
 
         State copy() {
-            return new State(index.copy(), graph.copy(), log.copy(), new LinkedHashMap<>(docs),
+            State copy = new State(index.copy(), graph.copy(), log.copy(), new LinkedHashMap<>(docs),
                     new HashSet<>(erasedDocs), new HashSet<>(erasedEntities), new HashSet<>(erasureRequests), model,
                     dimension);
+            copy.erasedBlobs.putAll(erasedBlobs);
+            copy.embedder = embedder;
+            return copy;
         }
     }
 
@@ -155,6 +167,11 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
 
     private Holder holder(KnowledgeScope scope) {
         return scopes.computeIfAbsent(scope, s -> new Holder());
+    }
+
+    /** The embedder in charge of a state: the one a reindexation chose, else the store's own. */
+    private Embedder active(State s) {
+        return s.embedder != null ? s.embedder : embedder;
     }
 
     /** One change in flight: the copy being changed, its log entries and the blobs it created or retires. */
@@ -170,6 +187,8 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
         /** The node type of the entity the next {@link #log} entry is about (set just before it). */
         String entityType;
         boolean changed;
+        /** The embedder this change uses for the vectors it computes. */
+        Embedder embedder;
 
         Tx(KnowledgeScope scope, State s, String batchId, Source source, String schemaVersion) {
             this.scope = scope;
@@ -218,6 +237,7 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
             throw new KnowledgeValidationException("The batch is over the limits (" + MAX_PASSAGES + " passages, "
                     + MAX_ENTITIES + " entities, " + MAX_RELATIONS + " relations)");
         }
+        Embedder embedder = active(holder(scope).state);
         Set<String> passageIds = new HashSet<>();
         Set<Integer> ordinals = new HashSet<>();
         boolean restricted = false;
@@ -264,7 +284,8 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
         Tx tx = null;
         try {
             State current = holder.state;
-            if (current.model != null && (!current.model.equals(embedder.model())
+            Embedder embedder = active(current);
+            if (current.embedder == null && current.model != null && (!current.model.equals(embedder.model())
                     || current.dimension != embedder.dimension())) {
                 throw new KnowledgeValidationException("The base holds vectors of model " + current.model
                         + "; this embedder is " + embedder.model() + " (reindex to change it)");
@@ -286,10 +307,12 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
             next.model = embedder.model();
             next.dimension = embedder.dimension();
             tx = new Tx(scope, next, batch.batchId(), batch.source(), batch.schemaVersion());
+            tx.embedder = embedder;
             int dropped = apply(tx, batch, prior);
             if (!tx.changed) {
                 boolean sameMeta = prior != null && prior.contentHash().equals(batch.contentHash())
-                        && java.util.Objects.equals(prior.revision(), batch.revision());
+                        && java.util.Objects.equals(prior.revision(), batch.revision())
+                        && prior.derivedFrom().equals(next.docs.get(batch.documentId()).derivedFrom());
                 if (!sameMeta || current.model == null) {
                     holder.state = next;   // only the document's own bookkeeping moved: nothing to log
                 }
@@ -392,8 +415,11 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
             }
         }
 
+        // the blobs the document came from accumulate: a republication has a new batch, and the old one still holds the text
+        Set<String> derived = new LinkedHashSet<>(prior == null ? Set.of() : prior.derivedFrom());
+        batch.derivedFrom().forEach(uri -> derived.add(uri.toString()));
         s.docs.put(doc, new Doc(doc, batch.contentHash(), batch.revision(), batch.batchId(), batch.source(),
-                new LinkedHashSet<>(passages.keySet()), desiredEntities, desiredRelations, desiredLinks));
+                new LinkedHashSet<>(passages.keySet()), desiredEntities, desiredRelations, desiredLinks, derived));
         reconcileDocs(s);
         return dropped;
     }
@@ -417,7 +443,7 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
             tx.created.add(ref);   // new or changed content: undone if this write does not happen
         }
         float[] vector = existing != null && java.util.Objects.equals(existing.text(), p.text()) && existing.vector() != null
-                ? existing.vector() : embedder.embed(p.text());
+                ? existing.vector() : tx.embedder.embed(p.text());
         if (existing != null && existing.contentRef() != null && !existing.contentRef().equals(ref)) {
             tx.retired.add(existing.contentRef());
         }
@@ -621,7 +647,7 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
             Set<String> keptLinks = new LinkedHashSet<>(d.links());
             keptLinks.retainAll(links);
             entry.setValue(new Doc(d.documentId(), d.contentHash(), d.revision(), d.batchId(), d.source(), keptPassages,
-                    entities, relations, keptLinks));
+                    entities, relations, keptLinks, d.derivedFrom()));
         }
     }
 
@@ -677,7 +703,8 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
 
     private List<ContextItem> doRetrieve(KnowledgeScope scope, RetrievalQuery q) {
         State s = holder(scope).state;
-        if (s.model != null && (!s.model.equals(embedder.model()) || s.dimension != embedder.dimension())) {
+        Embedder embedder = active(s);
+        if (s.embedder == null && s.model != null && (!s.model.equals(embedder.model()) || s.dimension != embedder.dimension())) {
             throw new KnowledgeValidationException("The base holds vectors of model " + s.model);
         }
         float[] question = embedder.embed(q.text());
@@ -830,6 +857,7 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
                 case DeleteRequest.ByPerson p -> erasePerson(tx, p);
             }
             next.erasureRequests.add(request.requestId());
+            next.erasedBlobs.put(request.requestId(), tx.retired.stream().map(URI::toString).toList());
             reconcileDocs(next);
             deleteBlobs(tx.retired);   // before the swap: an erasure that left a blob behind has not happened
             faultBeforeSwap.run();
@@ -857,6 +885,7 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
             for (String id : doc.passageIds()) {
                 removePassage(tx, id, Op.ERASE, request.reason());
             }
+            doc.derivedFrom().forEach(uri -> tx.retired.add(URI.create(uri)));   // the batch and the text it came from
             s.docs.remove(documentId);
         }
         s.erasedDocs.add(documentId);
@@ -866,13 +895,140 @@ public final class CompositeKnowledgeStore implements KnowledgeStore {
         State s = tx.s;
         String entityId = request.entityId();
         List<String> mentioning = s.graph.passagesOf(entityId);
+        // the documents that asserted the person: the blobs they came from hold the person's pseudonym in the text
+        InMemoryGraph.Node node = s.graph.node(entityId);
+        Set<String> touched = new LinkedHashSet<>(node == null ? Set.of() : node.sources());
         removeNode(tx, entityId, Op.ERASE, request.reason(), null);
         if (request.passages() == DeleteRequest.PassagePolicy.LINKED) {
             for (String passageId : mentioning) {
+                InMemoryVectorIndex.Indexed passage = s.index.get(passageId);
+                if (passage != null) {
+                    touched.add(passage.documentId());
+                }
                 removePassage(tx, passageId, Op.ERASE, request.reason());
             }
         }
+        for (String documentId : touched) {
+            Doc doc = s.docs.get(documentId);
+            if (doc != null) {
+                doc.derivedFrom().forEach(uri -> tx.retired.add(URI.create(uri)));
+                s.docs.put(documentId, new Doc(doc.documentId(), doc.contentHash(), doc.revision(), doc.batchId(),
+                        doc.source(), doc.passageIds(), doc.entityIds(), doc.relationKeys(), doc.links(), Set.of()));
+            }
+        }
         s.erasedEntities.add(entityId);
+    }
+
+    // --- describe, reindex and verification (SDD 3b.5) -------------------------------------------------------------
+
+    @Override
+    public CompletionStage<BaseInfo> describe(KnowledgeScope scope) {
+        State s = holder(scope).state;
+        Set<String> versions = new java.util.TreeSet<>();
+        s.log.all().forEach(e -> {
+            if (e.schemaVersion() != null) {
+                versions.add(e.schemaVersion());
+            }
+        });
+        return CompletableFuture.completedFuture(new BaseInfo(s.model, s.dimension, s.docs.size(), s.index.size(),
+                s.graph.nodes().size(), s.graph.edges().size(), versions));
+    }
+
+    @Override
+    public CompletionStage<ReindexReceipt> reindex(KnowledgeScope scope, ReindexRequest request) {
+        try {
+            return CompletableFuture.completedFuture(doReindex(scope, request));
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    private ReindexReceipt doReindex(KnowledgeScope scope, ReindexRequest request) {
+        Holder holder = holder(scope);
+        holder.lock.lock();
+        try {
+            State current = holder.state;
+            Embedder target = request.target();
+            if (current.model != null && current.model.equals(target.model()) && current.dimension == target.dimension()) {
+                return new ReindexReceipt(ReindexReceipt.Status.UNCHANGED, current.model, current.model, 0, 0,
+                        current.log.lastSequence());
+            }
+            for (InMemoryVectorIndex.Indexed p : current.index.all()) {
+                if (!target.languages().contains(p.language().split("-")[0].toLowerCase(java.util.Locale.ROOT))) {
+                    throw new KnowledgeValidationException("The target model does not embed language " + p.language()
+                            + ", which the base holds " + target.languages());
+                }
+            }
+            State next = current.copy();
+            Tx tx = new Tx(scope, next, request.requestId(), Source.NONE, null);
+            tx.embedder = target;
+            int done = 0;
+            int skipped = 0;
+            for (InMemoryVectorIndex.Indexed p : current.index.all()) {
+                String text = p.text() != null ? p.text() : readBlob(p.contentRef());
+                if (text == null) {
+                    removePassage(tx, p.id(), Op.EXPIRE, "retention");   // no text to embed: it left the index, as on a read
+                    skipped++;
+                    continue;
+                }
+                next.index.put(new InMemoryVectorIndex.Indexed(p.id(), p.documentId(), p.ordinal(), p.language(), p.level(),
+                        target.embed(text), p.text(), p.contentRef()));
+                done++;
+            }
+            next.model = target.model();
+            next.dimension = target.dimension();
+            next.embedder = target;
+            tx.log(Op.REINDEX, Kind.PASSAGE, current.model + "->" + target.model(), null, Sensitivity.INTERNAL, null,
+                    request.reason());
+            reconcileDocs(next);
+            deleteBlobs(tx.retired);
+            faultBeforeSwap.run();
+            holder.state = next;
+            return new ReindexReceipt(ReindexReceipt.Status.APPLIED, current.model, target.model(), done, skipped,
+                    next.log.lastSequence());
+        } finally {
+            holder.lock.unlock();
+        }
+    }
+
+    @Override
+    public CompletionStage<ErasureCheck> verifyErased(KnowledgeScope scope, DeleteRequest request) {
+        State s = holder(scope).state;
+        Map<String, Integer> remaining = new TreeMap<>();
+        boolean tombstone;
+        switch (request) {
+            case DeleteRequest.ByDocument d -> {
+                tombstone = s.erasedDocs.contains(d.documentId());
+                count(remaining, "DOCUMENT", s.docs.containsKey(d.documentId()) ? 1 : 0);
+                count(remaining, "PASSAGE", (int) s.index.all().stream().filter(p -> p.documentId().equals(d.documentId())).count());
+                count(remaining, "ENTITY", (int) s.graph.nodes().stream().filter(n -> n.sources().contains(d.documentId())).count());
+                count(remaining, "RELATION", (int) s.graph.edges().stream().filter(e -> e.sources().contains(d.documentId())).count());
+                count(remaining, "LINK", (int) s.graph.allLinks().stream().filter(l -> {
+                    InMemoryVectorIndex.Indexed p = s.index.get(l[0]);
+                    return p != null && p.documentId().equals(d.documentId());
+                }).count());
+            }
+            case DeleteRequest.ByPerson p -> {
+                tombstone = s.erasedEntities.contains(p.entityId());
+                count(remaining, "ENTITY", s.graph.node(p.entityId()) != null ? 1 : 0);
+                count(remaining, "RELATION", s.graph.edgesOf(p.entityId()).size());
+                count(remaining, "LINK", s.graph.passagesOf(p.entityId()).size());
+            }
+        }
+        int blobsLeft = 0;
+        for (String uri : s.erasedBlobs.getOrDefault(request.requestId(), List.of())) {
+            if (exists(URI.create(uri))) {
+                blobsLeft++;
+            }
+        }
+        count(remaining, "BLOB", blobsLeft);
+        return CompletableFuture.completedFuture(new ErasureCheck(request.requestId(), remaining, tombstone));
+    }
+
+    private static void count(Map<String, Integer> into, String kind, int n) {
+        if (n > 0) {
+            into.put(kind, n);
+        }
     }
 
     // --- retention -------------------------------------------------------------------------------------------------

@@ -30,7 +30,7 @@ import io.stintflow.worker.TaskHandler;
  * The task {@code knowledge-write} (SDD 3b.3, 4.4): reads a knowledge batch by pointer and writes it to the base in one atomic
  * step (vector, graph and change log together — SDD 3b.1).
  * <p>
- * <b>Input.</b> {@code {"batchRef": "<uri>", "scope": {"namespace", "base"}}}. <b>Answer.</b> {@code {"status", "counts",
+ * <b>Input.</b> {@code {"batchRef": "<uri>", "derivedFrom"?: ["<uri>", ...], "scope": {"namespace", "base"}}}. <b>Answer.</b> {@code {"status", "counts",
  * "lastSequence", "dropped"}}. {@code UNCHANGED}, {@code STALE} and {@code REJECTED_ERASED} are normal answers — a redelivery
  * and an erasure are not failures.
  * <p>
@@ -80,7 +80,7 @@ public final class KnowledgeWriteHandler implements TaskHandler {
     private JsonNode write(TaskContext ctx) {
         JsonNode in = ctx.input();
         KnowledgeScope scope = scopes.require(in);
-        KnowledgeBatch batch = read(in.path("batchRef"));
+        KnowledgeBatch batch = read(in.path("batchRef")).withDerivedFrom(origins(in));
         if (piiGate) {
             Map<String, Integer> found = PiiGate.findings(batch);
             if (!found.isEmpty()) {
@@ -109,6 +109,30 @@ public final class KnowledgeWriteHandler implements TaskHandler {
         out.put("lastSequence", receipt.lastSequence());
         out.put("dropped", receipt.dropped());
         return out;
+    }
+
+    /**
+     * SDD 3b.5, 4.4: the blobs the document came from, so erasing it takes them too — the batch just read and what the task
+     * names in {@code derivedFrom} (the approved minutes). A pointer that is not a URI is ignored.
+     */
+    private static java.util.List<URI> origins(JsonNode in) {
+        java.util.List<URI> origins = new java.util.ArrayList<>();
+        JsonNode batch = in.path("batchRef");
+        addOrigin(origins, batch.isTextual() ? batch.asText() : batch.path(ClaimCheck.POINTER_FIELD).asText(""));
+        for (JsonNode ref : in.path("derivedFrom")) {
+            addOrigin(origins, ref.isTextual() ? ref.asText() : ref.path(ClaimCheck.POINTER_FIELD).asText(""));
+        }
+        return origins;
+    }
+
+    private static void addOrigin(java.util.List<URI> origins, String uri) {
+        if (!uri.isBlank()) {
+            try {
+                origins.add(URI.create(uri));
+            } catch (IllegalArgumentException e) {
+                // not a pointer: nothing to delete later
+            }
+        }
     }
 
     private KnowledgeBatch read(JsonNode pointer) {

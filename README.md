@@ -39,7 +39,7 @@ stint-worker-sdk         uniform TaskHandler programming model (depends on stint
 stint-otel               OpenTelemetry implementation of the tracing port (the only module using OTel)
 stint-worker-redaction   reference redactor for `call: redact`: layered, deterministic, no AI library (SDD 3a.5)
 stint-knowledge          KnowledgeStore port, graph schema, extraction pieces, in-memory adapters (SDD 3b.1, 3b.2)
-stint-worker-knowledge   knowledge-write (by pointer, allowed scopes, personal-data gate) and knowledge-retrieve (SDD 3b.3)
+stint-worker-knowledge   knowledge-write (by pointer, allowed scopes, personal-data gate), knowledge-retrieve (SDD 3b.3), and erase / verify / reindex / resolve-person (SDD 3b.5)
 stint-worker-transcription  Transcriber port, transcribe handler, Whisper (OpenAI-compatible) adapter (SDD 3a.6)
 stint-worker-publishing  PagePublisher port, publish-page handler, Confluence REST adapter and fake (SDD 3a.6)
 connectors/
@@ -709,6 +709,15 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   the schema; nothing is written). `knowledge-retrieve` takes the ceiling from the level of the instance, lowered — never raised —
   by `maxLevel`, and audits each read by counts per level (`knowledge-read`), never by the question or a content.
   `LangChain4jEmbedder` puts an `EmbeddingModel` behind the store's `Embedder`.
+- **Erasure and reindexation (3b.5).** The fact `erasure-requested` (ids, and a pointer to a blob that holds the identifier the data
+  subject gave — never a name) starts `knowledge-erase`: `resolve-person` finds the person's entity id with the secret behind the
+  stable pseudonyms (the only task that holds it; the answer is the id, never the name), `knowledge-erase` removes them from the
+  vector index, the graph and the blobs the documents came from (`KnowledgeBatch.derivedFrom`: the batch and the approved minutes),
+  `knowledge-verify` looks for what is left through the port (`verifyErased`), and only a clean look ends in `erasure-completed`;
+  what is left ends in `erasure-incomplete`, the alarm, and the subject's blob is kept. The tombstone also protects a person who
+  is not in the base yet. The fact `embedding-changed` starts `knowledge-reindex`: `reindex` recomputes every vector with the model
+  the worker serves in one atomic step (one `REINDEX` entry in the change log), and the old vectors are not consulted again.
+  Changing the graph schema is a re-ingestion, not a reindexation.
 - **Evaluation.** `corpus/kb/base.yaml` and the `kb:` sections of the synthetic corpus (121 mentions) are resolved in CI with no
   model: no wrong merge, at least 95 % resolved right, at least 90 % of the expected duplicate candidates flagged.
 

@@ -76,6 +76,22 @@ class InMemoryKnowledgeStoreTest extends KnowledgeStoreContract {
         return last.reapExpired(scope);
     }
 
+    @Override
+    protected java.net.URI putBlob(String content) {
+        return new FilesystemBlobStore(blobDir, now::get).put(content.getBytes(StandardCharsets.UTF_8), "origin-"
+                + Math.abs(content.hashCode()), new RetentionClass("origin", Duration.ofDays(90))).toCompletableFuture().join();
+    }
+
+    @Override
+    protected boolean blobExists(java.net.URI uri) {
+        try {
+            new FilesystemBlobStore(blobDir, now::get).get(uri).toCompletableFuture().join();
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     // --- CA6: the change and its log entries happen together, or neither ------------------------------------------
 
     @Test
@@ -130,6 +146,62 @@ class InMemoryKnowledgeStoreTest extends KnowledgeStoreContract {
         last.faultBeforeSwap(null);
         assertThat(erase(store, SCOPE, new DeleteRequest.ByDocument("req-x", "erasure:document", "meeting:a3")).counts())
                 .containsKey("ERASE.PASSAGE");   // the same request, retried, now takes effect
+    }
+
+    @Test
+    void ca4_a_failure_during_a_reindexation_leaves_the_model_the_vectors_and_the_log_as_they_were() throws Exception {
+        KnowledgeStore store = newStore(true);
+        write(store, SCOPE, new B(SCOPE, "meeting:a4").passage("Capacity review for the data cluster.", Sensitivity.INTERNAL)
+                .passage("SYNTH-PII-0701 raised the storage budget.", Sensitivity.RESTRICTED).build());
+        List<ChangeEntry> logged = log(store, SCOPE);
+        String held = heldOutsideBlobs(SCOPE);
+        last.faultBeforeSwap(() -> {
+            throw new IllegalStateException("simulated failure");
+        });
+
+        assertThatThrownBy(() -> reindex(store, SCOPE, "req-f", new OtherEmbedder(java.util.Set.of("en"))))
+                .hasCauseInstanceOf(IllegalStateException.class);
+
+        assertThat(store.describe(SCOPE).toCompletableFuture().get(10, TimeUnit.SECONDS).model())
+                .isEqualTo(new DeterministicEmbedder().model());
+        assertThat(log(store, SCOPE)).isEqualTo(logged);
+        assertThat(heldOutsideBlobs(SCOPE)).isEqualTo(held);
+        assertThat(retrieve(store, SCOPE, "capacity cluster storage", Sensitivity.RESTRICTED)).hasSize(2);   // still the old model
+        last.faultBeforeSwap(null);
+        assertThat(reindex(store, SCOPE, "req-f", new OtherEmbedder(java.util.Set.of("en"))).status())
+                .isEqualTo(ReindexReceipt.Status.APPLIED);   // the same request, retried, takes effect
+    }
+
+    @Test
+    void ca4_a_reader_during_a_reindexation_sees_the_old_base_whole() throws Exception {
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, new B(SCOPE, "meeting:a5").passage("Alpha topic one.", Sensitivity.INTERNAL).build());
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        last.faultBeforeSwap(() -> {
+            started.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        var moving = java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                reindex(store, SCOPE, "req-r", new OtherEmbedder(java.util.Set.of("en")));
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertThat(started.await(10, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(store.describe(SCOPE).toCompletableFuture().get(10, TimeUnit.SECONDS).model())
+                .isEqualTo(new DeterministicEmbedder().model());
+        assertThat(retrieve(store, SCOPE, "alpha topic", Sensitivity.INTERNAL)).hasSize(1);
+        release.countDown();
+        moving.get(10, TimeUnit.SECONDS);
+        assertThat(store.describe(SCOPE).toCompletableFuture().get(10, TimeUnit.SECONDS).model()).isEqualTo("other-bag-16");
+        assertThat(retrieve(store, SCOPE, "alpha topic", Sensitivity.INTERNAL)).hasSize(1);
     }
 
     @Test
