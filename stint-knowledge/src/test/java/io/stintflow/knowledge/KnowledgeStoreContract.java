@@ -798,4 +798,157 @@ public abstract class KnowledgeStoreContract {
                 .isNotEqualTo(EntityIds.of("Term", "checkout service"));
         assertThat(EntityIds.normalize("  Café-Menu, 2nd  ")).isEqualTo("cafe menu 2nd");
     }
+
+    // --- SDD 3b.4: the graph by depth, the evidence, the seeds --------------------------------------------------------
+
+    /** m-001: the old policy affects checkout; m-002: the new one supersedes the old; m-003: the new one affects the gateway. */
+    private void policies(KnowledgeStore store, Sensitivity gatewayLevel) throws Exception {
+        write(store, SCOPE, new B(SCOPE, "meeting:m-001").passage("We keep the old retry policy for checkout.", Sensitivity.INTERNAL)
+                .entity("e-old", "Decision", "Old retry policy", Sensitivity.INTERNAL)
+                .entity("e-checkout", "System", "Checkout Service", Sensitivity.INTERNAL)
+                .relation("affects", "e-old", "e-checkout", Sensitivity.INTERNAL).link(0, "e-old").build());
+        write(store, SCOPE, new B(SCOPE, "meeting:m-002").passage("The plan for payments is a longer story.", Sensitivity.INTERNAL)
+                .entity("e-new", "Decision", "New retry policy", Sensitivity.INTERNAL)
+                .entity("e-old", "Decision", "Old retry policy", Sensitivity.INTERNAL)
+                .relation("supersedes", "e-new", "e-old", Sensitivity.INTERNAL).link(0, "e-new").build());
+        write(store, SCOPE, new B(SCOPE, "meeting:m-003").passage("The gateway needs the new policy.", Sensitivity.INTERNAL)
+                .entity("e-new", "Decision", "New retry policy", Sensitivity.INTERNAL)
+                .entity("e-gateway", "System", "Gateway", gatewayLevel)
+                .entity("e-checkout", "System", "Checkout Service", Sensitivity.INTERNAL)
+                .relation("affects", "e-new", "e-gateway", gatewayLevel)
+                .relation("affects", "e-checkout", "e-new", Sensitivity.INTERNAL).link(0, "e-new").build());
+    }
+
+    private static List<ContextItem> hops(KnowledgeStore store, Sensitivity ceiling, int hops, String... entityIds)
+            throws Exception {
+        return store.retrieve(SCOPE, new RetrievalQuery("old retry policy", 50, 0, ceiling, null, Set.of(entityIds), null, hops))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    private static List<String> contents(List<ContextItem> items, ContextItem.Kind kind) {
+        return items.stream().filter(i -> i.origin().kind() == kind).map(ContextItem::content).toList();
+    }
+
+    @Test
+    protected void ca4_two_hops_reach_what_no_passage_names_and_one_hop_is_what_it_was() throws Exception {
+        KnowledgeStore store = newStore(false);
+        policies(store, Sensitivity.INTERNAL);
+
+        List<ContextItem> one = hops(store, Sensitivity.INTERNAL, 1, "e-old");
+        List<ContextItem> two = hops(store, Sensitivity.INTERNAL, 2, "e-old");
+
+        assertThat(contents(one, ContextItem.Kind.ENTITY)).containsExactly("Decision: Old retry policy");
+        assertThat(contents(one, ContextItem.Kind.RELATION)).isEmpty();
+        assertThat(contents(two, ContextItem.Kind.ENTITY)).contains("Decision: Old retry policy", "System: Checkout Service",
+                "Decision: New retry policy");
+        assertThat(contents(two, ContextItem.Kind.RELATION)).contains("New retry policy -[supersedes]-> Old retry policy",
+                "Old retry policy -[affects]-> Checkout Service");
+        assertThat(contents(two, ContextItem.Kind.ENTITY)).doesNotContain("System: Gateway");
+    }
+
+    @Test
+    protected void ca4_three_hops_go_one_step_further_and_a_cycle_adds_nothing_twice() throws Exception {
+        KnowledgeStore store = newStore(false);
+        policies(store, Sensitivity.INTERNAL);   // checkout -> new -> old -> checkout is a cycle
+
+        List<ContextItem> three = hops(store, Sensitivity.INTERNAL, 3, "e-old");
+
+        assertThat(contents(three, ContextItem.Kind.ENTITY)).contains("System: Gateway").doesNotHaveDuplicates();
+        assertThat(contents(three, ContextItem.Kind.RELATION)).contains("New retry policy -[affects]-> Gateway")
+                .doesNotHaveDuplicates();
+        assertThat(three).extracting(i -> i.origin().id()).doesNotHaveDuplicates();
+    }
+
+    @Test
+    protected void ca4_what_the_graph_adds_says_which_documents_hold_it_and_scores_less_the_further_it_is() throws Exception {
+        KnowledgeStore store = newStore(false);
+        policies(store, Sensitivity.INTERNAL);
+
+        List<ContextItem> three = hops(store, Sensitivity.INTERNAL, 3, "e-old");
+
+        ContextItem supersedes = three.stream().filter(i -> i.content().equals("New retry policy -[supersedes]-> Old retry policy"))
+                .findFirst().orElseThrow();
+        assertThat(supersedes.origin().evidence()).containsExactly("meeting:m-002");
+        ContextItem gateway = three.stream().filter(i -> i.content().equals("System: Gateway")).findFirst().orElseThrow();
+        assertThat(gateway.origin().evidence()).containsExactly("meeting:m-003");
+        ContextItem old = three.stream().filter(i -> i.content().equals("Decision: Old retry policy")).findFirst().orElseThrow();
+        assertThat(old.origin().evidence()).containsExactly("meeting:m-001", "meeting:m-002");
+        assertThat(gateway.score()).isLessThan(old.score());
+        ContextItem passage = three.stream().filter(i -> i.origin().kind() == ContextItem.Kind.PASSAGE).findFirst().orElseThrow();
+        assertThat(passage.origin().evidence()).isEmpty();
+        assertThat(passage.origin().documentId()).isEqualTo("meeting:m-001");
+    }
+
+    @Test
+    protected void ca4_the_graph_never_shows_past_the_ceiling_even_two_hops_away() throws Exception {
+        KnowledgeStore store = newStore(false);
+        policies(store, Sensitivity.CONFIDENTIAL);
+
+        List<ContextItem> internal = hops(store, Sensitivity.INTERNAL, 3, "e-old");
+        List<ContextItem> confidential = hops(store, Sensitivity.CONFIDENTIAL, 3, "e-old");
+
+        assertThat(internal.toString()).doesNotContain("Gateway");
+        assertThat(internal).extracting(ContextItem::sensitivity).containsOnly(Sensitivity.INTERNAL);
+        assertThat(contents(confidential, ContextItem.Kind.ENTITY)).contains("System: Gateway");
+    }
+
+    @Test
+    protected void ca4_hops_go_to_three_and_no_further() {
+        assertThat(new RetrievalQuery("q", 5, 0, Sensitivity.INTERNAL, null, Set.of(), null, 3).hops()).isEqualTo(3);
+        assertThatThrownBy(() -> new RetrievalQuery("q", 5, 0, Sensitivity.INTERNAL, null, Set.of(), null, 4))
+                .isInstanceOf(KnowledgeValidationException.class);
+    }
+
+    @Test
+    protected void ca8_erasing_the_document_that_held_a_relation_takes_the_relation_and_its_evidence_out_of_the_reach()
+            throws Exception {
+        KnowledgeStore store = newStore(false);
+        policies(store, Sensitivity.INTERNAL);
+
+        erase(store, SCOPE, new DeleteRequest.ByDocument("req-3b4", "erasure:document", "meeting:m-002"));
+        List<ContextItem> items = hops(store, Sensitivity.INTERNAL, 3, "e-old");
+
+        assertThat(contents(items, ContextItem.Kind.RELATION)).doesNotContain("New retry policy -[supersedes]-> Old retry policy");
+        assertThat(items.stream().flatMap(i -> i.origin().evidence().stream())).doesNotContain("meeting:m-002");
+        ContextItem old = items.stream().filter(i -> i.content().equals("Decision: Old retry policy")).findFirst().orElseThrow();
+        assertThat(old.origin().evidence()).containsExactly("meeting:m-001");
+    }
+
+    @Test
+    protected void ca3_the_seeds_of_a_question_are_the_entities_of_the_base_it_names_at_or_below_the_ceiling() throws Exception {
+        KnowledgeStore store = newStore(false);
+        policies(store, Sensitivity.CONFIDENTIAL);
+
+        assertThat(KnowledgeSeeds.find(store, SCOPE, "Which decision superseded the Old Retry Policy?", null,
+                Sensitivity.INTERNAL)).containsExactly("e-old");
+        assertThat(KnowledgeSeeds.find(store, SCOPE, "what do we know about the gateway and checkout service", null,
+                Sensitivity.INTERNAL)).containsExactly("e-checkout");   // the gateway is confidential
+        assertThat(KnowledgeSeeds.find(store, SCOPE, "what do we know about the gateway", null, Sensitivity.CONFIDENTIAL))
+                .containsExactly("e-gateway");
+        assertThat(KnowledgeSeeds.find(store, SCOPE, "nothing of the kind is here", null, Sensitivity.INTERNAL)).isEmpty();
+        assertThat(KnowledgeSeeds.find(store, SCOPE, "unrelated words", List.of("new retry policy"), Sensitivity.INTERNAL))
+                .containsExactly("e-new");
+    }
+
+    @Test
+    protected void ca3_a_long_question_costs_at_most_the_lookups_the_limit_allows() throws Exception {
+        KnowledgeStore store = newStore(false);
+        policies(store, Sensitivity.INTERNAL);
+        int[] calls = {0};
+        KnowledgeStore counting = (KnowledgeStore) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[] {KnowledgeStore.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("entities")) {
+                        calls[0]++;
+                    }
+                    try {
+                        return method.invoke(store, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+
+        KnowledgeSeeds.find(counting, SCOPE, "word ".repeat(200), null, Sensitivity.INTERNAL);
+
+        assertThat(calls[0]).isLessThanOrEqualTo(KnowledgeSeeds.MAX_LOOKUPS);
+    }
 }

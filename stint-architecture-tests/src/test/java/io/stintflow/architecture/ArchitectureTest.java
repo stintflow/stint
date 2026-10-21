@@ -224,6 +224,21 @@ class ArchitectureTest {
             .orShould().callMethod(AreaKeys.class, "unwrap", String.class, byte[].class);
 
     /**
+     * SDD 3b.4, 4.7 (CA10): the retriever a model's worker reads the base with only reads. It asks the port to retrieve and to look
+     * an entity up, and never writes, erases or reindexes; it does not know the in-memory adapters, a batch, an erasure request, a
+     * reindexation request or the blob store.
+     */
+    @ArchTest
+    static final ArchRule the_content_retriever_only_reads = noClasses()
+            .that().haveSimpleName("KnowledgeContentRetriever")
+            .should().callMethod(KnowledgeStore.class, "write", io.stintflow.knowledge.KnowledgeScope.class, KnowledgeBatch.class)
+            .orShould().callMethod(KnowledgeStore.class, "delete", io.stintflow.knowledge.KnowledgeScope.class, DeleteRequest.class)
+            .orShould().callMethod(KnowledgeStore.class, "reindex", io.stintflow.knowledge.KnowledgeScope.class, ReindexRequest.class)
+            .orShould().dependOnClassesThat(com.tngtech.archunit.core.domain.JavaClass.Predicates.belongToAnyOf(
+                    KnowledgeBatch.class, DeleteRequest.class, ReindexRequest.class, BlobStore.class))
+            .orShould().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge.inmemory..", "io.stintflow.inmemory..");
+
+    /**
      * SDD 3b.6, 4.6 (CA9): the inspector looks and never touches. It does not depend on the store that writes, on a batch, on an
      * erasure or a reindexation request, on the blob store, nor on the in-memory adapters — only on the inspection port and its
      * types. And nothing of the engine side or the workers depends on it.

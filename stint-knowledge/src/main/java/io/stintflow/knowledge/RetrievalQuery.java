@@ -17,12 +17,14 @@ import io.stintflow.spi.Sensitivity;
  * @param provider  the model the answer is for, or {@code null}; kept for the caller's audit, the ceiling is what filters
  * @param entityIds only passages that mention one of these entities, or empty for any
  * @param language  only passages in this language, or {@code null} for any
- * @param hops      0, or 1 to add the entities the passages mention and the relations among them
+ * @param hops      0 to {@value #MAX_HOPS}, counted from the passage: 1 adds the entities the passages mention and the relations
+ *                  among them; 2 the neighbours of those entities and the relations that reach them; 3 their neighbours (SDD 3b.4, 4.1)
  */
 public record RetrievalQuery(String text, int topK, double minScore, Sensitivity ceiling, ModelProvider provider,
         Set<String> entityIds, String language, int hops) {
 
     public static final int MAX_TOP_K = 50;
+    public static final int MAX_HOPS = 3;
 
     public RetrievalQuery {
         Objects.requireNonNull(text, "text");
@@ -33,8 +35,8 @@ public record RetrievalQuery(String text, int topK, double minScore, Sensitivity
         if (minScore < 0 || minScore > 1) {
             throw new KnowledgeValidationException("minScore is 0 to 1");
         }
-        if (hops < 0 || hops > 1) {
-            throw new KnowledgeValidationException("hops is 0 or 1");
+        if (hops < 0 || hops > MAX_HOPS) {
+            throw new KnowledgeValidationException("hops is 0 to " + MAX_HOPS);
         }
         entityIds = entityIds == null ? Set.of() : Set.copyOf(entityIds);
     }

@@ -110,6 +110,9 @@ public final class ProductMeetingPipeline implements AutoCloseable {
     final FakeConfluenceServer confluence;
     final InMemoryStateStore state = new InMemoryStateStore();
     final InMemoryAuditLog audit = new InMemoryAuditLog();
+    /** The base the minutes are written against, once a run gives one (SDD 3b.4); none: no earlier context. */
+    private final java.util.concurrent.atomic.AtomicReference<io.stintflow.knowledge.KnowledgeStore> knowledge =
+            new java.util.concurrent.atomic.AtomicReference<>();
     final InMemoryCorrectionLog corrections = new InMemoryCorrectionLog();
     final WorkflowEngine engine;
     final WorkflowDefinition definition;
@@ -142,7 +145,8 @@ public final class ProductMeetingPipeline implements AutoCloseable {
         this.confluence = new FakeConfluenceServer(CONFLUENCE_EMAIL, CONFLUENCE_TOKEN, SPACE, "HR");
         OpenTelemetryExecutionTracer tracer = new OpenTelemetryExecutionTracer(SdkTracerProvider.builder()
                 .addSpanProcessor(SimpleSpanProcessor.create(metrics)).build().get("stint-example-product-meeting"));
-        TaskHandlerRegistry handlers = handlers(meetings, stack, metrics, blobs, tracer, confluence.baseUri());
+        TaskHandlerRegistry handlers = handlers(meetings, stack, metrics, blobs, tracer, confluence.baseUri(), knowledge::get,
+                audit);
         this.pool = new WorkerPool(new WorkerRuntime(handlers, blobs, tracer), 4);
         InMemoryTaskTransport transport = new InMemoryTaskTransport();
         transport.connectWorker(invoke -> {
@@ -177,6 +181,17 @@ public final class ProductMeetingPipeline implements AutoCloseable {
      */
     public static TaskHandlerRegistry handlers(List<Meeting> meetings, Stack stack, RunMetrics metrics,
             BlobStore blobs, ExecutionTracer tracer, URI confluenceBase) {
+        return handlers(meetings, stack, metrics, blobs, tracer, confluenceBase, null, null);
+    }
+
+    /**
+     * As above, and {@code structure-minutes} reads what the base holds from earlier meetings (SDD 3b.4, 4.6): through a retriever
+     * whose ceiling is the instance's level and the minutes model's provider, that leaves the meeting itself out and records each
+     * read in {@code audit}. {@code knowledge} gives the base when the task runs (or {@code null} for none yet).
+     */
+    public static TaskHandlerRegistry handlers(List<Meeting> meetings, Stack stack, RunMetrics metrics,
+            BlobStore blobs, ExecutionTracer tracer, URI confluenceBase,
+            java.util.function.Supplier<io.stintflow.knowledge.KnowledgeStore> knowledge, io.stintflow.spi.AuditLog audit) {
         SensitivityPolicy policy = SensitivityPolicy.fromProperties(Map.of());
         LayeredRedactor redactor = new LayeredRedactor("example", "1", List.of(new PatternLayer(),
                 new TermListLayer("person", Corpus.personMarkers(meetings))));
@@ -197,10 +212,28 @@ public final class ProductMeetingPipeline implements AutoCloseable {
         return decisionsBuilder.build().registerAll(new TaskHandlerRegistry())
                 .register("transcribe", new TranscriptionHandler(metrics.recording(stack.transcriber()), blobs))
                 .register("redactor", new RedactionHandler(redactor, pseudonyms(), blobs).allowingStablePseudonyms())
-                .register("structure-minutes", new StructureHandler(writer, blobs))
+                .register("structure-minutes", new StructureHandler(writer, blobs, knowledge == null ? null : task -> {
+                    io.stintflow.knowledge.KnowledgeStore base = knowledge.get();
+                    if (base == null) {
+                        return null;
+                    }
+                    io.stintflow.spi.ModelProvider provider = new io.stintflow.spi.ModelProvider(stack.minutesProvider(),
+                            stack.minutesModelName(), stack.minutesRemote());
+                    var retriever = io.stintflow.worker.langchain4j.KnowledgeContentRetriever
+                            .builder(base, KnowledgeIngestPipeline.SCOPE).instanceLevel(task.sensitivity()).provider(provider)
+                            .approvedRemote(policy.refusal(io.stintflow.spi.Sensitivity.CONFIDENTIAL, provider).isEmpty())
+                            .topK(5).hops(2).budgetTokens(1500)
+                            .excludeDocuments(Set.of("meeting:" + task.input().path("meetingId").asText()));
+                    return (audit == null ? retriever : retriever.audit(audit, task, InstantSource.system())).build();
+                }))
                 .register("publish-page", new PublishHandler(ConfluencePagePublisher.builder()
                         .baseUri(confluenceBase).space(SPACE).email(CONFLUENCE_EMAIL).apiToken(CONFLUENCE_TOKEN)
                         .build(), blobs, SPACE));
+    }
+
+    /** From now on the minutes of a meeting are written with what {@code base} holds from the earlier ones (SDD 3b.4). */
+    public void useKnowledge(io.stintflow.knowledge.KnowledgeStore base) {
+        knowledge.set(base);
     }
 
     /** The secret behind the pseudonyms of the example: the redactor's, and the one that finds a person to erase (SDD 3b.5). */

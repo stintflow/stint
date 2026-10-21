@@ -33,9 +33,19 @@ public record ContextItem(String content, Origin origin, double score, List<Enti
      * @param scope      the base
      * @param instanceId the instance that wrote it, or {@code null}
      * @param chainId    its business chain, or {@code null}
+     * @param evidence   the documents that still hold what the graph added (an entity or a relation), sorted; empty for a passage
+     *                   (SDD 3b.4, 4.1)
      */
     public record Origin(Kind kind, String id, String documentId, KnowledgeScope scope, String instanceId,
-            String chainId) {
+            String chainId, List<String> evidence) {
+
+        public Origin {
+            evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        }
+
+        public Origin(Kind kind, String id, String documentId, KnowledgeScope scope, String instanceId, String chainId) {
+            this(kind, id, documentId, scope, instanceId, chainId, List.of());
+        }
     }
 
     public record EntityRef(String id, String type, String label) {

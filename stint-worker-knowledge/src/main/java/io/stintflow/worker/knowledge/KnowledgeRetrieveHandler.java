@@ -1,11 +1,12 @@
 package io.stintflow.worker.knowledge;
 
 import java.time.InstantSource;
+import java.util.ArrayList;
 import java.util.EnumMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -18,8 +19,11 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.stintflow.knowledge.Audience;
+import io.stintflow.knowledge.ContextBudget;
 import io.stintflow.knowledge.ContextItem;
+import io.stintflow.knowledge.KnowledgeReadAudit;
 import io.stintflow.knowledge.KnowledgeScope;
+import io.stintflow.knowledge.KnowledgeSeeds;
 import io.stintflow.knowledge.KnowledgeStore;
 import io.stintflow.knowledge.KnowledgeValidationException;
 import io.stintflow.knowledge.RetrievalQuery;
@@ -33,10 +37,16 @@ import io.stintflow.worker.TaskHandler;
 /**
  * The task {@code knowledge-retrieve} (SDD 3b.3, 4.6): the context closest to a question, at or below a ceiling.
  * <p>
- * <b>Input.</b> {@code {"query", "topK"?: 5, "hops"?: 0, "minScore"?, "maxLevel"?, "scope": {"namespace", "base"}}}.
+ * <b>Input.</b> {@code {"query", "topK"?: 5, "hops"?, "minScore"?, "maxLevel"?, "mode"?: "auto", "entities"?: [name],
+ * "budgetTokens"?, "scope": {"namespace", "base"}}}.
+ * <b>Mode (SDD 3b.4, 4.3).</b> {@code semantic} searches by meaning ({@code hops} 0 unless asked). {@code relational} starts from the
+ * entities the question names — those in {@code entities}, and those the base knows in the question's words — keeps the passages that
+ * mention them and follows the graph ({@code hops} 2 unless asked); with none named it answers as {@code semantic}. {@code auto}
+ * (the default) is relational when the question names something the base knows, else semantic. The answer says which it was.
+ * <b>Budget.</b> {@code budgetTokens}, estimated ({@link ContextBudget}), keeps the best whole items that fit.
  * <b>Ceiling.</b> The level of the instance asking — absent reads as restricted — lowered, never raised, by {@code maxLevel}.
  * Nothing above it comes back, and nothing that tells it is there (SDD 3b.1, 4.4). <b>Answer.</b> {@code {"items": [{"content",
- * "kind", "score", "level", "entities", "origin"}], "counts": {"internal", "confidential", "restricted"}}}.
+ * "kind", "score", "level", "entities", "origin"}], "counts": {"internal", "confidential", "restricted"}, "mode", "trimmed"}}.
  * <p>
  * <b>Audit.</b> Each read adds a record of kind {@value #AUDIT_KIND} with the base, the ceiling, {@code topK} and the counts by
  * level — never the question and never a content. With no audit log, nothing is recorded.
@@ -44,7 +54,7 @@ import io.stintflow.worker.TaskHandler;
 public final class KnowledgeRetrieveHandler implements TaskHandler {
 
     /** The kind of the audit record of a read of the base. */
-    public static final String AUDIT_KIND = "knowledge-read";
+    public static final String AUDIT_KIND = KnowledgeReadAudit.KIND;
 
     private static final Logger LOG = LoggerFactory.getLogger(KnowledgeRetrieveHandler.class);
 
@@ -87,16 +97,33 @@ public final class KnowledgeRetrieveHandler implements TaskHandler {
                     Failures.validation("maxLevel is internal, confidential or restricted"));
             ceiling = asked.compareTo(ceiling) < 0 ? asked : ceiling;   // it only lowers
         }
+        String asked = in.path("mode").asText("auto");
+        if (!List.of("auto", "semantic", "relational").contains(asked)) {
+            throw Failures.validation("mode is auto, semantic or relational");
+        }
+        Integer budget = in.hasNonNull("budgetTokens") ? in.get("budgetTokens").asInt(-1) : null;
+        if (budget != null && budget < 0) {
+            throw Failures.validation("budgetTokens is 0 or more");
+        }
         RetrievalQuery query;
+        String mode;
+        List<ContextItem> found;
+        ContextBudget.Fit fit;
         try {
+            Set<String> seeds = Set.of();
+            if (!asked.equals("semantic")) {
+                List<String> names = new ArrayList<>();
+                in.path("entities").forEach(n -> names.add(n.asText()));
+                seeds = KnowledgeSeeds.find(store, scope, question, names, ceiling);
+            }
+            mode = seeds.isEmpty() ? "semantic" : "relational";
             query = new RetrievalQuery(question, in.path("topK").asInt(5), in.path("minScore").asDouble(0), ceiling, null,
-                    null, null, in.path("hops").asInt(0));
+                    seeds, null, in.path("hops").asInt(mode.equals("relational") ? 2 : 0));
+            found = store.retrieve(scope, query).toCompletableFuture().join();
+            fit = ContextBudget.fit(found, budget);
+            found = fit.kept();
         } catch (KnowledgeValidationException e) {
             throw Failures.validation(e.getMessage());
-        }
-        List<ContextItem> found;
-        try {
-            found = store.retrieve(scope, query).toCompletableFuture().join();
         } catch (RuntimeException e) {
             Throwable cause = e instanceof CompletionException && e.getCause() != null ? e.getCause() : e;
             if (cause instanceof KnowledgeValidationException invalid) {
@@ -119,6 +146,10 @@ public final class KnowledgeRetrieveHandler implements TaskHandler {
             if (item.origin().documentId() != null) {
                 origin.put("documentId", item.origin().documentId());
             }
+            if (!item.origin().evidence().isEmpty()) {
+                ArrayNode evidence = origin.putArray("evidence");
+                item.origin().evidence().forEach(evidence::add);
+            }
         }
         ObjectNode out = Json.obj();
         out.set("items", items);
@@ -126,17 +157,9 @@ public final class KnowledgeRetrieveHandler implements TaskHandler {
         for (Sensitivity level : Sensitivity.values()) {
             counts.put(level.wireName(), byLevel.getOrDefault(level, 0));
         }
-        record(ctx, scope, query, counts);
+        out.put("mode", mode).put("trimmed", fit.trimmed());
+        KnowledgeReadAudit.record(audit, ctx.instanceId(), ctx.chainId(), clock.instant(), ctx.taskId(), ctx.sensitivity(),
+                "knowledge-retrieve", scope, query, mode, fit.trimmed(), byLevel);
         return out;
-    }
-
-    private void record(TaskContext ctx, KnowledgeScope scope, RetrievalQuery query, ObjectNode counts) {
-        Map<String, String> detail = new LinkedHashMap<>();
-        detail.put("base", scope.key());
-        detail.put("topK", Integer.toString(query.topK()));
-        detail.put("ceiling", query.ceiling().wireName());
-        counts.properties().forEach(e -> detail.put(e.getKey(), e.getValue().asText()));
-        audit.append(new AuditLog.AuditRecord(ctx.instanceId(), ctx.chainId(), clock.instant(), AUDIT_KIND, ctx.taskId(),
-                ctx.sensitivity(), "knowledge-retrieve", "answered", detail)).toCompletableFuture().join();
     }
 }

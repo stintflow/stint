@@ -79,9 +79,9 @@ public final class CompositeKnowledgeStore implements KnowledgeStore, KnowledgeI
     static final int MAX_RELATIONS = 5_000;
     static final int MAX_PASSAGE_BYTES = 8 * 1024;
     private static final Pattern LANGUAGE = Pattern.compile("[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*");
-    /** Entities and relations a retrieval adds through the graph score this fraction of the passage they come from. */
+    /** Entities a retrieval adds through the graph score this fraction of the passage they come from (relations, half of that again; deeper, halved each step). */
     private static final double ENTITY_FRACTION = 0.5;
-    private static final double RELATION_FRACTION = 0.25;
+    private static final double SEED_SCORE = 0.8;
 
     private final Embedder embedder;
     private final BlobStore blobs;
@@ -742,34 +742,94 @@ public final class CompositeKnowledgeStore implements KnowledgeStore, KnowledgeI
                     scope, doc == null ? null : doc.source().instanceId(), doc == null ? null : doc.source().chainId()),
                     hit.score(), refs, p.level()));
         }
-        if (q.hops() >= 1 && !entityScores.isEmpty()) {
+        if (q.hops() >= 1) {
             items.addAll(expand(scope, s, q, entityScores));
         }
         return items;
     }
 
-    /** The entities the passages mention and the edges among them, at or below the ceiling, with a fixed fraction of the score. */
+    /**
+     * The graph's share of a retrieval (SDD 3b.4, 4.1), {@code hops} counted from the passage. 1: the entities the passages mention
+     * and the edges among them. 2 and 3: each step adds the neighbours of the last step's entities that the ceiling lets through,
+     * and the edges that now have both ends. An item scores a fixed fraction of the best passage it comes from (entities
+     * {@code 0.5^d}, edges {@code 0.5^(d+1)}); the entities a query names ({@code entityIds}) start from {@link #SEED_SCORE} when
+     * no passage found them. Each item says which documents still hold it.
+     */
     private List<ContextItem> expand(KnowledgeScope scope, State s, RetrievalQuery q, Map<String, Double> entityScores) {
-        List<ContextItem> added = new ArrayList<>();
-        Map<String, String> labels = new HashMap<>();
-        for (Map.Entry<String, Double> entry : entityScores.entrySet()) {
-            InMemoryGraph.Node node = s.graph.node(entry.getKey());
-            String label = labelOf(node);
-            labels.put(node.id(), label);
-            added.add(new ContextItem(node.type() + ": " + label, new ContextItem.Origin(ContextItem.Kind.ENTITY,
-                    node.id(), null, scope, null, null), ENTITY_FRACTION * entry.getValue(), List.of(), node.level()));
-        }
-        for (InMemoryGraph.Edge edge : s.graph.edges()) {
-            if (edge.level().compareTo(q.ceiling()) <= 0 && labels.containsKey(edge.from()) && labels.containsKey(edge.to())) {
-                double parent = Math.max(entityScores.get(edge.from()), entityScores.get(edge.to()));
-                added.add(new ContextItem(labels.get(edge.from()) + " -[" + edge.type() + "]-> " + labels.get(edge.to()),
-                        new ContextItem.Origin(ContextItem.Kind.RELATION, edge.key(), null, scope, null, null),
-                        RELATION_FRACTION * parent, List.of(), edge.level()));
+        Map<String, Double> base = new LinkedHashMap<>(entityScores);
+        if (q.hops() >= 2) {
+            for (String id : new java.util.TreeSet<>(q.entityIds())) {
+                if (!base.containsKey(id) && visibleLabel(s, id, q) != null) {
+                    base.put(id, SEED_SCORE);
+                }
             }
+        }
+        if (base.isEmpty()) {
+            return List.of();
+        }
+        List<ContextItem> added = new ArrayList<>();
+        Map<String, String> labels = new LinkedHashMap<>();
+        for (Map.Entry<String, Double> entry : base.entrySet()) {
+            String label = visibleLabel(s, entry.getKey(), q);
+            if (label != null) {
+                labels.put(entry.getKey(), label);
+                added.add(entityItem(scope, s.graph.node(entry.getKey()), label, Math.pow(ENTITY_FRACTION, 1) * entry.getValue()));
+            }
+        }
+        Set<String> edgesDone = new HashSet<>();
+        addEdges(scope, s, q, labels, base, edgesDone, 1, added);
+        Set<String> frontier = new LinkedHashSet<>(labels.keySet());
+        for (int d = 2; d <= q.hops(); d++) {
+            Set<String> reached = new LinkedHashSet<>();
+            for (String from : frontier) {
+                for (InMemoryGraph.Edge edge : s.graph.edgesOf(from)) {
+                    String other = edge.from().equals(from) ? edge.to() : edge.from();
+                    if (labels.containsKey(other) || edge.level().compareTo(q.ceiling()) > 0) {
+                        continue;
+                    }
+                    String label = visibleLabel(s, other, q);
+                    if (label != null) {
+                        labels.put(other, label);
+                        base.merge(other, base.get(from), Math::max);
+                        reached.add(other);
+                    }
+                }
+            }
+            for (String id : reached) {
+                added.add(entityItem(scope, s.graph.node(id), labels.get(id), Math.pow(ENTITY_FRACTION, d) * base.get(id)));
+            }
+            addEdges(scope, s, q, labels, base, edgesDone, d, added);
+            frontier = reached;
         }
         added.sort(Comparator.comparingDouble(ContextItem::score).reversed()
                 .thenComparing(item -> item.origin().id()));
         return added.size() > q.topK() ? new ArrayList<>(added.subList(0, q.topK())) : added;
+    }
+
+    /** The label of {@code id} if it is a node the ceiling lets through and whose label is not gone, else {@code null}. */
+    private String visibleLabel(State s, String id, RetrievalQuery q) {
+        InMemoryGraph.Node node = s.graph.node(id);
+        return node == null || node.level().compareTo(q.ceiling()) > 0 ? null : labelOf(node);
+    }
+
+    private static ContextItem entityItem(KnowledgeScope scope, InMemoryGraph.Node node, String label, double score) {
+        return new ContextItem(node.type() + ": " + label, new ContextItem.Origin(ContextItem.Kind.ENTITY, node.id(), null,
+                scope, null, null, new java.util.TreeSet<>(node.sources()).stream().toList()), score, List.of(), node.level());
+    }
+
+    /** The edges not yet added whose two ends are both shown and which the ceiling lets through, at depth {@code d}. */
+    private static void addEdges(KnowledgeScope scope, State s, RetrievalQuery q, Map<String, String> labels,
+            Map<String, Double> base, Set<String> done, int d, List<ContextItem> out) {
+        for (InMemoryGraph.Edge edge : s.graph.edges()) {
+            if (edge.level().compareTo(q.ceiling()) <= 0 && labels.containsKey(edge.from()) && labels.containsKey(edge.to())
+                    && done.add(edge.key())) {
+                double parent = Math.max(base.get(edge.from()), base.get(edge.to()));
+                out.add(new ContextItem(labels.get(edge.from()) + " -[" + edge.type() + "]-> " + labels.get(edge.to()),
+                        new ContextItem.Origin(ContextItem.Kind.RELATION, edge.key(), null, scope, null, null,
+                                new java.util.TreeSet<>(edge.sources()).stream().toList()),
+                        Math.pow(ENTITY_FRACTION, d + 1) * parent, List.of(), edge.level()));
+            }
+        }
     }
 
     private static boolean mentionsAny(State s, String passageId, Set<String> entityIds) {

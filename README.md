@@ -38,7 +38,7 @@ stint-dsl                YAML/JSON front-end: compiles the CNCF DSL 1.0 into sti
 stint-worker-sdk         uniform TaskHandler programming model (depends on stint-wire, not stint-core)
 stint-otel               OpenTelemetry implementation of the tracing port (the only module using OTel)
 stint-worker-redaction   reference redactor for `call: redact`: layered, deterministic, no AI library (SDD 3a.5)
-stint-knowledge          KnowledgeStore port, graph schema, extraction pieces, in-memory adapters (SDD 3b.1, 3b.2); KnowledgeInspector port (SDD 3b.6)
+stint-knowledge          KnowledgeStore port, graph schema, extraction pieces, in-memory adapters (SDD 3b.1, 3b.2); KnowledgeInspector port (SDD 3b.6); graph by depth, context budget, seeds of a question (SDD 3b.4)
 stint-worker-knowledge   knowledge-write (by pointer, allowed scopes, personal-data gate), knowledge-retrieve (SDD 3b.3), and erase / verify / reindex / resolve-person (SDD 3b.5)
 stint-knowledge-inspector read-only look at a base: timeline from the change log, metrics, duplicate candidates, GraphML, HTTP API and a page (SDD 3b.6)
 stint-worker-transcription  Transcriber port, transcribe handler, Whisper (OpenAI-compatible) adapter (SDD 3a.6)
@@ -726,6 +726,16 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   written two ways (it does not merge), and exports GraphML. A small HTTP server (JDK only) serves the API and a page; every call
   asks `InspectorAccess` first, and a base that does not exist is refused like one that is not allowed. Run it over the synthetic
   corpus with `KnowledgeInspectorMain` (operator `demo`).
+- **Hybrid retrieval (3b.4).** `retrieve` takes `hops` 0 to 3, counted from the passage: 1 is the entities the passages mention,
+  2 their neighbours (what no passage names, like the decision that superseded the one asked about), 3 the neighbours of those;
+  every item of the graph says which documents still hold it (`evidence`), and the ceiling still holds for each node and edge.
+  `knowledge-retrieve` answers in `auto` mode: relational — the passages that mention what the question names, and the graph around
+  them — when the base knows an entity in the question's words (no model, no outside call), else by meaning; `budgetTokens`
+  (estimated, chars / 4) keeps the best whole items. `KnowledgeContentRetriever` is the LangChain4j `ContentRetriever` over the
+  port: one per task, its ceiling the lower of the instance's level and the model the context goes to. The product flow's
+  `structure-minutes` hands the model what the base holds from earlier meetings and ends the minutes with a `## Context used`
+  section written by code, so the citation does not depend on the model. A decision worker can route a question from the workflow
+  (`knowledge-recall.yaml`).
 - **Key per area (3b.5b).** `EnvelopeBlobStore` wraps any `BlobStore`: every blob is encrypted with a data key of its own,
   wrapped by the key of its *area* (`AreaKeys`: `InMemoryAreaKeys`, or `KmsAreaKeys` on AWS KMS). The fact
   `area-erasure-requested` starts `area-key-destroy`, which destroys the area's key; from then on every copy of the area's blobs
