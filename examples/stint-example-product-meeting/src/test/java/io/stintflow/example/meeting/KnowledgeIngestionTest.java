@@ -108,6 +108,11 @@ class KnowledgeIngestionTest {
             assertThat(ingest.store.changes(KnowledgeIngestPipeline.SCOPE, 0, 10_000).toCompletableFuture().join())
                     .extracting(ChangeEntry::elementType).contains("Passage", "Link");
 
+            // the product definition asks for stable pseudonyms: a Person of the base is named by the 128-bit one, the same in
+            // every meeting of the base, never the per-instance PERSON_<6 hex> (SDD 3b.2, 4.6)
+            var people = items.stream().flatMap(i -> i.entities().stream()).filter(e -> e.type().equals("Person")).toList();
+            assertThat(people).isNotEmpty().allSatisfy(p -> assertThat(p.label()).matches("PERSON_[0-9a-f]{32}"));
+
             // and nothing planted is anywhere it should not be (CA2)
             List<String> places = new ArrayList<>();
             places.add("base: " + ingest.store.dump(KnowledgeIngestPipeline.SCOPE));

@@ -47,6 +47,24 @@ class StablePseudonymsTest {
                 .labelStable("meetings/notes", "person", "Synthia Example")).isNotEqualTo(one);
     }
 
+    @Test
+    void a_run_of_digits_inside_a_stable_label_is_not_a_doubt_but_the_same_run_in_the_text_still_is() {
+        // an e-mail whose stable label happens to hold 8+ digits in a row (about one in three does)
+        RedactionLayer.Scope scope = new RedactionLayer.Scope("meetings/notes", Set.of(), PSEUDONYMS, true);
+        String address = null;
+        for (int i = 0; i < 400 && address == null; i++) {
+            String candidate = "synth" + i + "@example.com";
+            if (PSEUDONYMS.labelStable("meetings/notes", "email", candidate).matches(".*[0-9]{8}.*")) {
+                address = candidate;
+            }
+        }
+        assertThat(address).isNotNull();
+        RedactionLayer.Result masked = new PatternLayer().apply("mail " + address, scope);
+        assertThat(masked.text()).matches("mail EMAIL_[0-9a-f]{32}");
+        assertThat(masked.doubt()).isFalse();
+        assertThat(new PatternLayer().apply("account 123456789", scope).doubt()).isTrue();
+    }
+
     private static TaskContext task(String instanceId, ObjectNode request) {
         return new TaskContext("/do/0/clean", instanceId, "corr-" + instanceId, 1, request,
                 new WorkflowRef("meetings", "notes", "2.0.0"), null, Lineage.NONE);

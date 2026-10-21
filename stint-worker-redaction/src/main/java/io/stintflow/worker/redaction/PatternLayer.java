@@ -48,7 +48,8 @@ public final class PatternLayer implements RedactionLayer {
             new Rule(ADDRESS, Pattern.compile("\\b" + STREET_PT + "\\s+[\\p{L}' .-]{2,40}?,?\\s*(?:n[º°o]\\.?\\s*)?\\d{1,5}\\b"
                     + "|\\b\\d{1,5}\\s+[\\p{L}' .-]{2,30}?\\s" + STREET_EN + "(?=\\W|$)", Pattern.UNICODE_CASE), false));
 
-    private static final Pattern UNCLASSIFIED_DIGITS = Pattern.compile("(?:\\d[\\s.-]?){7,}\\d");
+    private static final Pattern LABEL = Pattern.compile("\\b[A-Z]+_[0-9a-f]{6,32}\\b");
+    private static final Pattern UNCLASSIFIED_DIGITS =Pattern.compile("(?:\\d[\\s.-]?){7,}\\d");
 
     @Override
     public String name() {
@@ -81,7 +82,8 @@ public final class PatternLayer implements RedactionLayer {
                 counts.merge(rule.type(), found, Integer::sum);
             }
         }
-        boolean doubt = UNCLASSIFIED_DIGITS.matcher(current).find();
+        // the labels this layer just wrote are hex: a stable one (32 hex) holds a run of 8 digits about once in three
+        boolean doubt = UNCLASSIFIED_DIGITS.matcher(LABEL.matcher(current).replaceAll("#")).find();
         return new Result(current, counts, doubt);
     }
 

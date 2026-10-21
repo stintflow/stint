@@ -197,7 +197,7 @@ public final class ProductMeetingPipeline implements AutoCloseable {
         return decisionsBuilder.build().registerAll(new TaskHandlerRegistry())
                 .register("transcribe", new TranscriptionHandler(metrics.recording(stack.transcriber()), blobs))
                 .register("redactor", new RedactionHandler(redactor, new Pseudonyms(
-                        "example-secret-not-for-real-data".getBytes(StandardCharsets.UTF_8)), blobs))
+                        "example-secret-not-for-real-data".getBytes(StandardCharsets.UTF_8)), blobs).allowingStablePseudonyms())
                 .register("structure-minutes", new StructureHandler(writer, blobs))
                 .register("publish-page", new PublishHandler(ConfluencePagePublisher.builder()
                         .baseUri(confluenceBase).space(SPACE).email(CONFLUENCE_EMAIL).apiToken(CONFLUENCE_TOKEN)
