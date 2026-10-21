@@ -9,6 +9,11 @@ import java.util.Set;
 
 import io.cloudevents.CloudEvent;
 import io.stintflow.example.meeting.Corpus.Meeting;
+import io.stintflow.knowledge.ChangeEntry;
+import io.stintflow.knowledge.GraphView;
+import io.stintflow.knowledge.KnowledgeInspector;
+import io.stintflow.knowledge.KnowledgeScope;
+import io.stintflow.knowledge.ViewQuery;
 import io.stintflow.knowledge.inspector.InspectorAccess;
 import io.stintflow.knowledge.inspector.InspectorServer;
 import io.stintflow.knowledge.inspector.InspectorService;
@@ -17,7 +22,7 @@ import io.stintflow.spi.Sensitivity;
 /**
  * SDD 3b.6: the inspector over the base the product flow builds from the synthetic corpus, on loopback. Runs every meeting with fake
  * models, ingests the minutes, and serves the page at {@code http://127.0.0.1:<port>/} (first argument; 8085 by default). The
- * operator to type in the page is {@code demo}. A manual run: it stays up until it is stopped. Synthetic data only.
+ * operator to type in the page is {@code demo}. A second base, {@code demo-history}, holds two weeks of mock history ({@link DemoBase}). A manual run: it stays up until it is stopped. Synthetic data only.
  */
 public final class KnowledgeInspectorMain {
 
@@ -38,10 +43,23 @@ public final class KnowledgeInspectorMain {
                     .filter(e -> meeting.id().equals(e.getSubject())).findFirst().orElseThrow();
             ingest.ingest(published, Duration.ofSeconds(60));
         }
-        InspectorService service = new InspectorService(ingest.store,
-                InspectorAccess.allowing(Map.of("demo", Set.of(KnowledgeIngestPipeline.SCOPE))),
+        // a second base with two weeks of mock history, so the page has something to show (see DemoBase)
+        io.stintflow.knowledge.inmemory.CompositeKnowledgeStore demo = DemoBase.build(work);
+        KnowledgeInspector both = new KnowledgeInspector() {
+            @Override
+            public java.util.concurrent.CompletionStage<GraphView> view(KnowledgeScope scope, ViewQuery query) {
+                return (scope.equals(DemoBase.SCOPE) ? demo : ingest.store).view(scope, query);
+            }
+
+            @Override
+            public java.util.concurrent.CompletionStage<List<ChangeEntry>> changes(KnowledgeScope scope, long after, int limit) {
+                return (scope.equals(DemoBase.SCOPE) ? demo : ingest.store).changes(scope, after, limit);
+            }
+        };
+        InspectorService service = new InspectorService(both,
+                InspectorAccess.allowing(Map.of("demo", Set.of(KnowledgeIngestPipeline.SCOPE, DemoBase.SCOPE))),
                 new InspectorService.Settings(500, Sensitivity.RESTRICTED, io.stintflow.knowledge.inspector.Metrics.Thresholds.DEFAULT));
-        InspectorServer server = new InspectorServer(service, List.of(KnowledgeIngestPipeline.SCOPE),
+        InspectorServer server = new InspectorServer(service, List.of(KnowledgeIngestPipeline.SCOPE, DemoBase.SCOPE),
                 InspectorServer.operatorHeader(), port).start();
         System.out.println("KNOWLEDGE-INSPECTOR http://127.0.0.1:" + server.port() + "/  (operator: demo; Ctrl+C to stop)");
         Thread.currentThread().join();
