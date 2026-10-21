@@ -951,4 +951,45 @@ public abstract class KnowledgeStoreContract {
 
         assertThat(calls[0]).isLessThanOrEqualTo(KnowledgeSeeds.MAX_LOOKUPS);
     }
+
+    // --- SDD 3c.1: the version of a node ---------------------------------------------------------------------------------
+
+    private static java.util.OptionalLong version(KnowledgeStore store, String nodeId) throws Exception {
+        return GraphPointers.versionOf(log(store, SCOPE), nodeId);
+    }
+
+    @Test
+    protected void ca5_the_version_of_a_node_moves_with_the_node_and_not_with_a_reindexation_or_another_node() throws Exception {
+        KnowledgeStore store = newStore(false);
+        write(store, SCOPE, new B(SCOPE, "meeting:m-001").passage("We keep the old retry policy.", Sensitivity.INTERNAL)
+                .entity("e-old", "Decision", "Old retry policy", Sensitivity.INTERNAL).link(0, "e-old").build());
+        long first = version(store, "e-old").orElseThrow();
+        assertThat(first).isEqualTo(log(store, SCOPE).stream().filter(e -> e.kind() == Kind.ENTITY).findFirst().orElseThrow().sequence());
+
+        // another node, and a passage: the version does not move
+        write(store, SCOPE, new B(SCOPE, "meeting:m-002").passage("Checkout was slow.", Sensitivity.INTERNAL)
+                .entity("e-checkout", "System", "Checkout Service", Sensitivity.INTERNAL).link(0, "e-checkout").build());
+        assertThat(version(store, "e-old")).hasValue(first);
+
+        // a reindexation is one entry for the whole base: the version does not move
+        reindex(store, SCOPE, "req-reindex", new OtherEmbedder(Set.of("en")));
+        assertThat(version(store, "e-old")).hasValue(first);
+
+        // a new document that holds the node: its version moves
+        write(store, SCOPE, new B(SCOPE, "meeting:m-003").passage("The old retry policy is under review.", Sensitivity.INTERNAL)
+                .entity("e-old", "Decision", "Old retry policy", Sensitivity.INTERNAL).link(0, "e-old").build());
+        long second = version(store, "e-old").orElseThrow();
+        assertThat(second).isGreaterThan(first);
+
+        // the same document again changes nothing: the version stays
+        write(store, SCOPE, new B(SCOPE, "meeting:m-003").passage("The old retry policy is under review.", Sensitivity.INTERNAL)
+                .entity("e-old", "Decision", "Old retry policy", Sensitivity.INTERNAL).link(0, "e-old").build());
+        assertThat(version(store, "e-old")).hasValue(second);
+
+        // erasing the documents that hold it takes it away: no version
+        erase(store, SCOPE, new DeleteRequest.ByDocument("req-1", "erasure:document", "meeting:m-001"));
+        assertThat(version(store, "e-old").orElseThrow()).isGreaterThan(second);   // m-003 still holds it: one entry more
+        erase(store, SCOPE, new DeleteRequest.ByDocument("req-2", "erasure:document", "meeting:m-003"));
+        assertThat(version(store, "e-old")).isEmpty();
+    }
 }

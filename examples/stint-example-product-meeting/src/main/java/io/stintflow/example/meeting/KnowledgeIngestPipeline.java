@@ -53,10 +53,14 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     public static final String ERASE_WORKFLOW = "stint/workflows/knowledge-erase.yaml";
     public static final String REINDEX_WORKFLOW = "stint/workflows/knowledge-reindex.yaml";
     public static final String AREA_KEY_WORKFLOW = "stint/workflows/area-key-destroy.yaml";
+    public static final String ANNOUNCE_WORKFLOW = "stint/workflows/knowledge-announce.yaml";
+    public static final String LINKS_WORKFLOW = "stint/workflows/architecture-links.yaml";
     public static final String AREA_ERASURE_REQUESTED = "io.stintflow.knowledge.area-erasure-requested.v1";
     public static final String ERASURE_REQUESTED = "io.stintflow.knowledge.erasure-requested.v1";
     public static final String EMBEDDING_CHANGED = "io.stintflow.knowledge.embedding-changed.v1";
     public static final KnowledgeScope SCOPE = KnowledgeScope.named("examples", "product-meetings");
+    /** SDD 3c.1: the second domain of the example, whose graph points at the product domain's nodes. */
+    public static final KnowledgeScope ARCHITECTURE = KnowledgeScope.named("examples", "architecture");
     public static final RetentionClass BATCH = new RetentionClass("knowledge-batch", Duration.ofDays(7));
     public static final RetentionClass RESTRICTED = new RetentionClass("restricted", Duration.ofDays(30));
 
@@ -64,11 +68,15 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     final InMemoryAuditLog audit = new InMemoryAuditLog();
     final InMemoryEventPublisher facts = new InMemoryEventPublisher();
     final CompositeKnowledgeStore store;
+    /** SDD 3c.1: the architecture domain's base. */
+    final CompositeKnowledgeStore architecture;
     final WorkflowEngine engine;
     final WorkflowDefinition definition;
     final WorkflowDefinition eraseDefinition;
     final WorkflowDefinition reindexDefinition;
     final WorkflowDefinition areaKeyDefinition;
+    final WorkflowDefinition announceDefinition;
+    final WorkflowDefinition linksDefinition;
     private final WorkerPool pool;
     /** The instance being run, once started. */
     volatile String current;
@@ -107,6 +115,7 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     public KnowledgeIngestPipeline(BlobStore blobs, ChatModel model, InstantSource clock, InMemoryTimerService timer,
             boolean piiGate, Embedder reindexTarget, io.stintflow.spi.AreaKeys areaKeys) throws IOException {
         this.store = new CompositeKnowledgeStore(new DeterministicEmbedder(), blobs, RESTRICTED, clock);
+        this.architecture = new CompositeKnowledgeStore(new DeterministicEmbedder(), blobs, RESTRICTED, clock);
         Corpus.KnowledgeBase base = Corpus.loadKnowledge().base();
         Glossary glossary = new Glossary("product", "1", base.glossary().stream()
                 .map(t -> new Glossary.Term(t.id(), t.type(), t.name(), t.aliases(), null)).toList());
@@ -117,6 +126,10 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         KnowledgeWorkers.register(handlers, store, blobs, scopes, audit, clock);
         KnowledgeWorkers.registerErasure(handlers, store, blobs, scopes, audit, clock, reindexTarget,
                 ProductMeetingPipeline.pseudonyms());
+        // SDD 3c.1: the product domain announces its nodes; the architecture domain links to them, listening to the product one only
+        KnowledgeWorkers.registerAnnounce(handlers, store, scopes, audit, clock);
+        KnowledgeWorkers.registerReference(handlers, architecture, new ScopeAllowList(Set.of(ARCHITECTURE)),
+                new io.stintflow.worker.knowledge.OriginAllowList(Set.of(SCOPE)), audit, clock);
         if (areaKeys != null) {
             KnowledgeWorkers.registerAreaKeys(handlers, areaKeys, Set.of(SCOPE.namespace()), audit, clock);
         }
@@ -144,10 +157,14 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         eraseDefinition = load(ERASE_WORKFLOW, "knowledge-erase.yaml");
         reindexDefinition = load(REINDEX_WORKFLOW, "knowledge-reindex.yaml");
         areaKeyDefinition = load(AREA_KEY_WORKFLOW, "area-key-destroy.yaml");
+        announceDefinition = load(ANNOUNCE_WORKFLOW, "knowledge-announce.yaml");
+        linksDefinition = load(LINKS_WORKFLOW, "architecture-links.yaml");
         registry.register(definition);
         registry.register(eraseDefinition);
         registry.register(reindexDefinition);
         registry.register(areaKeyDefinition);
+        registry.register(announceDefinition);
+        registry.register(linksDefinition);
         this.engine = new WorkflowEngine(registry, transport, state, timer, blobs,
                 new TreeInterpreter(new JqExpressionEvaluator()), clock, facts, null,
                 io.stintflow.spi.ExecutionTracer.NOOP).auditLog(audit);
@@ -177,6 +194,16 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     /** SDD 3b.5: starts the reindexation from the fact and waits for it to end. */
     public InstanceSnapshot reindex(CloudEvent changed, Duration patience) throws Exception {
         return run(reindexDefinition, changed, patience);
+    }
+
+    /** SDD 3c.1: starts the announcement of the nodes of an indexed document from the {@code document-indexed} fact. */
+    public InstanceSnapshot announce(CloudEvent indexed, Duration patience) throws Exception {
+        return run(announceDefinition, indexed, patience);
+    }
+
+    /** SDD 3c.1: starts the linking of the architecture domain from the {@code nodes-published} fact. */
+    public InstanceSnapshot link(CloudEvent published, Duration patience) throws Exception {
+        return run(linksDefinition, published, patience);
     }
 
     /** SDD 3b.5b: starts the destruction of an area's key from the request and waits for it to end. */

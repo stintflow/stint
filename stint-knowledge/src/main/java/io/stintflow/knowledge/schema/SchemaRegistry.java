@@ -20,10 +20,11 @@ public final class SchemaRegistry {
 
     private final ConcurrentMap<String, KnowledgeSchema> byVersion = new ConcurrentHashMap<>();
 
-    /** A registry holding the reference schemas of the module ({@code meetings@1.0.0}). */
+    /** A registry holding the reference schemas of the module ({@code meetings@1.0.0}, {@code architecture@1.0.0}). */
     public static SchemaRegistry withReferenceSchemas() {
         SchemaRegistry registry = new SchemaRegistry();
         registry.register(KnowledgeSchema.meetings());
+        registry.register(KnowledgeSchema.architecture());
         return registry;
     }
 

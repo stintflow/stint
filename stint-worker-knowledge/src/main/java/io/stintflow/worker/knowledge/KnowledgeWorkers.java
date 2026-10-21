@@ -22,6 +22,8 @@ public final class KnowledgeWorkers {
     public static final String RESOLVE_PERSON_ROUTE = "resolve-person";
     public static final String FORGET_SUBJECT_ROUTE = "forget-subject";
     public static final String AREA_KEY_DESTROY_ROUTE = "area-key-destroy";
+    public static final String ANNOUNCE_ROUTE = "knowledge-announce";
+    public static final String REFERENCE_ROUTE = "knowledge-reference";
 
     private KnowledgeWorkers() {
     }
@@ -53,6 +55,24 @@ public final class KnowledgeWorkers {
             registry.register(RESOLVE_PERSON_ROUTE, new ResolvePersonHandler(pseudonyms, blobs, scopes));
         }
         return registry;
+    }
+
+    /**
+     * SDD 3c.1: registers {@code knowledge-announce} — the pointers to the nodes a document of one of {@code scopes} added, for
+     * another domain to hold.
+     */
+    public static TaskHandlerRegistry registerAnnounce(TaskHandlerRegistry registry, KnowledgeStore store, ScopeAllowList scopes,
+            AuditLog audit, InstantSource clock) {
+        return registry.register(ANNOUNCE_ROUTE, new KnowledgeAnnounceHandler(store, scopes, audit, clock));
+    }
+
+    /**
+     * SDD 3c.1: registers {@code knowledge-reference} — the references to nodes of another domain, written in one of
+     * {@code scopes}, from announcements of the domains in {@code origins} only (an empty list accepts none).
+     */
+    public static TaskHandlerRegistry registerReference(TaskHandlerRegistry registry, KnowledgeStore store, ScopeAllowList scopes,
+            OriginAllowList origins, AuditLog audit, InstantSource clock) {
+        return registry.register(REFERENCE_ROUTE, new KnowledgeReferenceHandler(store, scopes, origins, audit, clock));
     }
 
     /**

@@ -224,6 +224,15 @@ class ArchitectureTest {
             .orShould().callMethod(AreaKeys.class, "unwrap", String.class, byte[].class);
 
     /**
+     * SDD 3c.1, 4.5 (CA8): the pointer of a graph node is not the pointer of a blob. It does not know the claim check of the wire
+     * module, nor its field, so the one is never taken for the other.
+     */
+    @ArchTest
+    static final ArchRule the_graph_pointer_is_not_a_claim_check = noClasses()
+            .that().haveSimpleNameStartingWith("GraphPointer")
+            .should().dependOnClassesThat().resideInAPackage("io.stintflow.wire..");
+
+    /**
      * SDD 3b.4, 4.7 (CA10): the retriever a model's worker reads the base with only reads. It asks the port to retrieve and to look
      * an entity up, and never writes, erases or reindexes; it does not know the in-memory adapters, a batch, an erasure request, a
      * reindexation request or the blob store.

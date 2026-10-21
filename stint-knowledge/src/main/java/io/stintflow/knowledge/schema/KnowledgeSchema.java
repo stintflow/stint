@@ -103,6 +103,15 @@ public record KnowledgeSchema(String id, String version, String language, Map<St
         }
     }
 
+    /** The reference schema of the architecture domain, {@code architecture@1.0.0} (SDD 3c.1): domain references and systems. */
+    public static KnowledgeSchema architecture() {
+        try (InputStream in = KnowledgeSchema.class.getResourceAsStream("architecture-1.0.0.json")) {
+            return fromJson(JSON.readTree(Objects.requireNonNull(in, "architecture-1.0.0.json")));
+        } catch (IOException e) {
+            throw new IllegalStateException("The architecture schema could not be read", e);
+        }
+    }
+
     public static KnowledgeSchema fromJson(JsonNode json) {
         Map<String, NodeType> nodes = new LinkedHashMap<>();
         json.path("nodes").properties().forEach(entry -> {

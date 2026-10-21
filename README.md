@@ -736,6 +736,14 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   `structure-minutes` hands the model what the base holds from earlier meetings and ends the minutes with a `## Context used`
   section written by code, so the citation does not depend on the model. A decision worker can route a question from the workflow
   (`knowledge-recall.yaml`).
+- **Bridge between domains (3c.1).** A domain points at a node of another without copying it: `GraphPointer`,
+  `stint-kg://<namespace>/<base>/<node>?v=<version>`, parsed strictly (a refusal says why with a short code and never echoes the text;
+  no version, no pointer; not the claim check of a blob). The version is the node's last entry in the change log, so it moves when
+  the node changes or gains a document, and not for a reindexation. `knowledge-announce` reads that log and answers the pointers,
+  types and levels of what a document added — never a name, never a restricted node — which `knowledge-announce.yaml` emits as one
+  fact; `knowledge-reference`, in the listening domain, writes a `DomainReference` per node (the pointer and nothing the origin
+  says) and a `informs` relation from the anchors its own definition names, only for domains in its `OriginAllowList` (empty
+  accepts none). One batch per document of the origin: the same fact changes nothing, a later one replaces it, an earlier is stale.
 - **Key per area (3b.5b).** `EnvelopeBlobStore` wraps any `BlobStore`: every blob is encrypted with a data key of its own,
   wrapped by the key of its *area* (`AreaKeys`: `InMemoryAreaKeys`, or `KmsAreaKeys` on AWS KMS). The fact
   `area-erasure-requested` starts `area-key-destroy`, which destroys the area's key; from then on every copy of the area's blobs

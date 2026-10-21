@@ -1,0 +1,55 @@
+# SDD 3c.1: the architecture domain links to what the product domain announced. The fact 'nodes published' starts this
+# definition, which hands it to 'knowledge-reference': a reference node per announced node (the pointer, its type and its
+# version, never what the node says) and a relation from each ANCHOR this definition names — here, the system the links are about.
+# The worker accepts announcements only from the domains it listens to; a pointer that is not well formed refuses the whole fact.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: architecture-links
+  version: '1.0.0'
+  metadata:
+    x-stint-policy:
+      sensitivity:
+        from: '${ .[0].data.label }'
+      routes:
+        restricted: [knowledge-reference]
+        confidential: [knowledge-reference]
+        internal: ['*']
+    x-stint-knowledge:
+      base: architecture
+      schema: architecture@1
+      glossary: architecture@1
+schedule:
+  on:
+    one:
+      with: { type: io.stintflow.knowledge.nodes-published.v1 }
+do:
+  - fact:
+      set: '${ .[0].data }'
+      export: { as: '${ . }' }
+  - link:
+      try:
+        - run:
+            call: remote
+            with:
+              task: knowledge-reference
+              input: '${ {event: {domain: $context.domain, documentId: $context.documentId, upTo: $context.upTo, items: $context.items}, anchors: [{type: "System", name: "Checkout Service"}], scope: {namespace: "examples", base: "architecture"}} }'
+            timeout: { after: { minutes: 2 } }
+            export: { as: '${ $context + {status: .status, lastSequence: .lastSequence, references: .references} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
+        retry:
+          delay: { seconds: 15 }
+          backoff: { exponential: {} }
+          limit:
+            attempt: { count: 5 }
+  - linked:
+      emit:
+        event:
+          with:
+            source: https://architecture-links.example
+            type: io.stintflow.knowledge.references-linked.v1
+            subject: '${ $context.documentId }'
+            data: '${ {documentId: $context.documentId, status: $context.status, lastSequence: $context.lastSequence, references: $context.references} }'
+      then: end
