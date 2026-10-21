@@ -718,6 +718,11 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   is not in the base yet. The fact `embedding-changed` starts `knowledge-reindex`: `reindex` recomputes every vector with the model
   the worker serves in one atomic step (one `REINDEX` entry in the change log), and the old vectors are not consulted again.
   Changing the graph schema is a re-ingestion, not a reindexation.
+- **Key per area (3b.5b).** `EnvelopeBlobStore` wraps any `BlobStore`: every blob is encrypted with a data key of its own,
+  wrapped by the key of its *area* (`AreaKeys`: `InMemoryAreaKeys`, or `KmsAreaKeys` on AWS KMS). The fact
+  `area-erasure-requested` starts `area-key-destroy`, which destroys the area's key; from then on every copy of the area's blobs
+  (a replica, an old version, a backup) can no longer be read, and the bytes kept are the same. Irreversible, per area (a person
+  is still erased by `knowledge-erase`), and KMS deletes the key physically only after 7 to 30 days.
 - **Evaluation.** `corpus/kb/base.yaml` and the `kb:` sections of the synthetic corpus (121 mentions) are resolved in CI with no
   model: no wrong merge, at least 95 % resolved right, at least 90 % of the expected duplicate candidates flagged.
 

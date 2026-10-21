@@ -49,6 +49,12 @@
             <artifactId>quarkus-amazon-sns</artifactId>
         </dependency>
 
+        <!-- SDD 3b.5b: the key of an area, on KMS (plain SDK client: the adapter is built by the caller, as in the tests) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kms</artifactId>
+        </dependency>
+
         <!-- Sync HTTP client used by the Quarkus AWS extensions -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>

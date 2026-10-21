@@ -10,6 +10,8 @@ import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
+import io.stintflow.spi.AreaKeys;
+
 /**
  * SDD 1.5, RF5: the single consolidated architecture suite for the whole reactor, replacing the
  * separate {@code ArchitectureTest}s that used to live in {@code stint-core} and {@code stint-dsl}.
@@ -204,6 +206,16 @@ class ArchitectureTest {
             .and().doNotHaveSimpleName("ResolvePersonHandler").and().doNotHaveSimpleName("KnowledgeWorkers")
             .and().doNotHaveSimpleName("PiiGate")   // a throwaway instance with a secret of its own, to run the patterns
             .should().dependOnClassesThat().haveFullyQualifiedName("io.stintflow.worker.redaction.Pseudonyms");
+
+    /**
+     * SDD 3b.5b, CA10: the data key of a blob, in the clear, is asked for and opened by the envelope decorator alone. The task that
+     * destroys an area's key only destroys it and asks its state; nothing else reads a blob's key.
+     */
+    @ArchTest
+    static final ArchRule only_the_envelope_store_asks_for_a_data_key = noClasses()
+            .that().doNotHaveSimpleName("EnvelopeBlobStore")
+            .should().callMethod(AreaKeys.class, "newDataKey", String.class)
+            .orShould().callMethod(AreaKeys.class, "unwrap", String.class, byte[].class);
 
     /** SDD 3b.1, 4.1: the port and its types do not know the adapters; backends plug in beside them. */
     @ArchTest

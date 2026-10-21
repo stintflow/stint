@@ -52,6 +52,8 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     public static final String WORKFLOW = "stint/workflows/knowledge-ingest.yaml";
     public static final String ERASE_WORKFLOW = "stint/workflows/knowledge-erase.yaml";
     public static final String REINDEX_WORKFLOW = "stint/workflows/knowledge-reindex.yaml";
+    public static final String AREA_KEY_WORKFLOW = "stint/workflows/area-key-destroy.yaml";
+    public static final String AREA_ERASURE_REQUESTED = "io.stintflow.knowledge.area-erasure-requested.v1";
     public static final String ERASURE_REQUESTED = "io.stintflow.knowledge.erasure-requested.v1";
     public static final String EMBEDDING_CHANGED = "io.stintflow.knowledge.embedding-changed.v1";
     public static final KnowledgeScope SCOPE = KnowledgeScope.named("examples", "product-meetings");
@@ -66,6 +68,7 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     final WorkflowDefinition definition;
     final WorkflowDefinition eraseDefinition;
     final WorkflowDefinition reindexDefinition;
+    final WorkflowDefinition areaKeyDefinition;
     private final WorkerPool pool;
     /** The instance being run, once started. */
     volatile String current;
@@ -94,6 +97,15 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
      */
     public KnowledgeIngestPipeline(BlobStore blobs, ChatModel model, InstantSource clock, InMemoryTimerService timer,
             boolean piiGate, Embedder reindexTarget) throws IOException {
+        this(blobs, model, clock, timer, piiGate, reindexTarget, null);
+    }
+
+    /**
+     * @param areaKeys the keys of the areas the worker serves, or {@code null}: then there is no {@code area-key-destroy} route
+     *                 (SDD 3b.5b). The area served is the namespace of the base.
+     */
+    public KnowledgeIngestPipeline(BlobStore blobs, ChatModel model, InstantSource clock, InMemoryTimerService timer,
+            boolean piiGate, Embedder reindexTarget, io.stintflow.spi.AreaKeys areaKeys) throws IOException {
         this.store = new CompositeKnowledgeStore(new DeterministicEmbedder(), blobs, RESTRICTED, clock);
         Corpus.KnowledgeBase base = Corpus.loadKnowledge().base();
         Glossary glossary = new Glossary("product", "1", base.glossary().stream()
@@ -105,6 +117,9 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         KnowledgeWorkers.register(handlers, store, blobs, scopes, audit, clock);
         KnowledgeWorkers.registerErasure(handlers, store, blobs, scopes, audit, clock, reindexTarget,
                 ProductMeetingPipeline.pseudonyms());
+        if (areaKeys != null) {
+            KnowledgeWorkers.registerAreaKeys(handlers, areaKeys, Set.of(SCOPE.namespace()), audit, clock);
+        }
         if (!piiGate) {
             handlers.register(KnowledgeWorkers.WRITE_ROUTE, new io.stintflow.worker.knowledge.KnowledgeWriteHandler(store,
                     blobs, scopes, false));
@@ -128,9 +143,11 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         definition = load(WORKFLOW, "knowledge-ingest.yaml");
         eraseDefinition = load(ERASE_WORKFLOW, "knowledge-erase.yaml");
         reindexDefinition = load(REINDEX_WORKFLOW, "knowledge-reindex.yaml");
+        areaKeyDefinition = load(AREA_KEY_WORKFLOW, "area-key-destroy.yaml");
         registry.register(definition);
         registry.register(eraseDefinition);
         registry.register(reindexDefinition);
+        registry.register(areaKeyDefinition);
         this.engine = new WorkflowEngine(registry, transport, state, timer, blobs,
                 new TreeInterpreter(new JqExpressionEvaluator()), clock, facts, null,
                 io.stintflow.spi.ExecutionTracer.NOOP).auditLog(audit);
@@ -160,6 +177,11 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     /** SDD 3b.5: starts the reindexation from the fact and waits for it to end. */
     public InstanceSnapshot reindex(CloudEvent changed, Duration patience) throws Exception {
         return run(reindexDefinition, changed, patience);
+    }
+
+    /** SDD 3b.5b: starts the destruction of an area's key from the request and waits for it to end. */
+    public InstanceSnapshot destroyAreaKey(CloudEvent requested, Duration patience) throws Exception {
+        return run(areaKeyDefinition, requested, patience);
     }
 
     private InstanceSnapshot run(WorkflowDefinition which, CloudEvent fact, Duration patience) throws Exception {

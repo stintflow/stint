@@ -1,0 +1,55 @@
+# SDD 3b.5b: the key of an area is destroyed. The fact 'area erasure requested' (area name and request id; nothing else) starts this
+# definition; the worker that serves the area's key destroys it and answers the state, and the fact 'area key destroyed' says
+# so. From then on every copy of the area's blobs — wherever it is kept — can no longer be read. Irreversible; repeating the
+# request id, or asking again, ends the same.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: area-key-destroy
+  version: '1.0.0'
+  metadata:
+    x-stint-policy:
+      sensitivity:
+        from: '${ .[0].data.label }'
+      routes:
+        restricted: [area-key-destroy]
+        confidential: [area-key-destroy]
+        internal: ['*']
+    x-stint-knowledge:
+      base: product-meetings
+      schema: meetings@1
+      glossary: product@1
+schedule:
+  on:
+    one:
+      with: { type: io.stintflow.knowledge.area-erasure-requested.v1 }
+do:
+  - request:
+      set: '${ .[0].data | {requestId: .requestId, area: .area} }'
+      export: { as: '${ . }' }
+  - destroy:
+      try:
+        - run:
+            call: remote
+            with:
+              task: area-key-destroy
+              input: '${ {requestId: $context.requestId, area: $context.area} }'
+            timeout: { after: { minutes: 5 } }
+            export: { as: '${ $context + {state: .state} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
+        retry:
+          delay: { seconds: 30 }
+          backoff: { exponential: {} }
+          limit:
+            attempt: { count: 5 }
+  - destroyed:
+      emit:
+        event:
+          with:
+            source: https://area-key-destroy.example
+            type: io.stintflow.knowledge.area-key-destroyed.v1
+            subject: '${ $context.requestId }'
+            data: '${ {requestId: $context.requestId, area: $context.area, state: $context.state} }'
+      then: end

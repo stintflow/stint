@@ -1,9 +1,11 @@
 package io.stintflow.worker.knowledge;
 
 import java.time.InstantSource;
+import java.util.Set;
 
 import io.stintflow.knowledge.Embedder;
 import io.stintflow.knowledge.KnowledgeStore;
+import io.stintflow.spi.AreaKeys;
 import io.stintflow.spi.AuditLog;
 import io.stintflow.spi.BlobStore;
 import io.stintflow.worker.TaskHandlerRegistry;
@@ -19,6 +21,7 @@ public final class KnowledgeWorkers {
     public static final String REINDEX_ROUTE = "knowledge-reindex";
     public static final String RESOLVE_PERSON_ROUTE = "resolve-person";
     public static final String FORGET_SUBJECT_ROUTE = "forget-subject";
+    public static final String AREA_KEY_DESTROY_ROUTE = "area-key-destroy";
 
     private KnowledgeWorkers() {
     }
@@ -50,5 +53,14 @@ public final class KnowledgeWorkers {
             registry.register(RESOLVE_PERSON_ROUTE, new ResolvePersonHandler(pseudonyms, blobs, scopes));
         }
         return registry;
+    }
+
+    /**
+     * SDD 3b.5b: registers {@code area-key-destroy}, which destroys the key of one of {@code areas} (and so makes unreadable
+     * every copy of the blobs encrypted under it). An empty list serves no area.
+     */
+    public static TaskHandlerRegistry registerAreaKeys(TaskHandlerRegistry registry, AreaKeys keys, Set<String> areas,
+            AuditLog audit, InstantSource clock) {
+        return registry.register(AREA_KEY_DESTROY_ROUTE, new AreaKeyDestroyHandler(keys, areas, audit, clock));
     }
 }
