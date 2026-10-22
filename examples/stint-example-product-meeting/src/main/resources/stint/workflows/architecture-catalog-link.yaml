@@ -1,0 +1,105 @@
+# SDD 3c.3: the architecture domain links its own systems, products and teams to the catalog. The fact 'references linked' starts this
+# definition: 'catalog-mentions' (served by this area) names its own nodes of the catalog's types, the ones internal only;
+# 'catalog-lookup' (served by the CATALOG domain) says which node of the catalog each name is — an exact match, never a likeness —
+# and answers the pointer, nothing else; 'catalog-link' (served by this area) writes a reference to that node and a 'denotes'
+# relation from the local node, without changing it. The node stays; it now points at the canonical one.
+# When the catalog does not answer, the author chooses here what happens: 'follow' goes on with a marker (the local nodes stay
+# unlinked and the same definition run again links them), 'suspend' lets the failure end the instance for the operators.
+# Only the first page of mentions (50) is linked by a run; a base with more needs the 'after' of 'catalog-mentions' (a later SDD).
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: architecture-catalog-link
+  version: '1.0.0'
+  metadata:
+    x-stint-policy:
+      sensitivity:
+        from: '${ .[0].data.label }'
+      routes:
+        restricted: [catalog-mentions, catalog-lookup, catalog-link]
+        confidential: [catalog-mentions, catalog-lookup, catalog-link]
+        internal: ['*']
+    x-stint-knowledge:
+      base: architecture
+      schema: architecture@1
+      glossary: architecture@1
+schedule:
+  on:
+    one:
+      with: { type: io.stintflow.knowledge.references-linked.v1 }
+do:
+  - fact:
+      set: '${ .[0].data | {documentId: .documentId, onUnavailable: (.onUnavailable // "follow")} }'
+      export: { as: '${ . }' }
+  - mentions:
+      try:
+        - run:
+            call: remote
+            with:
+              task: catalog-mentions
+              input: '${ {scope: {namespace: "examples", base: "architecture"}} }'
+            timeout: { after: { minutes: 2 } }
+            export: { as: '${ $context + {mentions: .mentions} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
+        retry:
+          delay: { seconds: 15 }
+          backoff: { exponential: {} }
+          limit:
+            attempt: { count: 5 }
+  - any:
+      switch:
+        - none: { when: '${ ($context.mentions | length) == 0 }', then: report }
+        - some: { then: lookup }
+  - lookup:
+      try:
+        - run:
+            call: remote
+            with:
+              task: catalog-lookup
+              input: '${ {mentions: [$context.mentions[] | {type: .type, name: .name}], scope: {namespace: "examples", base: "catalog"}} }'
+            timeout: { after: { seconds: 30 } }
+            export: { as: '${ $context + {resolution: "resolved", results: .results} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
+        when: '$context.onUnavailable == "follow"'
+        then: unavailable
+  - matched:
+      set: '${ $context + {links: [range(0; ($context.mentions | length)) as $i | select($context.results[$i].status == "MATCH") | {entityId: $context.mentions[$i].entityId, pointer: $context.results[$i].pointer}]} }'
+      export: { as: '${ . }' }
+  - anything:
+      switch:
+        - nothing: { when: '${ ($context.links | length) == 0 }', then: report }
+        - something: { then: link }
+  - link:
+      try:
+        - run:
+            call: remote
+            with:
+              task: catalog-link
+              input: '${ {links: $context.links, documentId: $context.documentId, scope: {namespace: "examples", base: "architecture"}} }'
+            timeout: { after: { minutes: 2 } }
+            export: { as: '${ $context + {linked: .linked, skipped: .skipped} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
+        retry:
+          delay: { seconds: 15 }
+          backoff: { exponential: {} }
+          limit:
+            attempt: { count: 5 }
+  - report:
+      emit:
+        event:
+          with:
+            source: https://architecture-catalog-link.example
+            type: io.stintflow.knowledge.catalog-linked.v1
+            subject: '${ $context.documentId }'
+            data: '${ {documentId: $context.documentId, resolution: ($context.resolution // "nothing"), mentions: (($context.mentions // []) | length), linked: ($context.linked // 0), skipped: ($context.skipped // 0)} }'
+      then: end
+  - unavailable:
+      set: '${ $context + {resolution: "unavailable"} }'
+      export: { as: '${ . }' }
+      then: report

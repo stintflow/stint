@@ -25,6 +25,9 @@ public final class KnowledgeWorkers {
     public static final String ANNOUNCE_ROUTE = "knowledge-announce";
     public static final String REFERENCE_ROUTE = "knowledge-reference";
     public static final String RESOLVE_ROUTE = "resolve-pointers";
+    public static final String CATALOG_LOOKUP_ROUTE = "catalog-lookup";
+    public static final String CATALOG_MENTIONS_ROUTE = "catalog-mentions";
+    public static final String CATALOG_LINK_ROUTE = "catalog-link";
 
     private KnowledgeWorkers() {
     }
@@ -85,6 +88,26 @@ public final class KnowledgeWorkers {
             io.stintflow.knowledge.KnowledgeNodes nodes, ResolutionPolicy policy, BlobStore blobs,
             io.stintflow.spi.RetentionClass viewClass, AuditLog audit, InstantSource clock) {
         return registry.register(RESOLVE_ROUTE, new ResolvePointersHandler(store, nodes, policy, blobs, viewClass, audit, clock));
+    }
+
+    /**
+     * SDD 3c.3: registers {@code catalog-lookup} — this domain holds the catalog of entities and answers, to the definitions in
+     * {@code requesters}, which node of the catalog a name is (an exact match, or {@code NONE}).
+     */
+    public static TaskHandlerRegistry registerCatalog(TaskHandlerRegistry registry, KnowledgeStore store, ScopeAllowList scopes,
+            CatalogRequesters requesters, AuditLog audit, InstantSource clock) {
+        return registry.register(CATALOG_LOOKUP_ROUTE, new CatalogLookupHandler(store, scopes, requesters, audit, clock));
+    }
+
+    /**
+     * SDD 3c.3: registers {@code catalog-mentions} and {@code catalog-link} — an area names its own nodes of the types the catalog
+     * holds, and links them to the catalog's nodes by pointer, from the catalogs of the domains in {@code origins} only.
+     */
+    public static TaskHandlerRegistry registerCatalogLinks(TaskHandlerRegistry registry, KnowledgeStore store,
+            io.stintflow.knowledge.KnowledgeInspector inspector, io.stintflow.knowledge.KnowledgeNodes nodes, ScopeAllowList scopes,
+            OriginAllowList origins, AuditLog audit, InstantSource clock) {
+        return registry.register(CATALOG_MENTIONS_ROUTE, new CatalogMentionsHandler(inspector, scopes))
+                .register(CATALOG_LINK_ROUTE, new CatalogLinkHandler(store, nodes, scopes, origins, audit, clock));
     }
 
     /**

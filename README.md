@@ -744,6 +744,17 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   fact; `knowledge-reference`, in the listening domain, writes a `DomainReference` per node (the pointer and nothing the origin
   says) and a `informs` relation from the anchors its own definition names, only for domains in its `OriginAllowList` (empty
   accepts none). One batch per document of the origin: the same fact changes nothing, a later one replaces it, an earlier is stale.
+- **The catalog of entities (3c.3).** The same system has a different id in each area (`sys-checkout` in the product glossary, a
+  hash for the architecture anchor), and nothing said they were one. The catalog is a domain of its own — a base of `System`,
+  `Product` and `Team`, `internal`, never a person, loaded from a versioned glossary file (`CatalogSeed`, one batch per revision)
+  — and the areas keep **a pointer to it, never a copy**. `catalog-lookup` (served by the catalog) says which node a name is:
+  **exact** by name or alias after normalizing, inside the type, never by likeness (`NONE` has no candidates), and the answer is
+  the pointer and nothing the catalog says of the node. Who asks is the definition of the invitation, listed in `CatalogRequesters`;
+  a definition not listed answers as a catalog that knows nothing. An area runs `catalog-mentions` (its own `internal` nodes of the
+  catalog's types; what is above is only counted) → `catalog-lookup` → `catalog-link`, which writes a `DomainReference` and a
+  `denotes` relation from the local node, **without changing it and without merging**; the same call again writes nothing. When the
+  catalog does not answer, the author's workflow chooses (follow with a marker, or let the instance fail), as for resolving.
+  The areas' schemas stay as they are: what a link writes is named by the new `catalog-links@1.0.0`.
 - **Resolving a pointer (3c.2).** The origin answers: `resolve-pointers` is a task like any other (an invitation through the
   transport, with the engine's checkpoint, retry and timeout), served by the domain that holds the node, and **who asks is the
   definition of the invitation, never a field of the input**. `ResolutionPolicy` grants a definition some bases, node types and a

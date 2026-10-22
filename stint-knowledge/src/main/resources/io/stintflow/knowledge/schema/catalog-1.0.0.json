@@ -1,0 +1,41 @@
+{
+  "schema": "catalog",
+  "version": "1.0.0",
+  "language": "en",
+  "nodes": {
+    "System": {
+      "key": "name",
+      "defaultSensitivity": "internal",
+      "glossary": true,
+      "properties": {
+        "name": {"type": "string", "required": true},
+        "aliases": {"type": "string"},
+        "definition": {"type": "string"}
+      }
+    },
+    "Product": {
+      "key": "name",
+      "defaultSensitivity": "internal",
+      "glossary": true,
+      "properties": {
+        "name": {"type": "string", "required": true},
+        "aliases": {"type": "string"},
+        "definition": {"type": "string"}
+      }
+    },
+    "Team": {
+      "key": "name",
+      "defaultSensitivity": "internal",
+      "glossary": true,
+      "properties": {
+        "name": {"type": "string", "required": true},
+        "aliases": {"type": "string"},
+        "definition": {"type": "string"}
+      }
+    }
+  },
+  "relations": {
+    "belongsTo": {"from": ["System"], "to": ["Product"]},
+    "ownedBy": {"from": ["System", "Product"], "to": ["Team"]}
+  }
+}

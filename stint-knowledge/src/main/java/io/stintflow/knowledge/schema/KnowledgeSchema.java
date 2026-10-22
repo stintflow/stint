@@ -112,6 +112,24 @@ public record KnowledgeSchema(String id, String version, String language, Map<St
         }
     }
 
+    /** The reference schema of the entity catalog, {@code catalog@1.0.0} (SDD 3c.3): systems, products and teams, never people. */
+    public static KnowledgeSchema catalog() {
+        return resource("catalog-1.0.0.json");
+    }
+
+    /** What an area writes to say a local node denotes a catalog node, {@code catalog-links@1.0.0} (SDD 3c.3): a reference and {@code denotes}. */
+    public static KnowledgeSchema catalogLinks() {
+        return resource("catalog-links-1.0.0.json");
+    }
+
+    private static KnowledgeSchema resource(String name) {
+        try (InputStream in = KnowledgeSchema.class.getResourceAsStream(name)) {
+            return fromJson(JSON.readTree(Objects.requireNonNull(in, name)));
+        } catch (IOException e) {
+            throw new IllegalStateException("The schema " + name + " could not be read", e);
+        }
+    }
+
     public static KnowledgeSchema fromJson(JsonNode json) {
         Map<String, NodeType> nodes = new LinkedHashMap<>();
         json.path("nodes").properties().forEach(entry -> {

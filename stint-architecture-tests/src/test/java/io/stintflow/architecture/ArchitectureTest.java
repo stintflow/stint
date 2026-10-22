@@ -240,6 +240,33 @@ class ArchitectureTest {
             .orShould().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge.inmemory..", "io.stintflow.inmemory..");
 
     /**
+     * SDD 3c.3, 4.8 (CA14): the catalog answers a name and does not change the catalog. The lookup reads through the port, never
+     * writes, erases or reindexes, and does not know the loader of the catalog ({@code CatalogSeed}), a batch, a request to delete
+     * or reindex, the inspector, or the in-memory adapters.
+     */
+    @ArchTest
+    static final ArchRule the_catalog_lookup_only_reads = noClasses()
+            .that().haveSimpleName("CatalogLookupHandler")
+            .should().callMethod(KnowledgeStore.class, "write", io.stintflow.knowledge.KnowledgeScope.class, KnowledgeBatch.class)
+            .orShould().callMethod(KnowledgeStore.class, "delete", io.stintflow.knowledge.KnowledgeScope.class, DeleteRequest.class)
+            .orShould().callMethod(KnowledgeStore.class, "reindex", io.stintflow.knowledge.KnowledgeScope.class, ReindexRequest.class)
+            .orShould().dependOnClassesThat(com.tngtech.archunit.core.domain.JavaClass.Predicates.belongToAnyOf(
+                    KnowledgeBatch.class, DeleteRequest.class, ReindexRequest.class,
+                    io.stintflow.knowledge.KnowledgeInspector.class, io.stintflow.knowledge.CatalogSeed.class))
+            .orShould().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge.inmemory..", "io.stintflow.inmemory..");
+
+    /**
+     * SDD 3c.3, 4.8 (CA14): an area knows the catalog only by the pointer. What names its nodes and links them does not know the
+     * lookup the catalog serves, nor the loader of the catalog.
+     */
+    @ArchTest
+    static final ArchRule the_area_does_not_know_the_catalog = noClasses()
+            .that().haveSimpleNameStartingWith("CatalogMentions").or().haveSimpleNameStartingWith("CatalogLink")
+            .should().dependOnClassesThat().haveSimpleNameStartingWith("CatalogLookup")
+            .orShould().dependOnClassesThat().haveSimpleName("CatalogSeed")
+            .orShould().dependOnClassesThat().haveSimpleName("CatalogRequesters");
+
+    /**
      * SDD 3c.1, 4.5 (CA8): the pointer of a graph node is not the pointer of a blob. It does not know the claim check of the wire
      * module, nor its field, so the one is never taken for the other.
      */

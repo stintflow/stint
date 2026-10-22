@@ -56,12 +56,16 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     public static final String ANNOUNCE_WORKFLOW = "stint/workflows/knowledge-announce.yaml";
     public static final String LINKS_WORKFLOW = "stint/workflows/architecture-links.yaml";
     public static final String RESOLVE_WORKFLOW = "stint/workflows/architecture-resolve.yaml";
+    public static final String PRODUCT_CATALOG_WORKFLOW = "stint/workflows/product-catalog-link.yaml";
+    public static final String ARCHITECTURE_CATALOG_WORKFLOW = "stint/workflows/architecture-catalog-link.yaml";
     public static final String AREA_ERASURE_REQUESTED = "io.stintflow.knowledge.area-erasure-requested.v1";
     public static final String ERASURE_REQUESTED = "io.stintflow.knowledge.erasure-requested.v1";
     public static final String EMBEDDING_CHANGED = "io.stintflow.knowledge.embedding-changed.v1";
     public static final KnowledgeScope SCOPE = KnowledgeScope.named("examples", "product-meetings");
     /** SDD 3c.1: the second domain of the example, whose graph points at the product domain's nodes. */
     public static final KnowledgeScope ARCHITECTURE = KnowledgeScope.named("examples", "architecture");
+    /** SDD 3c.3: the third domain of the example, which holds the catalog of systems, products and teams. */
+    public static final KnowledgeScope CATALOG = KnowledgeScope.named("examples", "catalog");
     public static final RetentionClass BATCH = new RetentionClass("knowledge-batch", Duration.ofDays(7));
     public static final RetentionClass RESTRICTED = new RetentionClass("restricted", Duration.ofDays(30));
 
@@ -71,6 +75,8 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     final CompositeKnowledgeStore store;
     /** SDD 3c.1: the architecture domain's base. */
     final CompositeKnowledgeStore architecture;
+    /** SDD 3c.3: the catalog domain's base. */
+    final CompositeKnowledgeStore catalog;
     final WorkflowEngine engine;
     final WorkflowDefinition definition;
     final WorkflowDefinition eraseDefinition;
@@ -79,8 +85,12 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     final WorkflowDefinition announceDefinition;
     final WorkflowDefinition linksDefinition;
     final WorkflowDefinition resolveDefinition;
+    final WorkflowDefinition productCatalogDefinition;
+    final WorkflowDefinition architectureCatalogDefinition;
     /** SDD 3c.2: when true the product domain's {@code resolve-pointers} does not answer (the origin is down). */
     private volatile boolean resolveDown;
+    /** SDD 3c.3: when true the catalog domain's {@code catalog-lookup} does not answer. */
+    private volatile boolean catalogDown;
     private final WorkerPool pool;
     /** The instance being run, once started. */
     volatile String current;
@@ -149,6 +159,29 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         handlers.register(KnowledgeWorkers.RESOLVE_ROUTE, ctx -> resolveDown ? CompletableFuture.failedFuture(
                 new io.stintflow.worker.TaskFailure(io.stintflow.spi.ErrorInfo.StandardType.COMMUNICATION.uri(), 503,
                         "The origin does not answer", null)) : resolveHandler.execute(ctx));
+        // SDD 3c.3: the catalog domain answers which node of the catalog a name is; each area names its nodes and links them by pointer
+        this.catalog = new CompositeKnowledgeStore(new DeterministicEmbedder(), blobs, RESTRICTED, clock);
+        catalog.write(CATALOG, io.stintflow.knowledge.CatalogSeed.of(catalogGlossary(base), 1)).toCompletableFuture().join();
+        TaskHandlerRegistry cataloging = new TaskHandlerRegistry();
+        KnowledgeWorkers.registerCatalog(cataloging, catalog, new ScopeAllowList(Set.of(CATALOG)),
+                new io.stintflow.worker.knowledge.CatalogRequesters(Set.of("examples:product-catalog-link",
+                        "examples:architecture-catalog-link")), audit, clock);
+        io.stintflow.worker.TaskHandler lookupHandler = cataloging.find(KnowledgeWorkers.CATALOG_LOOKUP_ROUTE).orElseThrow();
+        handlers.register(KnowledgeWorkers.CATALOG_LOOKUP_ROUTE, ctx -> catalogDown ? CompletableFuture.failedFuture(
+                new io.stintflow.worker.TaskFailure(io.stintflow.spi.ErrorInfo.StandardType.COMMUNICATION.uri(), 503,
+                        "The catalog does not answer", null)) : lookupHandler.execute(ctx));
+        io.stintflow.worker.knowledge.OriginAllowList fromCatalog = new io.stintflow.worker.knowledge.OriginAllowList(Set.of(CATALOG));
+        TaskHandlerRegistry productLinks = new TaskHandlerRegistry();
+        KnowledgeWorkers.registerCatalogLinks(productLinks, store, store, store, new ScopeAllowList(Set.of(SCOPE)), fromCatalog, audit, clock);
+        TaskHandlerRegistry architectureLinks = new TaskHandlerRegistry();
+        KnowledgeWorkers.registerCatalogLinks(architectureLinks, architecture, architecture, architecture,
+                new ScopeAllowList(Set.of(ARCHITECTURE)), fromCatalog, audit, clock);
+        for (String route : List.of(KnowledgeWorkers.CATALOG_MENTIONS_ROUTE, KnowledgeWorkers.CATALOG_LINK_ROUTE)) {
+            io.stintflow.worker.TaskHandler forProduct = productLinks.find(route).orElseThrow();
+            io.stintflow.worker.TaskHandler forArchitecture = architectureLinks.find(route).orElseThrow();
+            handlers.register(route, ctx -> ARCHITECTURE.base().equals(ctx.input().path("scope").path("base").asText())
+                    ? forArchitecture.execute(ctx) : forProduct.execute(ctx));
+        }
         if (areaKeys != null) {
             KnowledgeWorkers.registerAreaKeys(handlers, areaKeys, Set.of(SCOPE.namespace()), audit, clock);
         }
@@ -179,6 +212,8 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         announceDefinition = load(ANNOUNCE_WORKFLOW, "knowledge-announce.yaml");
         linksDefinition = load(LINKS_WORKFLOW, "architecture-links.yaml");
         resolveDefinition = load(RESOLVE_WORKFLOW, "architecture-resolve.yaml");
+        productCatalogDefinition = load(PRODUCT_CATALOG_WORKFLOW, "product-catalog-link.yaml");
+        architectureCatalogDefinition = load(ARCHITECTURE_CATALOG_WORKFLOW, "architecture-catalog-link.yaml");
         registry.register(definition);
         registry.register(eraseDefinition);
         registry.register(reindexDefinition);
@@ -186,6 +221,8 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         registry.register(announceDefinition);
         registry.register(linksDefinition);
         registry.register(resolveDefinition);
+        registry.register(productCatalogDefinition);
+        registry.register(architectureCatalogDefinition);
         this.engine = new WorkflowEngine(registry, transport, state, timer, blobs,
                 new TreeInterpreter(new JqExpressionEvaluator()), clock, facts, null,
                 io.stintflow.spi.ExecutionTracer.NOOP).auditLog(audit);
@@ -235,6 +272,36 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     /** SDD 3c.2: makes the product domain stop answering the pointers (or answer again), for the test of an origin that is down. */
     public void resolveDown(boolean down) {
         this.resolveDown = down;
+    }
+
+    /** SDD 3c.3: the catalog of the example: the systems of the product glossary (one with another spelling), a product and a team. */
+    static io.stintflow.knowledge.extraction.Glossary catalogGlossary(Corpus.KnowledgeBase base) {
+        List<io.stintflow.knowledge.extraction.Glossary.Term> terms = new java.util.ArrayList<>();
+        base.glossary().stream().filter(t -> t.type().equals("System")).forEach(t -> {
+            List<String> aliases = new java.util.ArrayList<>(t.aliases());
+            if (t.id().equals("sys-checkout")) {
+                aliases.add("checkout-service");
+            }
+            terms.add(new io.stintflow.knowledge.extraction.Glossary.Term(t.id(), t.type(), t.name(), aliases, null));
+        });
+        terms.add(new io.stintflow.knowledge.extraction.Glossary.Term("prod-shop", "Product", "Online Shop"));
+        terms.add(new io.stintflow.knowledge.extraction.Glossary.Term("team-payments", "Team", "Payments Team"));
+        return new io.stintflow.knowledge.extraction.Glossary("catalog", "1", terms);
+    }
+
+    /** SDD 3c.3: starts the linking of the product domain's nodes to the catalog from the {@code document-indexed} fact. */
+    public InstanceSnapshot catalogLinkProduct(CloudEvent indexed, Duration patience) throws Exception {
+        return run(productCatalogDefinition, indexed, patience);
+    }
+
+    /** SDD 3c.3: starts the linking of the architecture domain's nodes to the catalog from the {@code references-linked} fact. */
+    public InstanceSnapshot catalogLinkArchitecture(CloudEvent linked, Duration patience) throws Exception {
+        return run(architectureCatalogDefinition, linked, patience);
+    }
+
+    /** SDD 3c.3: makes the catalog stop answering (or answer again), for the test of a catalog that is down. */
+    public void catalogDown(boolean down) {
+        this.catalogDown = down;
     }
 
     /** SDD 3b.5b: starts the destruction of an area's key from the request and waits for it to end. */
