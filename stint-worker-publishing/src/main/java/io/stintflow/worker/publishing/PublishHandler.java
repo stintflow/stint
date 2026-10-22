@@ -36,9 +36,19 @@ public final class PublishHandler implements TaskHandler {
     private final PagePublisher publisher;
     private final BlobStore blobs;
     private final String allowedSpace;
+    private final io.stintflow.spi.AuditLog audit;
+    private final java.time.InstantSource clock;
 
     /** @param allowedSpace the one space this worker may publish to ({@code stint.publishing.space}) */
     public PublishHandler(PagePublisher publisher, BlobStore blobs, String allowedSpace) {
+        this(publisher, blobs, allowedSpace, null, java.time.InstantSource.system());
+    }
+
+    /** As above, and each page published is recorded in {@code audit} (SDD 3c.5, 4.4): the space, the id, whether it was created; no text. */
+    public PublishHandler(PagePublisher publisher, BlobStore blobs, String allowedSpace, io.stintflow.spi.AuditLog audit,
+            java.time.InstantSource clock) {
+        this.audit = audit == null ? io.stintflow.spi.AuditLog.NONE : audit;
+        this.clock = clock;
         this.publisher = Objects.requireNonNull(publisher, "publisher");
         this.blobs = Objects.requireNonNull(blobs, "blobs");
         if (allowedSpace == null || allowedSpace.isBlank()) {
@@ -82,6 +92,9 @@ public final class PublishHandler implements TaskHandler {
                     StorageFormat.fromMarkdown(new String(bytes, StandardCharsets.UTF_8)), labels, ctx.sensitivity()));
             LOG.info("Task {} of instance {}: page {} in space {} ({})", ctx.taskId(), ctx.instanceId(), page.id(),
                     space, page.created() ? "created" : "already published");
+            audit.append(new io.stintflow.spi.AuditLog.AuditRecord(ctx.instanceId(), ctx.chainId(), clock.instant(), "publish",
+                    ctx.taskId(), ctx.sensitivity(), "publish-page", page.created() ? "created" : "unchanged",
+                    java.util.Map.of("space", space, "page", page.id()))).toCompletableFuture().join();
             ObjectNode out = Json.obj();
             out.put("id", page.id());
             out.put("url", page.url().toString());

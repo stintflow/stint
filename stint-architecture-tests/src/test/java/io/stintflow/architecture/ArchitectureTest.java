@@ -281,6 +281,18 @@ class ArchitectureTest {
             .orShould().dependOnClassesThat().haveSimpleName("PublishedView")
             .orShould().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge.inmemory..", "io.stintflow.inmemory..");
 
+    /**
+     * SDD 3c.5, 4.6 (CA10): the contract of exposure is a document that builds a policy. It does not know a handler, the store or
+     * the in-memory adapters: it reads a schema, and produces the grants and views the resolver applies.
+     */
+    @ArchTest
+    static final ArchRule the_bridge_contract_only_builds_the_policy = noClasses()
+            .that().haveSimpleName("BridgeContract")
+            .should().dependOnClassesThat().haveSimpleNameEndingWith("Handler")
+            .orShould().dependOnClassesThat().haveSimpleName("KnowledgeStore")
+            .orShould().dependOnClassesThat().haveSimpleName("KnowledgeNodes")
+            .orShould().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge.inmemory..", "io.stintflow.inmemory..");
+
     /** SDD 3c.4, 4.8 (CA14): the conflict check judges and does not write: a decision worker does not know the knowledge store. */
     @ArchTest
     static final ArchRule the_conflict_decision_has_no_write = noClasses()

@@ -109,19 +109,9 @@ public final class ArchitectureAdrPipeline implements AutoCloseable {
         this.product = new CompositeKnowledgeStore(new DeterministicEmbedder(), blobs, KnowledgeIngestPipeline.RESTRICTED, clock);
         this.architecture = new CompositeKnowledgeStore(new DeterministicEmbedder(), blobs, KnowledgeIngestPipeline.RESTRICTED, clock);
 
-        // the product domain answers by its own policy: the definition that checks conflicts gets the view with the summary, the others do not
-        io.stintflow.knowledge.schema.KnowledgeSchema meetings = io.stintflow.knowledge.schema.KnowledgeSchema.meetings();
-        ResolutionPolicy policy = new ResolutionPolicy(
-                List.of(new Grant("examples", "architecture-resolve", Set.of(PRODUCT), Set.of("Decision", "Requirement", "System"),
-                                Sensitivity.CONFIDENTIAL),
-                        new Grant("examples", "architecture-adr", Set.of(PRODUCT), Set.of("Decision"), Sensitivity.CONFIDENTIAL,
-                                ADR_VIEW)),
-                List.of(PublishedView.of("product-v1", PRODUCT, meetings, List.of(
-                                PublishedType.of("Decision", true, Set.of("status"), Set.of("supersedes", "affects")),
-                                PublishedType.of("Requirement", true, Set.of(), Set.of()),
-                                PublishedType.of("System", true, Set.of(), Set.of())), false),
-                        PublishedView.of(ADR_VIEW, PRODUCT, meetings, List.of(
-                                PublishedType.of("Decision", true, Set.of("status", "summary"), Set.of())), true)));
+        // the product domain answers by the contract of exposure of its base: the definition that checks conflicts gets the view
+        // with the summary, the others do not (SDD 3c.4, 3c.5)
+        ResolutionPolicy policy = ProductBridge.contract().policy();
         TaskHandlerRegistry resolving = new TaskHandlerRegistry();
         KnowledgeWorkers.registerResolve(resolving, product, product, policy, blobs, null, audit, clock);
         TaskHandler resolve = resolving.find(KnowledgeWorkers.RESOLVE_ROUTE).orElseThrow();
@@ -141,7 +131,7 @@ public final class ArchitectureAdrPipeline implements AutoCloseable {
                 new OriginAllowList(Set.of(PRODUCT)), MATERIAL, DOCUMENT, audit, clock);
         handlers.register("publish-adr", new PublishAdrsHandler(new PublishHandler(ConfluencePagePublisher.builder()
                 .baseUri(confluence.baseUri()).space(SPACE).email(ProductMeetingPipeline.CONFLUENCE_EMAIL)
-                .apiToken(ProductMeetingPipeline.CONFLUENCE_TOKEN).build(), blobs, SPACE)));
+                .apiToken(ProductMeetingPipeline.CONFLUENCE_TOKEN).build(), blobs, SPACE, audit, clock)));
         this.pool = new WorkerPool(new WorkerRuntime(handlers, blobs, io.stintflow.spi.ExecutionTracer.NOOP), 4);
         InMemoryTaskTransport transport = new InMemoryTaskTransport();
         transport.connectWorker(invoke -> {

@@ -46,6 +46,8 @@ public final class KnowledgeWriteHandler implements TaskHandler {
     private final BlobStore blobs;
     private final ScopeAllowList scopes;
     private final boolean piiGate;
+    private final io.stintflow.spi.AuditLog audit;
+    private final java.time.InstantSource clock;
 
     /** With the personal-data gate on. */
     public KnowledgeWriteHandler(KnowledgeStore store, BlobStore blobs, ScopeAllowList scopes) {
@@ -57,6 +59,14 @@ public final class KnowledgeWriteHandler implements TaskHandler {
      *                deliberate act of the worker owner
      */
     public KnowledgeWriteHandler(KnowledgeStore store, BlobStore blobs, ScopeAllowList scopes, boolean piiGate) {
+        this(store, blobs, scopes, piiGate, null, java.time.InstantSource.system());
+    }
+
+    /** As above, and each write is recorded in {@code audit} (SDD 3c.5, 4.4): ids and counts, no text. */
+    public KnowledgeWriteHandler(KnowledgeStore store, BlobStore blobs, ScopeAllowList scopes, boolean piiGate,
+            io.stintflow.spi.AuditLog audit, java.time.InstantSource clock) {
+        this.audit = audit == null ? io.stintflow.spi.AuditLog.NONE : audit;
+        this.clock = clock;
         this.store = Objects.requireNonNull(store, "store");
         this.blobs = Objects.requireNonNull(blobs, "blobs");
         this.scopes = Objects.requireNonNull(scopes, "scopes");
@@ -108,6 +118,13 @@ public final class KnowledgeWriteHandler implements TaskHandler {
         receipt.counts().forEach(counts::put);
         out.put("lastSequence", receipt.lastSequence());
         out.put("dropped", receipt.dropped());
+        java.util.Map<String, String> detail = new java.util.LinkedHashMap<>();
+        detail.put("base", scope.key());
+        detail.put("document", batch.documentId());
+        detail.put("status", receipt.status().name());
+        receipt.counts().forEach((type, n) -> detail.put("count." + type, Integer.toString(n)));
+        audit.append(new io.stintflow.spi.AuditLog.AuditRecord(ctx.instanceId(), ctx.chainId(), clock.instant(), "knowledge-write",
+                ctx.taskId(), ctx.sensitivity(), "knowledge-write", "written", detail)).toCompletableFuture().join();
         return out;
     }
 

@@ -15,6 +15,8 @@ import io.stintflow.knowledge.KnowledgeScope;
 public final class ResolutionPolicy {
 
     private final List<Grant> grants;
+    private String contractVersion;
+    private String contractHash;
     private final Map<KnowledgeScope, Map<String, PublishedView>> views = new HashMap<>();
 
     public ResolutionPolicy(List<Grant> grants, List<PublishedView> views) {
@@ -30,6 +32,21 @@ public final class ResolutionPolicy {
                         + " names the view " + grant.view() + ", which a base it covers does not publish");
             }
         }
+    }
+
+    /** SDD 3c.5: says this policy came from the contract of that version and hash, which the audit of each resolution then cites. */
+    ResolutionPolicy contract(String version, String hash) {
+        this.contractVersion = version;
+        this.contractHash = hash;
+        return this;
+    }
+
+    Optional<String> contractVersion() {
+        return Optional.ofNullable(contractVersion);
+    }
+
+    Optional<String> contractHash() {
+        return Optional.ofNullable(contractHash);
     }
 
     /** The grant of the requester over {@code base}, if the base is published and a grant covers it. */

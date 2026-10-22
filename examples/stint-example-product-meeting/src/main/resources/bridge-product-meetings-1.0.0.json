@@ -1,0 +1,25 @@
+{
+  "bridge": 1,
+  "base": "examples/product-meetings",
+  "version": "1.0.0",
+  "consumers": [
+    {"definition": "examples:architecture-resolve", "types": ["Decision", "Requirement", "System"], "view": "product-v1", "ceiling": "confidential"},
+    {"definition": "examples:architecture-adr", "types": ["Decision"], "view": "product-adr-v1", "ceiling": "confidential"}
+  ],
+  "views": {
+    "product-v1": {
+      "allowSensitive": false,
+      "types": {
+        "Decision": {"label": true, "properties": ["status"], "relations": ["supersedes", "affects"]},
+        "Requirement": {"label": true},
+        "System": {"label": true}
+      }
+    },
+    "product-adr-v1": {
+      "allowSensitive": true,
+      "types": {
+        "Decision": {"label": true, "properties": ["status", "summary"]}
+      }
+    }
+  }
+}

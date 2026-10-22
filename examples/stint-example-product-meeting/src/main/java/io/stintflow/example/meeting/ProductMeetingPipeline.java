@@ -228,7 +228,7 @@ public final class ProductMeetingPipeline implements AutoCloseable {
                 }))
                 .register("publish-page", new PublishHandler(ConfluencePagePublisher.builder()
                         .baseUri(confluenceBase).space(SPACE).email(CONFLUENCE_EMAIL).apiToken(CONFLUENCE_TOKEN)
-                        .build(), blobs, SPACE));
+                        .build(), blobs, SPACE, audit, InstantSource.system()));
     }
 
     /** From now on the minutes of a meeting are written with what {@code base} holds from the earlier ones (SDD 3b.4). */

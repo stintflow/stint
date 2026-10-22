@@ -78,9 +78,20 @@ public final class ResolvePointersHandler implements TaskHandler {
     private final RetentionClass viewClass;
     private final AuditLog audit;
     private final InstantSource clock;
+    private final ChannelAttestation attestation;
 
     public ResolvePointersHandler(KnowledgeStore store, KnowledgeNodes nodes, ResolutionPolicy policy, BlobStore blobs,
             RetentionClass viewClass, AuditLog audit, InstantSource clock) {
+        this(store, nodes, policy, blobs, viewClass, audit, clock, null);
+    }
+
+    /**
+     * @param attestation what the deployment declares of the channel (SDD 3c.5, 4.2), or {@code null}: then nothing is asked of it.
+     *                    With one that says the channel is not authenticated, every call is refused before its input is read.
+     */
+    public ResolvePointersHandler(KnowledgeStore store, KnowledgeNodes nodes, ResolutionPolicy policy, BlobStore blobs,
+            RetentionClass viewClass, AuditLog audit, InstantSource clock, ChannelAttestation attestation) {
+        this.attestation = attestation;
         this.store = Objects.requireNonNull(store, "store");
         this.nodes = Objects.requireNonNull(nodes, "nodes");
         this.policy = Objects.requireNonNull(policy, "policy");
@@ -108,6 +119,12 @@ public final class ResolvePointersHandler implements TaskHandler {
     }
 
     private JsonNode resolve(TaskContext ctx) {
+        if (attestation != null && !attestation.authenticated()) {
+            audit.append(new AuditLog.AuditRecord(ctx.instanceId(), ctx.chainId(), clock.instant(), AUDIT_KIND, ctx.taskId(),
+                    ctx.sensitivity(), "resolve-pointers", "refused", Map.of("channel", attestation.channelId(),
+                            "reason", "channel-not-authenticated"))).toCompletableFuture().join();
+            throw Failures.refused("This origin answers only through a channel it was told is authenticated");
+        }
         JsonNode in = ctx.input();
         JsonNode asked = in.path("pointers");
         if (!asked.isArray() || asked.isEmpty() || asked.size() > MAX_POINTERS) {
@@ -297,6 +314,11 @@ public final class ResolvePointersHandler implements TaskHandler {
             detail.put("level." + level.wireName(), Integer.toString(byLevel.getOrDefault(level, 0)));
         }
         detail.put("depth", Integer.toString(depth));
+        policy.contractVersion().ifPresent(v -> detail.put("contract", v));
+        policy.contractHash().ifPresent(h -> detail.put("contractHash", h));
+        if (attestation != null) {
+            detail.put("channel", attestation.channelId());
+        }
         boolean sensitive = bases.values().stream().anyMatch(b -> b.view != null && b.view.allowSensitive());
         if (sensitive) {
             detail.put("allowSensitive", "true");

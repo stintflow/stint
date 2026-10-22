@@ -145,14 +145,8 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         KnowledgeWorkers.registerReference(handlers, architecture, new ScopeAllowList(Set.of(ARCHITECTURE)),
                 new io.stintflow.worker.knowledge.OriginAllowList(Set.of(SCOPE)), audit, clock);
         // SDD 3c.2: the product domain answers the pointers of the architecture domain, by its own policy and through the view it publishes
-        io.stintflow.knowledge.schema.KnowledgeSchema meetings = io.stintflow.knowledge.schema.KnowledgeSchema.meetings();
-        io.stintflow.worker.knowledge.ResolutionPolicy resolution = new io.stintflow.worker.knowledge.ResolutionPolicy(
-                List.of(new io.stintflow.worker.knowledge.Grant("examples", "architecture-resolve", Set.of(SCOPE),
-                        Set.of("Decision", "Requirement", "System"), io.stintflow.spi.Sensitivity.CONFIDENTIAL)),
-                List.of(io.stintflow.worker.knowledge.PublishedView.of("product-v1", SCOPE, meetings, List.of(
-                        io.stintflow.worker.knowledge.PublishedType.of("Decision", true, Set.of("status"), Set.of("supersedes", "affects")),
-                        io.stintflow.worker.knowledge.PublishedType.of("Requirement", true, Set.of(), Set.of()),
-                        io.stintflow.worker.knowledge.PublishedType.of("System", true, Set.of(), Set.of())), false)));
+        // (SDD 3c.5: the policy is built from the contract of exposure of the base, a document)
+        io.stintflow.worker.knowledge.ResolutionPolicy resolution = ProductBridge.contract().policy();
         TaskHandlerRegistry resolving = new TaskHandlerRegistry();
         KnowledgeWorkers.registerResolve(resolving, store, store, resolution, blobs, null, audit, clock);
         io.stintflow.worker.TaskHandler resolveHandler = resolving.find(KnowledgeWorkers.RESOLVE_ROUTE).orElseThrow();

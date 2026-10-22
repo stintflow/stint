@@ -38,7 +38,7 @@ public final class KnowledgeWorkers {
     /** Registers {@code knowledge-write} and {@code knowledge-retrieve} over {@code store}, serving only {@code scopes}. */
     public static TaskHandlerRegistry register(TaskHandlerRegistry registry, KnowledgeStore store, BlobStore blobs,
             ScopeAllowList scopes, AuditLog audit, InstantSource clock) {
-        return registry.register(WRITE_ROUTE, new KnowledgeWriteHandler(store, blobs, scopes))
+        return registry.register(WRITE_ROUTE, new KnowledgeWriteHandler(store, blobs, scopes, true, audit, clock))
                 .register(RETRIEVE_ROUTE, new KnowledgeRetrieveHandler(store, scopes, audit, clock));
     }
 

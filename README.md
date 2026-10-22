@@ -767,6 +767,14 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   graph (`architecture@1.1.0`), the `Decision` with `motivatedBy` the same reference the linking wrote. The ADR carries the pointer
   and the label the origin publishes — **never the summary of the product decision**, which only the definition that checks
   conflicts receives, through its own view (`Grant.view`, audited as `allowSensitive`).
+- **Compliance of the bridge (3c.5).** What a domain exposes is a **document**, `BridgeContract` (versioned, hashed): the
+  definitions that may resolve, the types and properties each sees through a view, and the ceiling (never above
+  `confidential`; a contract that lists `restricted`, an unknown type or property, a sensitive property without `allowSensitive`
+  or a consumer with no type does not load). It produces the `ResolutionPolicy`, and the audit of each resolution cites its
+  version and hash. The origin can be told, by a `ChannelAttestation`, whether its channel is authenticated — if not, it answers
+  nothing; authenticating the transport itself is the deployment's. `knowledge-write` and the publication now audit too, and
+  `AuditTrail` reads one execution of the scenario across the domains' logs. `docs/compliance/bridge-review.md` is the material
+  for the DPO and legal opinion, which is not in the repository.
 - **Resolving a pointer (3c.2).** The origin answers: `resolve-pointers` is a task like any other (an invitation through the
   transport, with the engine's checkpoint, retry and timeout), served by the domain that holds the node, and **who asks is the
   definition of the invitation, never a field of the input**. `ResolutionPolicy` grants a definition some bases, node types and a

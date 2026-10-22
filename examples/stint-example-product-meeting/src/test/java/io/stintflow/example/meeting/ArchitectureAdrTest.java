@@ -62,7 +62,7 @@ class ArchitectureAdrTest {
     }
 
     /** A decision of the product domain, with its status and a summary the view only gives to the one definition that checks conflicts. */
-    private static String productDecision(ArchitectureAdrPipeline p, String key, String label, String summary) {
+    static String productDecision(ArchitectureAdrPipeline p, String key, String label, String summary) {
         String id = EntityIds.of("Decision", key);
         Entity entity = new Entity(id, "Decision", label, Map.of("key", key, "summary", summary, "status", "accepted"),
                 Sensitivity.CONFIDENTIAL);
@@ -72,7 +72,7 @@ class ArchitectureAdrTest {
         return GraphPointer.of(ArchitectureAdrPipeline.PRODUCT, id, 1).format();
     }
 
-    private static ObjectNode decision(String id, String title, String summary, String affects, String... pointers) {
+    static ObjectNode decision(String id, String title, String summary, String affects, String... pointers) {
         ObjectNode d = Json.obj().put("id", id).put("title", title).put("summary", summary);
         ArrayNode motivated = d.putArray("motivatedBy");
         for (String pointer : pointers) {
@@ -84,7 +84,7 @@ class ArchitectureAdrTest {
         return d;
     }
 
-    private static ArrayNode decisions(ObjectNode... all) {
+    static ArrayNode decisions(ObjectNode... all) {
         ArrayNode array = Json.MAPPER.createArrayNode();
         for (ObjectNode d : all) {
             array.add(d);
