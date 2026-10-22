@@ -202,7 +202,7 @@ public final class ProductMeetingPipeline implements AutoCloseable {
                         "stint.decision.routes.decide-doc-type.adapter", stack.docType().descriptor().id(),
                         "stint.decision.routes.decide-doc-type.instructions",
                         "Which document should this meeting produce: minutes (ata), an architecture decision record "
-                                + "(adr) or a runbook?",
+                                + "(adr), a runbook or product requirements (prd)?",
                         "stint.decision.routes.decide-urgency.adapter", stack.urgency().descriptor().id(),
                         "stint.decision.routes.decide-urgency.instructions", "Does this meeting need action today?")))
                 .adapter(stack.docType()).policy(policy).usage(metrics.decisionUsage());

@@ -74,6 +74,7 @@ do:
           - ata: { description: "Meeting minutes" }
           - adr: { description: "An architecture decision record" }
           - runbook: { description: "Operating steps" }
+          - prd: { description: "Product requirements for a feature or an initiative" }
       onUncertain:
         review:
           role: business-rep

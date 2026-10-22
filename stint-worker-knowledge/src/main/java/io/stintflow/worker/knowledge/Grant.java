@@ -8,10 +8,16 @@ import io.stintflow.spi.Sensitivity;
 
 /**
  * SDD 3c.2, 4.2: what one requesting definition (namespace and name, never the version) may resolve in the bases of this origin:
- * which bases, which node types, up to which level — and never above {@code confidential}.
+ * which bases, which node types, up to which level — and never above {@code confidential}. {@code view} (SDD 3c.4, 8e) is the
+ * version of the published view the requester sees when a base publishes more than one; none: the first the base published.
  */
 public record Grant(String requesterNamespace, String requesterName, Set<KnowledgeScope> bases, Set<String> types,
-        Sensitivity ceiling) {
+        Sensitivity ceiling, String view) {
+
+    public Grant(String requesterNamespace, String requesterName, Set<KnowledgeScope> bases, Set<String> types,
+            Sensitivity ceiling) {
+        this(requesterNamespace, requesterName, bases, types, ceiling, null);
+    }
 
     public Grant {
         Objects.requireNonNull(requesterNamespace, "requesterNamespace");

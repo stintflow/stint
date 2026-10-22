@@ -25,6 +25,7 @@ public final class SchemaRegistry {
         SchemaRegistry registry = new SchemaRegistry();
         registry.register(KnowledgeSchema.meetings());
         registry.register(KnowledgeSchema.architecture());
+        registry.register(KnowledgeSchema.architectureDecisions());
         registry.register(KnowledgeSchema.catalog());
         registry.register(KnowledgeSchema.catalogLinks());
         return registry;

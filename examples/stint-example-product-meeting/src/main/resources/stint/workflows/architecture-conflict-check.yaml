@@ -1,0 +1,69 @@
+# SDD 3c.4: the child of architecture-adr for ONE pair (an architecture decision, a product decision). The pair is judged by a
+# decision task (conflicts | compatible); a human reviews it when the decision is unsure and ALWAYS when it says 'conflicts' (a
+# conflict with the product is where a person has to look). With no resolved content for the product decision (the origin did not
+# answer) the machine does not decide: the pair goes straight to the person. No answer within the deadline is 'conflicts'.
+# The child's output is ids and the verdict, never a text.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: architecture-conflict-check
+  version: '1.0.0'
+  metadata:
+    x-stint-policy:
+      sensitivity:
+        from: '${ .label }'
+      routes:
+        restricted: [pair-material]
+        confidential: [pair-material, decide-conflict]
+        internal: ['*']
+      review:
+        sources: [https://review-channel.example]
+do:
+  - material:
+      call: remote
+      with:
+        task: pair-material
+        input: '${ {pairId: .pairId, decisionId: .decisionId, pointer: .pointer, draftRef: .draftRef, viewRef: .viewRef} }'
+      timeout: { after: { seconds: 30 } }
+      export: { as: '${ {pairId: .pairId, materialRef: .materialRef, context: .context} }' }
+  - route:
+      switch:
+        - nothing: { when: '${ $context.context == "unavailable" }', then: ask }
+        - something: { then: conflict }
+  - conflict:
+      call: decision
+      with:
+        task: decide-conflict
+        kind: choice
+        input: '${ {materialRef: $context.materialRef} }'
+        options:
+          - conflicts: { description: "The architecture decision contradicts the product decision or makes it impossible" }
+          - compatible: { description: "Both can hold at the same time" }
+      onUncertain:
+        review:
+          role: tech-rep
+          material: '${ $context.materialRef }'
+          deadline: { hours: 24 }
+          remind: { hours: 20 }
+          onTimeout: { value: conflicts }
+      export: { as: '${ $context + {auto: .value, verdict: .value, reviewed: (.reviewed != null)} }' }
+  - confirm:
+      switch:
+        - settled: { when: '${ $context.verdict == "compatible" or $context.reviewed }', then: done }
+        - confirmConflict: { then: ask }
+  - ask:
+      call: review
+      with:
+        kind: choice
+        role: tech-rep
+        material: '${ $context.materialRef }'
+        options:
+          - conflicts: { then: done }
+          - compatible: { then: done }
+        deadline: { hours: 24 }
+        remind: { hours: 20 }
+        onTimeout: { value: conflicts }
+      export: { as: '${ $context + {verdict: .value, reviewed: true} }' }
+  - done:
+      set: '${ {pairId: $context.pairId, verdict: $context.verdict, reviewed: $context.reviewed, auto: ($context.auto // null)} }'
+      export: { as: '${ . }' }

@@ -112,6 +112,11 @@ public record KnowledgeSchema(String id, String version, String language, Map<St
         }
     }
 
+    /** {@code architecture@1.1.0} (SDD 3c.4): the 1.0.0 plus the decision of an ADR, {@code motivatedBy} the references and {@code affects} the systems. */
+    public static KnowledgeSchema architectureDecisions() {
+        return resource("architecture-1.1.0.json");
+    }
+
     /** The reference schema of the entity catalog, {@code catalog@1.0.0} (SDD 3c.3): systems, products and teams, never people. */
     public static KnowledgeSchema catalog() {
         return resource("catalog-1.0.0.json");

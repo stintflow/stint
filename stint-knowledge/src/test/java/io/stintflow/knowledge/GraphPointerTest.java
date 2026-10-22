@@ -113,8 +113,10 @@ class GraphPointerTest {
 
     @Test
     void the_architecture_schema_is_a_reference_schema_with_the_domain_reference_and_the_relation_that_informs_it() {
-        var schema = io.stintflow.knowledge.schema.SchemaRegistry.withReferenceSchemas().resolve("architecture@1").orElseThrow();
+        var registry = io.stintflow.knowledge.schema.SchemaRegistry.withReferenceSchemas();
+        var schema = registry.find("architecture", "1.0.0").orElseThrow();
 
+        assertThat(registry.resolve("architecture@1").orElseThrow().fullVersion()).isEqualTo("architecture@1.1.0");
         assertThat(schema.fullVersion()).isEqualTo("architecture@1.0.0");
         assertThat(schema.nodes()).containsOnlyKeys("DomainReference", "System");
         assertThat(schema.nodes().get("DomainReference").properties()).containsOnlyKeys("pointer", "remoteType", "domain",

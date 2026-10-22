@@ -758,6 +758,15 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   the systems of the meetings (which come out `confidential`), the **name of a glossary term the glossary resolved** keeps the
   level of its type (`internal`) in a confidential meeting (3c.3b); what the meeting said — passages, relations, decisions —
   does not change level.
+- **The ADR traceable to the product decisions (3c.4).** The fact `architecture-decisions-drafted` points at the draft of a
+  meeting's architecture decisions, each with the pointers of the product decisions that motivate it. `architecture-adr` resolves
+  those pointers (3c.2) and runs **one child per pair** (`architecture-conflict-check`, a `for` of 3a.8, three at a time): a
+  decision task says `conflicts` or `compatible`, and a person (`tech-rep`) reviews **every conflict and every unsure pair**; no
+  answer in the deadline is `conflicts`. With the origin down and `follow`, no pair is decided by a machine: all go to the person.
+  `write-adrs` writes one ADR per decision (a page in the `ARCHITECTURE` space, status `proposed` or `conflicting`) and, in the
+  graph (`architecture@1.1.0`), the `Decision` with `motivatedBy` the same reference the linking wrote. The ADR carries the pointer
+  and the label the origin publishes — **never the summary of the product decision**, which only the definition that checks
+  conflicts receives, through its own view (`Grant.view`, audited as `allowSensitive`).
 - **Resolving a pointer (3c.2).** The origin answers: `resolve-pointers` is a task like any other (an invitation through the
   transport, with the engine's checkpoint, retry and timeout), served by the domain that holds the node, and **who asks is the
   definition of the invitation, never a field of the input**. `ResolutionPolicy` grants a definition some bases, node types and a

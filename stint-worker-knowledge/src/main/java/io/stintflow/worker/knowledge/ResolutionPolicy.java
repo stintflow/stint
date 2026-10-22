@@ -1,6 +1,7 @@
 package io.stintflow.worker.knowledge;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -14,13 +15,19 @@ import io.stintflow.knowledge.KnowledgeScope;
 public final class ResolutionPolicy {
 
     private final List<Grant> grants;
-    private final Map<KnowledgeScope, PublishedView> views = new HashMap<>();
+    private final Map<KnowledgeScope, Map<String, PublishedView>> views = new HashMap<>();
 
     public ResolutionPolicy(List<Grant> grants, List<PublishedView> views) {
         this.grants = List.copyOf(grants);
         for (PublishedView view : views) {
-            if (this.views.put(view.base(), view) != null) {
-                throw new IllegalArgumentException("The base " + view.base().key() + " has two published views");
+            if (this.views.computeIfAbsent(view.base(), b -> new LinkedHashMap<>()).put(view.version(), view) != null) {
+                throw new IllegalArgumentException("The base " + view.base().key() + " publishes the view " + view.version() + " twice");
+            }
+        }
+        for (Grant grant : this.grants) {
+            if (grant.view() != null && grant.bases().stream().anyMatch(b -> !this.views.getOrDefault(b, Map.of()).containsKey(grant.view()))) {
+                throw new IllegalArgumentException("The grant of " + grant.requesterNamespace() + ":" + grant.requesterName()
+                        + " names the view " + grant.view() + ", which a base it covers does not publish");
             }
         }
     }
@@ -33,7 +40,12 @@ public final class ResolutionPolicy {
         return grants.stream().filter(g -> g.covers(namespace, name, base)).findFirst();
     }
 
-    Optional<PublishedView> viewOf(KnowledgeScope base) {
-        return Optional.ofNullable(views.get(base));
+    /** The view {@code grant} sees in {@code base}: the one it names, else the first the base published. */
+    Optional<PublishedView> viewOf(KnowledgeScope base, Grant grant) {
+        Map<String, PublishedView> published = views.getOrDefault(base, Map.of());
+        if (grant.view() != null) {
+            return Optional.ofNullable(published.get(grant.view()));
+        }
+        return published.values().stream().findFirst();
     }
 }

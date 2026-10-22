@@ -83,6 +83,11 @@ public final class ReviewChannel implements EventPublisher, AutoCloseable {
                 .toList();
     }
 
+    /** Every open request, of any instance (SDD 3c.4: the children of a {@code for} each have their own). */
+    public java.util.List<JsonNode> allOpen() {
+        return java.util.List.copyOf(open.values());
+    }
+
     /** Every event the engine published through this channel, in order. */
     public java.util.List<CloudEvent> published() {
         return delegate.published();

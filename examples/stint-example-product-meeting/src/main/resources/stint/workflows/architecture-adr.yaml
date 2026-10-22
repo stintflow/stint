@@ -1,0 +1,96 @@
+# SDD 3c.4: the architecture decisions of a meeting become ADRs that say which product decisions motivated them and whether they
+# conflict. The fact 'decisions drafted' carries a pointer to the draft (the output of the structuring step, which is the head of
+# product-meeting.yaml in the real configuration). Each pair (decision, product pointer) is checked by a child definition: a
+# decision with a human review when it is unsure and for every conflict. The product decisions are resolved by the ORIGIN, by its
+# own policy; what it resolved rests in a blob that expires, and only the label of a pointer reaches the ADR.
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: architecture-adr
+  version: '1.0.0'
+  metadata:
+    x-stint-policy:
+      sensitivity:
+        from: '${ .[0].data.label }'
+      routes:
+        restricted: [pair-decisions]
+        confidential: [pair-decisions, resolve-pointers, pair-material, decide-conflict, write-adrs, publish-adr]
+        internal: ['*']
+      review:
+        sources: [https://review-channel.example]
+    x-stint-knowledge:
+      base: architecture
+      schema: architecture@1
+schedule:
+  on:
+    one:
+      with: { type: io.stintflow.examples.architecture-decisions-drafted.v1 }
+do:
+  - fact:
+      set: '${ .[0].data | {meetingId: .meetingId, draftRef: .draftRef, label: .label, onUnavailable: (.onUnavailable // "follow")} }'
+      export: { as: '${ . }' }
+  - pairs:
+      call: remote
+      with:
+        task: pair-decisions
+        input: '${ {draftRef: $context.draftRef} }'
+      timeout: { after: { seconds: 30 } }
+      export: { as: '${ $context + {pointers: .pointers, pairs: .pairs} }' }
+  - resolve:
+      try:
+        - run:
+            call: remote
+            with:
+              task: resolve-pointers
+              input: '${ {pointers: $context.pointers, depth: 0} }'
+            timeout: { after: { seconds: 30 } }
+            export: { as: '${ $context + {resolution: "resolved", viewRef: .viewRef} }' }
+      catch:
+        errors:
+          with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
+        when: '$context.onUnavailable == "follow"'
+        then: unavailable
+  - check:
+      for:
+        each: pair
+        in: '${ $context.pairs }'
+      do:
+        - pair:
+            run:
+              workflow:
+                namespace: examples
+                name: architecture-conflict-check
+                version: '1.0.0'
+                input: '${ $pair + {draftRef: $context.draftRef, viewRef: ($context.viewRef // null), label: $context.label} }'
+      metadata:
+        x-stint-concurrency: 3
+        x-stint-join: all
+        x-stint-max-iterations: 50
+      export: { as: '${ $context + {results: .} }' }
+  - adrs:
+      call: remote
+      with:
+        task: write-adrs
+        input: '${ {meetingId: $context.meetingId, draftRef: $context.draftRef, viewRef: ($context.viewRef // null), results: [$context.results[] | {pairId: .pairId, verdict: .verdict, reviewed: .reviewed}], scope: {namespace: "examples", base: "architecture"}} }'
+      timeout: { after: { minutes: 2 } }
+      export: { as: '${ $context + {adrs: .adrs} }' }
+  - publish:
+      call: remote
+      with:
+        task: publish-adr
+        input: '${ {space: "ARCHITECTURE", adrs: $context.adrs} }'
+      timeout: { after: { minutes: 2 } }
+      export: { as: '${ $context + {pages: .pages} }' }
+  - published:
+      emit:
+        event:
+          with:
+            source: https://architecture-adr.example
+            type: io.stintflow.examples.adrs-published.v1
+            subject: '${ $context.meetingId }'
+            data: '${ {meetingId: $context.meetingId, label: $context.label, resolution: ($context.resolution // "unavailable"), pages: $context.pages, counts: {decisions: ($context.pages | length), conflicting: ([$context.pages[] | select(.status == "conflicting")] | length)}} }'
+      then: end
+  - unavailable:
+      set: '${ $context + {resolution: "unavailable", viewRef: null} }'
+      export: { as: '${ . }' }
+      then: check

@@ -267,6 +267,27 @@ class ArchitectureTest {
             .orShould().dependOnClassesThat().haveSimpleName("CatalogRequesters");
 
     /**
+     * SDD 3c.4, 4.8 (CA14): what reads the draft, the pair and the ADR knows the product domain only by the pointer and by the blob
+     * of the view it resolved. It does not know the resolver the origin serves, nor its policy, grant or view, nor the in-memory
+     * adapters; and what only reads the draft and builds the pair does not know the store at all.
+     */
+    @ArchTest
+    static final ArchRule the_adr_writer_only_reads_the_product_domain = noClasses()
+            .that().haveSimpleName("WriteAdrsHandler").or().haveSimpleName("PairDecisionsHandler")
+            .or().haveSimpleName("PairMaterialHandler").or().haveSimpleName("AdrDrafts")
+            .should().dependOnClassesThat().haveSimpleName("ResolvePointersHandler")
+            .orShould().dependOnClassesThat().haveSimpleName("ResolutionPolicy")
+            .orShould().dependOnClassesThat().haveSimpleName("Grant")
+            .orShould().dependOnClassesThat().haveSimpleName("PublishedView")
+            .orShould().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge.inmemory..", "io.stintflow.inmemory..");
+
+    /** SDD 3c.4, 4.8 (CA14): the conflict check judges and does not write: a decision worker does not know the knowledge store. */
+    @ArchTest
+    static final ArchRule the_conflict_decision_has_no_write = noClasses()
+            .that().resideInAPackage("io.stintflow.worker.decision..")
+            .should().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge..", "io.stintflow.worker.knowledge..");
+
+    /**
      * SDD 3c.1, 4.5 (CA8): the pointer of a graph node is not the pointer of a blob. It does not know the claim check of the wire
      * module, nor its field, so the one is never taken for the other.
      */

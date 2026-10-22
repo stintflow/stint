@@ -180,7 +180,7 @@ public final class ResolvePointersHandler implements TaskHandler {
 
     private Base base(KnowledgeScope scope, String namespace, String name, List<GraphPointer> pointers, int depth) {
         Optional<Grant> grant = policy.grantFor(namespace, name, scope);
-        Optional<PublishedView> view = policy.viewOf(scope);
+        Optional<PublishedView> view = grant.flatMap(g -> policy.viewOf(scope, g));
         if (grant.isEmpty() || view.isEmpty()) {
             return new Base(scope, null, null, Map.of(), Map.of(), Map.of());
         }

@@ -28,6 +28,9 @@ public final class KnowledgeWorkers {
     public static final String CATALOG_LOOKUP_ROUTE = "catalog-lookup";
     public static final String CATALOG_MENTIONS_ROUTE = "catalog-mentions";
     public static final String CATALOG_LINK_ROUTE = "catalog-link";
+    public static final String PAIR_DECISIONS_ROUTE = "pair-decisions";
+    public static final String PAIR_MATERIAL_ROUTE = "pair-material";
+    public static final String WRITE_ADRS_ROUTE = "write-adrs";
 
     private KnowledgeWorkers() {
     }
@@ -108,6 +111,19 @@ public final class KnowledgeWorkers {
             OriginAllowList origins, AuditLog audit, InstantSource clock) {
         return registry.register(CATALOG_MENTIONS_ROUTE, new CatalogMentionsHandler(inspector, scopes))
                 .register(CATALOG_LINK_ROUTE, new CatalogLinkHandler(store, nodes, scopes, origins, audit, clock));
+    }
+
+    /**
+     * SDD 3c.4: registers {@code pair-decisions}, {@code pair-material} and {@code write-adrs} — the architecture domain reads the
+     * draft of the decisions of a meeting, puts each pair in a blob of {@code materialClass}, and writes the ADRs (documents in
+     * {@code documentClass}) and the decisions of the graph, listening to the domains in {@code origins} only.
+     */
+    public static TaskHandlerRegistry registerAdrs(TaskHandlerRegistry registry, KnowledgeStore store, BlobStore blobs,
+            ScopeAllowList scopes, OriginAllowList origins, io.stintflow.spi.RetentionClass materialClass,
+            io.stintflow.spi.RetentionClass documentClass, AuditLog audit, InstantSource clock) {
+        return registry.register(PAIR_DECISIONS_ROUTE, new PairDecisionsHandler(blobs, origins))
+                .register(PAIR_MATERIAL_ROUTE, new PairMaterialHandler(blobs, origins, materialClass))
+                .register(WRITE_ADRS_ROUTE, new WriteAdrsHandler(store, blobs, scopes, origins, documentClass, audit, clock));
     }
 
     /**
