@@ -24,6 +24,7 @@ public final class KnowledgeWorkers {
     public static final String AREA_KEY_DESTROY_ROUTE = "area-key-destroy";
     public static final String ANNOUNCE_ROUTE = "knowledge-announce";
     public static final String REFERENCE_ROUTE = "knowledge-reference";
+    public static final String RESOLVE_ROUTE = "resolve-pointers";
 
     private KnowledgeWorkers() {
     }
@@ -73,6 +74,17 @@ public final class KnowledgeWorkers {
     public static TaskHandlerRegistry registerReference(TaskHandlerRegistry registry, KnowledgeStore store, ScopeAllowList scopes,
             OriginAllowList origins, AuditLog audit, InstantSource clock) {
         return registry.register(REFERENCE_ROUTE, new KnowledgeReferenceHandler(store, scopes, origins, audit, clock));
+    }
+
+    /**
+     * SDD 3c.2: registers {@code resolve-pointers} — this origin answers the pointers of other domains by {@code policy}: the
+     * content of a node through the view it publishes, to the definitions it grants, into a blob of {@code viewClass} (or the
+     * default of one day).
+     */
+    public static TaskHandlerRegistry registerResolve(TaskHandlerRegistry registry, KnowledgeStore store,
+            io.stintflow.knowledge.KnowledgeNodes nodes, ResolutionPolicy policy, BlobStore blobs,
+            io.stintflow.spi.RetentionClass viewClass, AuditLog audit, InstantSource clock) {
+        return registry.register(RESOLVE_ROUTE, new ResolvePointersHandler(store, nodes, policy, blobs, viewClass, audit, clock));
     }
 
     /**

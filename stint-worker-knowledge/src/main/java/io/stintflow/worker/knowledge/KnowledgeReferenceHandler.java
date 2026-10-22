@@ -185,6 +185,8 @@ public final class KnowledgeReferenceHandler implements TaskHandler {
         receipt.counts().forEach(counts::put);
         out.put("lastSequence", receipt.lastSequence());
         out.put("references", byNode.size()).put("anchors", anchors.size());
+        var pointers = out.putArray("pointers");   // the pointers as they were announced, for whoever resolves them next
+        byNode.values().forEach(ref -> pointers.add(ref.pointer.format()));
         return out;
     }
 

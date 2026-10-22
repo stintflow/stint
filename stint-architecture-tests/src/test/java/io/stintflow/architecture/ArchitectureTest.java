@@ -224,6 +224,22 @@ class ArchitectureTest {
             .orShould().callMethod(AreaKeys.class, "unwrap", String.class, byte[].class);
 
     /**
+     * SDD 3c.2, 4.8 (CA12): the resolver of pointers only reads. It asks the node port for content and the store for its log, and
+     * never writes, erases or reindexes; it does not know the in-memory adapters, a batch, an erasure or reindexation request, nor
+     * the inspector, which is for looking at a base and does not return a node's content.
+     */
+    @ArchTest
+    static final ArchRule the_pointer_resolver_only_reads = noClasses()
+            .that().haveSimpleName("ResolvePointersHandler")
+            .should().callMethod(KnowledgeStore.class, "write", io.stintflow.knowledge.KnowledgeScope.class, KnowledgeBatch.class)
+            .orShould().callMethod(KnowledgeStore.class, "delete", io.stintflow.knowledge.KnowledgeScope.class, DeleteRequest.class)
+            .orShould().callMethod(KnowledgeStore.class, "reindex", io.stintflow.knowledge.KnowledgeScope.class, ReindexRequest.class)
+            .orShould().dependOnClassesThat(com.tngtech.archunit.core.domain.JavaClass.Predicates.belongToAnyOf(
+                    KnowledgeBatch.class, DeleteRequest.class, ReindexRequest.class,
+                    io.stintflow.knowledge.KnowledgeInspector.class))
+            .orShould().dependOnClassesThat().resideInAnyPackage("io.stintflow.knowledge.inmemory..", "io.stintflow.inmemory..");
+
+    /**
      * SDD 3c.1, 4.5 (CA8): the pointer of a graph node is not the pointer of a blob. It does not know the claim check of the wire
      * module, nor its field, so the one is never taken for the other.
      */

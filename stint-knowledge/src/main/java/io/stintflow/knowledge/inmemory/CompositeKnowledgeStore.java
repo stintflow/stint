@@ -38,6 +38,9 @@ import io.stintflow.knowledge.EdgeView;
 import io.stintflow.knowledge.GraphView;
 import io.stintflow.knowledge.KnowledgeBatch;
 import io.stintflow.knowledge.KnowledgeInspector;
+import io.stintflow.knowledge.KnowledgeNodes;
+import io.stintflow.knowledge.NodeContent;
+import io.stintflow.knowledge.NodesQuery;
 import io.stintflow.knowledge.KnowledgeScope;
 import io.stintflow.knowledge.KnowledgeStore;
 import io.stintflow.knowledge.KnowledgeValidationException;
@@ -72,7 +75,7 @@ import io.stintflow.spi.Sensitivity;
  * <p>
  * Meant for tests and the local mode: it copies a scope's state on every write, so it suits some thousands of passages per scope.
  */
-public final class CompositeKnowledgeStore implements KnowledgeStore, KnowledgeInspector {
+public final class CompositeKnowledgeStore implements KnowledgeStore, KnowledgeInspector, KnowledgeNodes {
 
     static final int MAX_PASSAGES = 500;
     static final int MAX_ENTITIES = 2_000;
@@ -887,6 +890,53 @@ public final class CompositeKnowledgeStore implements KnowledgeStore, KnowledgeI
         } catch (RuntimeException e) {
             return CompletableFuture.failedFuture(e);
         }
+    }
+
+    // --- nodes (SDD 3c.2) ------------------------------------------------------------------------------------------
+
+    @Override
+    public CompletionStage<List<NodeContent>> nodes(KnowledgeScope scope, NodesQuery query) {
+        try {
+            State s = holder(scope).state;
+            List<NodeContent> out = new ArrayList<>();
+            for (String id : new java.util.TreeSet<>(query.ids())) {
+                InMemoryGraph.Node node = s.graph.node(id);
+                if (node == null || node.level().compareTo(query.ceiling()) > 0) {
+                    continue;   // absent and above the ceiling look the same
+                }
+                String label = labelOf(node);
+                if (label == null) {
+                    continue;
+                }
+                List<NodeContent.Neighbor> neighbors = new ArrayList<>();
+                if (query.neighborLimit() > 0) {
+                    List<InMemoryGraph.Edge> edges = new ArrayList<>(s.graph.edgesOf(id));
+                    edges.sort(Comparator.comparing(InMemoryGraph.Edge::key));
+                    for (InMemoryGraph.Edge edge : edges) {
+                        if (neighbors.size() >= query.neighborLimit()) {
+                            break;
+                        }
+                        boolean outgoing = edge.from().equals(id);
+                        InMemoryGraph.Node other = s.graph.node(outgoing ? edge.to() : edge.from());
+                        if (edge.level().compareTo(query.ceiling()) > 0 || other == null
+                                || other.level().compareTo(query.ceiling()) > 0 || labelOf(other) == null) {
+                            continue;
+                        }
+                        neighbors.add(new NodeContent.Neighbor(edge.type(),
+                                outgoing ? NodeContent.Direction.OUT : NodeContent.Direction.IN, content(other, List.of())));
+                    }
+                }
+                out.add(content(node, neighbors));
+            }
+            return CompletableFuture.completedFuture(out);
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    private NodeContent content(InMemoryGraph.Node node, List<NodeContent.Neighbor> neighbors) {
+        return new NodeContent(node.id(), node.type(), labelOf(node), node.properties(), node.level(),
+                new java.util.TreeSet<>(node.sources()).stream().toList(), neighbors);
     }
 
     // --- inspection (SDD 3b.6) -------------------------------------------------------------------------------------

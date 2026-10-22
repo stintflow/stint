@@ -35,7 +35,7 @@ do:
               task: knowledge-reference
               input: '${ {event: {domain: $context.domain, documentId: $context.documentId, upTo: $context.upTo, items: $context.items}, anchors: [{type: "System", name: "Checkout Service"}], scope: {namespace: "examples", base: "architecture"}} }'
             timeout: { after: { minutes: 2 } }
-            export: { as: '${ $context + {status: .status, lastSequence: .lastSequence, references: .references} }' }
+            export: { as: '${ $context + {status: .status, lastSequence: .lastSequence, references: .references, linked: .pointers} }' }
       catch:
         errors:
           with: { type: https://serverlessworkflow.io/spec/1.0.0/errors/communication }
@@ -51,5 +51,5 @@ do:
             source: https://architecture-links.example
             type: io.stintflow.knowledge.references-linked.v1
             subject: '${ $context.documentId }'
-            data: '${ {documentId: $context.documentId, status: $context.status, lastSequence: $context.lastSequence, references: $context.references} }'
+            data: '${ {documentId: $context.documentId, status: $context.status, lastSequence: $context.lastSequence, references: $context.references, pointers: $context.linked, label: $context.label} }'
       then: end

@@ -55,6 +55,7 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     public static final String AREA_KEY_WORKFLOW = "stint/workflows/area-key-destroy.yaml";
     public static final String ANNOUNCE_WORKFLOW = "stint/workflows/knowledge-announce.yaml";
     public static final String LINKS_WORKFLOW = "stint/workflows/architecture-links.yaml";
+    public static final String RESOLVE_WORKFLOW = "stint/workflows/architecture-resolve.yaml";
     public static final String AREA_ERASURE_REQUESTED = "io.stintflow.knowledge.area-erasure-requested.v1";
     public static final String ERASURE_REQUESTED = "io.stintflow.knowledge.erasure-requested.v1";
     public static final String EMBEDDING_CHANGED = "io.stintflow.knowledge.embedding-changed.v1";
@@ -77,6 +78,9 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     final WorkflowDefinition areaKeyDefinition;
     final WorkflowDefinition announceDefinition;
     final WorkflowDefinition linksDefinition;
+    final WorkflowDefinition resolveDefinition;
+    /** SDD 3c.2: when true the product domain's {@code resolve-pointers} does not answer (the origin is down). */
+    private volatile boolean resolveDown;
     private final WorkerPool pool;
     /** The instance being run, once started. */
     volatile String current;
@@ -130,6 +134,21 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         KnowledgeWorkers.registerAnnounce(handlers, store, scopes, audit, clock);
         KnowledgeWorkers.registerReference(handlers, architecture, new ScopeAllowList(Set.of(ARCHITECTURE)),
                 new io.stintflow.worker.knowledge.OriginAllowList(Set.of(SCOPE)), audit, clock);
+        // SDD 3c.2: the product domain answers the pointers of the architecture domain, by its own policy and through the view it publishes
+        io.stintflow.knowledge.schema.KnowledgeSchema meetings = io.stintflow.knowledge.schema.KnowledgeSchema.meetings();
+        io.stintflow.worker.knowledge.ResolutionPolicy resolution = new io.stintflow.worker.knowledge.ResolutionPolicy(
+                List.of(new io.stintflow.worker.knowledge.Grant("examples", "architecture-resolve", Set.of(SCOPE),
+                        Set.of("Decision", "Requirement", "System"), io.stintflow.spi.Sensitivity.CONFIDENTIAL)),
+                List.of(io.stintflow.worker.knowledge.PublishedView.of("product-v1", SCOPE, meetings, List.of(
+                        io.stintflow.worker.knowledge.PublishedType.of("Decision", true, Set.of("status"), Set.of("supersedes", "affects")),
+                        io.stintflow.worker.knowledge.PublishedType.of("Requirement", true, Set.of(), Set.of()),
+                        io.stintflow.worker.knowledge.PublishedType.of("System", true, Set.of(), Set.of())), false)));
+        TaskHandlerRegistry resolving = new TaskHandlerRegistry();
+        KnowledgeWorkers.registerResolve(resolving, store, store, resolution, blobs, null, audit, clock);
+        io.stintflow.worker.TaskHandler resolveHandler = resolving.find(KnowledgeWorkers.RESOLVE_ROUTE).orElseThrow();
+        handlers.register(KnowledgeWorkers.RESOLVE_ROUTE, ctx -> resolveDown ? CompletableFuture.failedFuture(
+                new io.stintflow.worker.TaskFailure(io.stintflow.spi.ErrorInfo.StandardType.COMMUNICATION.uri(), 503,
+                        "The origin does not answer", null)) : resolveHandler.execute(ctx));
         if (areaKeys != null) {
             KnowledgeWorkers.registerAreaKeys(handlers, areaKeys, Set.of(SCOPE.namespace()), audit, clock);
         }
@@ -159,12 +178,14 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         areaKeyDefinition = load(AREA_KEY_WORKFLOW, "area-key-destroy.yaml");
         announceDefinition = load(ANNOUNCE_WORKFLOW, "knowledge-announce.yaml");
         linksDefinition = load(LINKS_WORKFLOW, "architecture-links.yaml");
+        resolveDefinition = load(RESOLVE_WORKFLOW, "architecture-resolve.yaml");
         registry.register(definition);
         registry.register(eraseDefinition);
         registry.register(reindexDefinition);
         registry.register(areaKeyDefinition);
         registry.register(announceDefinition);
         registry.register(linksDefinition);
+        registry.register(resolveDefinition);
         this.engine = new WorkflowEngine(registry, transport, state, timer, blobs,
                 new TreeInterpreter(new JqExpressionEvaluator()), clock, facts, null,
                 io.stintflow.spi.ExecutionTracer.NOOP).auditLog(audit);
@@ -204,6 +225,16 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
     /** SDD 3c.1: starts the linking of the architecture domain from the {@code nodes-published} fact. */
     public InstanceSnapshot link(CloudEvent published, Duration patience) throws Exception {
         return run(linksDefinition, published, patience);
+    }
+
+    /** SDD 3c.2: starts the resolution of the pointers a {@code references-linked} fact carries. */
+    public InstanceSnapshot resolve(CloudEvent linked, Duration patience) throws Exception {
+        return run(resolveDefinition, linked, patience);
+    }
+
+    /** SDD 3c.2: makes the product domain stop answering the pointers (or answer again), for the test of an origin that is down. */
+    public void resolveDown(boolean down) {
+        this.resolveDown = down;
     }
 
     /** SDD 3b.5b: starts the destruction of an area's key from the request and waits for it to end. */

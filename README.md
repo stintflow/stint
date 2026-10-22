@@ -744,6 +744,16 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   fact; `knowledge-reference`, in the listening domain, writes a `DomainReference` per node (the pointer and nothing the origin
   says) and a `informs` relation from the anchors its own definition names, only for domains in its `OriginAllowList` (empty
   accepts none). One batch per document of the origin: the same fact changes nothing, a later one replaces it, an earlier is stale.
+- **Resolving a pointer (3c.2).** The origin answers: `resolve-pointers` is a task like any other (an invitation through the
+  transport, with the engine's checkpoint, retry and timeout), served by the domain that holds the node, and **who asks is the
+  definition of the invitation, never a field of the input**. `ResolutionPolicy` grants a definition some bases, node types and a
+  ceiling (never above `confidential`; no grant, nothing), and a `PublishedView` — versioned, by type — says what a node shows:
+  the label and the listed properties, none that the schema marks sensitive unless the view says `allowSensitive`. A forged
+  pointer, a restricted node, an unknown one and a base not served all answer `DENIED`, the same; `REMOVED` only for what was
+  there, was not restricted, and is gone. The answer is status and a pointer to a blob of the class `resolved-view` (a day, the
+  platform's shortest; `ResolvedViews.discard` ends it at once): the content is never in the state of the asker, in its vector
+  or its graph. When the origin does not answer, the author's workflow chooses — follow with a marker, or let the instance fail.
+  `KnowledgeNodes` is the read-only port that gives a node's content (ceiling `confidential` at most).
 - **Key per area (3b.5b).** `EnvelopeBlobStore` wraps any `BlobStore`: every blob is encrypted with a data key of its own,
   wrapped by the key of its *area* (`AreaKeys`: `InMemoryAreaKeys`, or `KmsAreaKeys` on AWS KMS). The fact
   `area-erasure-requested` starts `area-key-destroy`, which destroys the area's key; from then on every copy of the area's blobs
