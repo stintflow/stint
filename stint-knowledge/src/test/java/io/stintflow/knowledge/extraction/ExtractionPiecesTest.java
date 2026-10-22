@@ -296,6 +296,96 @@ class ExtractionPiecesTest {
                 .allSatisfy(c -> assertThat(c.schemaVersion()).isEqualTo("meetings@1.0.0"));
     }
 
+    // --- SDD 3c.3b: the name of a glossary term does not inherit the sensitivity of the meeting ----------------------
+
+    private static Sensitivity levelOf(Assembly assembly, String type) {
+        return assembly.batch().entities().stream().filter(e -> e.type().equals(type)).findFirst().orElseThrow().sensitivity();
+    }
+
+    private static List<Passage> passagesOf(Sensitivity level) {
+        return PassageSplitter.passages(SCOPE, "meeting:m-1",
+                List.of("s1: PERSON_a1b2c3 says the checkout service needs the SLA.", "s2: Move the review to Friday."), "en", level);
+    }
+
+    @Test
+    void ca1_a_system_the_glossary_resolved_keeps_the_level_of_the_schema_in_a_confidential_meeting_and_what_was_said_does_not() {
+        Assembly assembly = assemble(passagesOf(Sensitivity.CONFIDENTIAL), new EntityResolver(glossary(), EntityResolver.Existing.NONE),
+                Sensitivity.CONFIDENTIAL);
+
+        assertThat(assembly.resolutions()).containsEntry("ALIAS", 1);
+        assertThat(levelOf(assembly, "System")).isEqualTo(Sensitivity.INTERNAL);
+        assertThat(levelOf(assembly, "Decision")).isEqualTo(Sensitivity.CONFIDENTIAL);
+        assertThat(levelOf(assembly, "Meeting")).isEqualTo(Sensitivity.CONFIDENTIAL);
+        assertThat(levelOf(assembly, "Person")).isEqualTo(Sensitivity.CONFIDENTIAL);
+        assertThat(assembly.batch().relations()).allSatisfy(r -> assertThat(r.sensitivity()).isEqualTo(Sensitivity.CONFIDENTIAL));
+        assertThat(assembly.batch().links()).hasSize(3);
+    }
+
+    @Test
+    void ca2_a_name_the_glossary_does_not_know_keeps_the_level_of_the_meeting() {
+        Glossary withoutCheckout = new Glossary("product", "1", List.of(new Glossary.Term("term-sla", "Term", "SLA")));
+
+        Assembly assembly = assemble(passagesOf(Sensitivity.CONFIDENTIAL), new EntityResolver(withoutCheckout, EntityResolver.Existing.NONE),
+                Sensitivity.CONFIDENTIAL);
+
+        assertThat(assembly.resolutions()).containsEntry("NEW", 3).doesNotContainKey("ALIAS");
+        assertThat(levelOf(assembly, "System")).isEqualTo(Sensitivity.CONFIDENTIAL);
+    }
+
+    @Test
+    void ca2_a_name_that_was_already_in_the_base_outside_the_glossary_keeps_the_level_of_the_meeting() {
+        EntityResolver.Existing known = new EntityResolver.Existing() {
+            @Override
+            public List<EntityResolver.Known> exact(String type, String normalizedName) {
+                return type.equals("System") && normalizedName.equals("checkout")
+                        ? List.of(new EntityResolver.Known("e-existing", "System", "Checkout")) : List.of();
+            }
+
+            @Override
+            public List<EntityResolver.Known> ofType(String type) {
+                return List.of();
+            }
+        };
+        Glossary none = new Glossary("product", "1", List.of());
+
+        Assembly assembly = assemble(passagesOf(Sensitivity.CONFIDENTIAL), new EntityResolver(none, known), Sensitivity.CONFIDENTIAL);
+
+        assertThat(assembly.resolutions()).containsEntry("EXISTING", 1);
+        assertThat(levelOf(assembly, "System")).isEqualTo(Sensitivity.CONFIDENTIAL);
+    }
+
+    @Test
+    void ca3_in_a_restricted_meeting_the_rule_does_not_apply() {
+        Assembly assembly = assemble(passagesOf(Sensitivity.RESTRICTED), new EntityResolver(glossary(), EntityResolver.Existing.NONE),
+                Sensitivity.RESTRICTED);
+
+        assertThat(assembly.resolutions()).containsEntry("ALIAS", 1);
+        assertThat(levelOf(assembly, "System")).isEqualTo(Sensitivity.RESTRICTED);
+    }
+
+    @Test
+    void ca4_below_confidential_the_reader_sees_the_name_and_not_what_the_meeting_said() throws Exception {
+        Assembly assembly = assemble(passagesOf(Sensitivity.CONFIDENTIAL), new EntityResolver(glossary(), EntityResolver.Existing.NONE),
+                Sensitivity.CONFIDENTIAL);
+        CompositeKnowledgeStore store = new CompositeKnowledgeStore(new DeterministicEmbedder(),
+                new FilesystemBlobStore(Files.createTempDirectory("stint-3c3b"), () -> Instant.parse("2026-10-22T12:00:00Z")),
+                new RetentionClass("restricted", Duration.ofDays(30)), () -> Instant.parse("2026-10-22T12:00:00Z"));
+        store.write(SCOPE, assembly.batch()).toCompletableFuture().get(10, TimeUnit.SECONDS);
+
+        var view = store.view(SCOPE, new io.stintflow.knowledge.ViewQuery(Sensitivity.INTERNAL, 100, null, null))
+                .toCompletableFuture().get(10, TimeUnit.SECONDS);
+
+        assertThat(view.nodes()).extracting(n -> n.type()).containsExactly("System");
+        assertThat(view.nodes().getFirst().label()).isEqualTo("Checkout Service");
+        assertThat(view.edges()).isEmpty();
+        var found = store.entities(SCOPE, new io.stintflow.knowledge.EntityQuery("System",
+                io.stintflow.knowledge.EntityIds.normalize("Checkout Service"), Sensitivity.INTERNAL, 5)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        assertThat(found).hasSize(1);
+        var seen = store.retrieve(SCOPE, new io.stintflow.knowledge.RetrievalQuery("checkout service needs", 5, 0, Sensitivity.INTERNAL,
+                null, java.util.Set.of(), null, 2)).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        assertThat(seen.toString()).doesNotContain("PERSON_a1b2c3").doesNotContain("Move the review").doesNotContain("Review on Friday");
+    }
+
     private static Assembly assemble(List<Passage> passages, EntityResolver resolver, Sensitivity level) {
         BatchAssembler assembler = new BatchAssembler(SCOPE, SCHEMA, "m-1", "2026-10-19", level, resolver);
         assembler.addWindow(passages, json("{'entities':["

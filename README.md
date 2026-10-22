@@ -754,7 +754,10 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   catalog's types; what is above is only counted) → `catalog-lookup` → `catalog-link`, which writes a `DomainReference` and a
   `denotes` relation from the local node, **without changing it and without merging**; the same call again writes nothing. When the
   catalog does not answer, the author's workflow chooses (follow with a marker, or let the instance fail), as for resolving.
-  The areas' schemas stay as they are: what a link writes is named by the new `catalog-links@1.0.0`.
+  The areas' schemas stay as they are: what a link writes is named by the new `catalog-links@1.0.0`. So that the catalog sees
+  the systems of the meetings (which come out `confidential`), the **name of a glossary term the glossary resolved** keeps the
+  level of its type (`internal`) in a confidential meeting (3c.3b); what the meeting said — passages, relations, decisions —
+  does not change level.
 - **Resolving a pointer (3c.2).** The origin answers: `resolve-pointers` is a task like any other (an invitation through the
   transport, with the engine's checkpoint, retry and timeout), served by the domain that holds the node, and **who asks is the
   definition of the invitation, never a field of the input**. `ResolutionPolicy` grants a definition some bases, node types and a

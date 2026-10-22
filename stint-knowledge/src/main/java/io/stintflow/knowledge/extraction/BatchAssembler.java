@@ -28,8 +28,9 @@ import io.stintflow.spi.Sensitivity;
  * entities resolved to ids, the relations between them, the links from the passages that mention them, and the meeting
  * itself. The batch is the complete state of the document, with deterministic ids, so writing it again changes nothing.
  * <p>
- * An item's level is the higher of its type's default in the schema and the level of the instance (SDD 3b.2, 4.1); a
- * relation's, the higher of its ends'. A candidate duplicate is reported beside the batch — it is not in it.
+ * An item's level is the higher of its type's default in the schema and the level of the instance (SDD 3b.2, 4.1), except the
+ * name of a glossary term the glossary resolved (SDD 3c.3b); a relation's, the higher of its ends'. A candidate duplicate is
+ * reported beside the batch — it is not in it.
  */
 public final class BatchAssembler {
 
@@ -105,7 +106,7 @@ public final class BatchAssembler {
             e.path("properties").properties().forEach(p -> properties.put(p.getKey(), p.getValue().asText()));
             Entity previous = entities.get(id);
             if (previous == null) {
-                entities.put(id, new Entity(id, type, resolution.label(), properties, levelOf(type)));
+                entities.put(id, new Entity(id, type, resolution.label(), properties, levelOf(type, resolution.kind())));
                 resolution.candidates().forEach(c -> candidates.add(new DuplicateCandidate(id, c.other(), c.how().score(),
                         c.how().reasons(), DuplicateCriterion.VERSION)));
             }
@@ -125,6 +126,21 @@ public final class BatchAssembler {
 
     private Sensitivity levelOf(String type) {
         return Sensitivity.max(schema.nodes().get(type).defaultSensitivity(), instanceLevel);
+    }
+
+    /**
+     * SDD 3c.3b: the name of a glossary term is vocabulary the area already published, not what the meeting said, so a node the
+     * glossary resolved (its name or an alias) of a glossary type keeps the level the schema gives the type, when the instance is
+     * confidential or lower. What the meeting said — the passages, the relations (the higher of their two ends), the decisions —
+     * keeps its level; a name the glossary does not know, and any restricted instance, keep the rule of {@link #levelOf(String)}.
+     */
+    private Sensitivity levelOf(String type, EntityResolver.Kind kind) {
+        KnowledgeSchema.NodeType nodeType = schema.nodes().get(type);
+        boolean curated = kind == EntityResolver.Kind.GLOSSARY || kind == EntityResolver.Kind.ALIAS;
+        if (curated && nodeType.glossary() && instanceLevel.compareTo(Sensitivity.CONFIDENTIAL) <= 0) {
+            return nodeType.defaultSensitivity();
+        }
+        return levelOf(type);
     }
 
     /** The batch of the whole document: all the windows added so far. */
