@@ -113,7 +113,8 @@ public final class ArchitectureAdrPipeline implements AutoCloseable {
         // with the summary, the others do not (SDD 3c.4, 3c.5)
         ResolutionPolicy policy = ProductBridge.contract().policy();
         TaskHandlerRegistry resolving = new TaskHandlerRegistry();
-        KnowledgeWorkers.registerResolve(resolving, product, product, policy, blobs, null, audit, clock);
+        KnowledgeWorkers.registerResolve(resolving, product, product, policy, blobs, null, audit, clock,
+                new io.stintflow.worker.knowledge.ChannelAttestation("in-process", true));
         TaskHandler resolve = resolving.find(KnowledgeWorkers.RESOLVE_ROUTE).orElseThrow();
         this.resolveHandler = resolve;
 

@@ -35,6 +35,18 @@ pii: [ SYNTH-PII-0101 ]         # every marker planted in the script
   (`+55 11 98765-4321`), or a name that is a marker (`SYNTH-PII-0101 Rivera`, redacted by the term list).
 - Changing a script means updating its hash in the manifest; `CorpusTest` fails otherwise.
 
+## The scenario of the Phase 3c milestone (SDD 3c.6, format v1.2)
+Additive: nothing that reads a script for the earlier milestones looks at it.
+- A product script may carry `kb.decisions`: `surface` (the words as the script has them), `label` (the decision's name in the
+  graph), `summary` (what it says; sensitive) and `status`. The extraction model of the build cites a decision where a passage of
+  the minutes holds its surface. `m-001`, `m-002` and `m-004` take one decision each.
+- `architecture` in the manifest lists the meetings of the architecture area (`a-001` to `a-004`), text only (no audio: the
+  transcription was proved in 3a.6), with `expected.drafts`: the decision's `id` (its title as a slug), its `title`, the
+  product decisions it answers (`motivatedBy`, by label), the final `verdict` (`conflicts | compatible`), `how` (`auto | reviewed`:
+  whether a person judged it) and `originDown` (the product area does not answer during that meeting).
+- A sentence that opens with `We decided to` is a decision of the draft; `It answers the product decision "…"` names the product
+  decision it answers. The model of the build is a rule over these cues: it proves the plumbing, not the quality of a model.
+
 ## The entity-resolution set (SDD 3b.2, format v1.1)
 A script may carry an optional `kb` section: what a model would cite in the meeting, and what each mention should resolve to
 (`kb.mentions`: `type`, `surface` as the script has it, `expect` = an entity id or `new`, `how` = `glossary | alias | existing`,

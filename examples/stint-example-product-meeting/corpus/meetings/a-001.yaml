@@ -1,0 +1,10 @@
+id: a-001
+language: en
+label: confidential                 # the redacted transcript of an architecture meeting; no audio (SDD 3c.6)
+script:
+  - { speaker: s1, text: "Architecture sync on the checkout path and how it scales for the sale." }
+  - { speaker: s2, text: 'We decided to make the checkout asynchronous through a queue. It answers the product decision "Keep the checkout synchronous".' }
+expected:
+  drafts:
+    - { id: make-the-checkout-asynchronous-through-a-queue, title: "Make the checkout asynchronous through a queue", motivatedBy: [ "Keep the checkout synchronous" ], verdict: conflicts, how: reviewed }
+pii: []

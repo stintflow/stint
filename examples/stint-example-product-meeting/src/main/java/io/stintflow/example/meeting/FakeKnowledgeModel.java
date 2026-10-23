@@ -34,9 +34,16 @@ public final class FakeKnowledgeModel implements ChatModel {
     private static final Pattern PSEUDONYM = Pattern.compile("PERSON_[0-9a-f]+");
 
     private final List<Corpus.Term> glossary;
+    /** SDD 3c.6: the decisions the gold says the meetings take; one is cited where a passage holds its surface. */
+    private final List<Corpus.ProductDecision> decisions;
 
     public FakeKnowledgeModel(List<Corpus.Term> glossary) {
+        this(glossary, List.of());
+    }
+
+    public FakeKnowledgeModel(List<Corpus.Term> glossary, List<Corpus.ProductDecision> decisions) {
         this.glossary = List.copyOf(glossary);
+        this.decisions = List.copyOf(decisions);
     }
 
     @Override
@@ -44,6 +51,7 @@ public final class FakeKnowledgeModel implements ChatModel {
         String prompt = lastUserText(request.messages());
         Map<String, List<Integer>> systems = new LinkedHashMap<>();
         Map<String, List<Integer>> persons = new LinkedHashMap<>();
+        Map<Corpus.ProductDecision, List<Integer>> decided = new LinkedHashMap<>();
         // a passage may span several lines (the minutes are markdown): a line that opens no passage continues the last one
         Map<Integer, StringBuilder> passages = new LinkedHashMap<>();
         int current = -1;
@@ -64,6 +72,11 @@ public final class FakeKnowledgeModel implements ChatModel {
                 if (text.contains(term.name().toLowerCase(Locale.ROOT)) || term.aliases().stream()
                         .anyMatch(a -> text.contains(a.toLowerCase(Locale.ROOT)))) {
                     systems.computeIfAbsent(term.type() + "|" + term.name(), k -> new ArrayList<>()).add(ordinal);
+                }
+            }
+            for (Corpus.ProductDecision decision : decisions) {
+                if (text.contains(decision.surface().toLowerCase(Locale.ROOT))) {
+                    decided.computeIfAbsent(decision, k -> new ArrayList<>()).add(ordinal);
                 }
             }
             Matcher person = PSEUDONYM.matcher(raw);
@@ -89,6 +102,15 @@ public final class FakeKnowledgeModel implements ChatModel {
             ArrayNode ordinals = entity.putArray("passages");
             e.getValue().stream().distinct().forEach(ordinals::add);
             relations.addObject().put("type", "participated").put("from", ref).put("to", "meeting");
+        }
+        for (Map.Entry<Corpus.ProductDecision, List<Integer>> e : decided.entrySet()) {
+            String ref = "e" + (++n);
+            ObjectNode entity = entities.addObject();
+            entity.put("ref", ref).put("type", "Decision").put("mention", e.getKey().label());
+            entity.putObject("properties").put("summary", e.getKey().summary()).put("status", e.getKey().status());
+            ArrayNode ordinals = entity.putArray("passages");
+            e.getValue().stream().distinct().forEach(ordinals::add);
+            relations.addObject().put("type", "decided").put("from", "meeting").put("to", ref);
         }
         String text = answer.toString();
         return ChatResponse.builder().aiMessage(AiMessage.from(text)).modelName(MODEL_NAME)

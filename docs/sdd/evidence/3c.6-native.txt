@@ -1,0 +1,15 @@
+SDD 3c.6 — native build and run of examples/stint-example-product-meeting (22/10/2026)
+
+Build: mvn -B -o package -Pnative -DskipTests -Dquarkus.native.remote-container-build=true -pl examples/stint-example-product-meeting
+Mandrel native-image; Peak RSS: 2,78GB. Finished generating 'stint-example-product-meeting-0.1.0-SNAPSHOT-runner' in 1m 6s. BUILD SUCCESS (1m 21s).
+
+Run (binary copied into quay.io/quarkus/ubi9-quarkus-micro-image:2.0): the eight meetings of the milestone, fake models.
+PRODUCT-MEETING m-007 COMPLETED docType=runbook urgent=true items=1 reviewed=false
+PRODUCT-MEETING m-008 COMPLETED docType=ata urgent=false items=1 reviewed=true answered=[choice, approval]
+PRODUCT-MEETING summary meetings=8 completed=8 docTypeAccuracy=1.0
+PRODUCT-MEETING pages=8 facts=8
+PRODUCT-MEETING OK
+
+Scope of this evidence: the main of the native image is the product-meeting run of 3a.6. The scenario of 3c.6 (ScenarioRun) is
+not part of that main: the image builds with its classes and the corpus v1.2, and the product meetings (three of them now carry a
+decision line) run natively; the scenario itself runs on the JVM, in the process (ScenarioRunTest) and on floci (FlociScenarioIT).

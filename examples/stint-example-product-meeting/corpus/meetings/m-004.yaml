@@ -17,3 +17,5 @@ kb:
     - { type: System, surface: "event bus",            expect: sys-bus,       how: glossary }
     - { type: Decision, surface: "one shared topic",    expect: new }
     - { type: Term, surface: "decision record", expect: term-adr, how: glossary }
+  decisions:
+    - { surface: "decided to adopt one shared topic with schemas", label: "Adopt one shared topic with schemas", summary: "SYNTH-PRODUCT-SUMMARY every service publishes to the same topic and validates the schema", status: accepted }

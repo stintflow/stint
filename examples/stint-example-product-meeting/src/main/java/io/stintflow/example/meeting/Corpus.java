@@ -167,6 +167,62 @@ public final class Corpus {
         return new Term(t.path("id").asText(), t.path("type").asText(), t.path("name").asText(), List.copyOf(aliases));
     }
 
+    // --- the scenario of the milestone (SDD 3c.6, format v1.2) ----------------------------------------------------
+
+    /**
+     * A decision a product meeting takes, as its gold says a model would extract it.
+     *
+     * @param surface the words as the script has them (found in its text, ignoring case)
+     * @param label   the decision's name in the product graph
+     * @param summary what the decision says; sensitive, only the definition that checks conflicts sees it
+     */
+    public record ProductDecision(String meetingId, String surface, String label, String summary, String status) {
+    }
+
+    /** What an architecture meeting should draft: one decision, the product decisions it answers, and its verdict. */
+    public record Draft(String id, String title, List<String> motivatedBy, String verdict, boolean reviewed, boolean originDown) {
+    }
+
+    /** A meeting of the architecture area (text only: the redacted transcript) and the gold of its drafts. */
+    public record ArchitectureMeeting(String id, String label, String text, List<Draft> drafts, String scriptSha256) {
+    }
+
+    /** The product decisions of the milestone's meetings (the {@code kb.decisions} of each script), in manifest order. */
+    public static List<ProductDecision> loadProductDecisions() {
+        JsonNode manifest = read("corpus/manifest.json", false);
+        List<ProductDecision> decisions = new ArrayList<>();
+        for (JsonNode entry : manifest.path("meetings")) {
+            JsonNode m = read("corpus/" + entry.path("script").asText(), true);
+            m.path("kb").path("decisions").forEach(d -> decisions.add(new ProductDecision(m.path("id").asText(),
+                    d.path("surface").asText(), d.path("label").asText(), d.path("summary").asText(),
+                    d.path("status").asText("accepted"))));
+        }
+        return List.copyOf(decisions);
+    }
+
+    /** The architecture meetings of the manifest, in its order. */
+    public static List<ArchitectureMeeting> loadArchitecture() {
+        JsonNode manifest = read("corpus/manifest.json", false);
+        List<ArchitectureMeeting> meetings = new ArrayList<>();
+        for (JsonNode entry : manifest.path("architecture")) {
+            JsonNode m = read("corpus/" + entry.path("script").asText(), true);
+            StringBuilder text = new StringBuilder();
+            m.path("script").forEach(l -> text.append(l.path("text").asText()).append('\n'));
+            List<Draft> drafts = new ArrayList<>();
+            m.path("expected").path("drafts").forEach(d -> {
+                List<String> motivatedBy = new ArrayList<>();
+                d.path("motivatedBy").forEach(x -> motivatedBy.add(x.asText()));
+                drafts.add(new Draft(d.path("id").asText(), d.path("title").asText(), List.copyOf(motivatedBy),
+                        d.path("verdict").asText(), "reviewed".equals(d.path("how").asText()),
+                        d.path("originDown").asBoolean(false)));
+            });
+            meetings.add(new ArchitectureMeeting(m.path("id").asText(), m.path("label").asText(), text.toString(),
+                    List.copyOf(drafts), entry.path("scriptSha256").asText()));
+        }
+        return List.copyOf(meetings);
+    }
+
+
     static byte[] bytes(String resource) {
         try (InputStream in = Corpus.class.getClassLoader().getResourceAsStream(resource)) {
             if (in == null) {

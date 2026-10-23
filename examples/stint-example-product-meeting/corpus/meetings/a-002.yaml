@@ -1,0 +1,10 @@
+id: a-002
+language: en
+label: confidential
+script:
+  - { speaker: s1, text: "Architecture sync on how the price table is served to the regions." }
+  - { speaker: s2, text: 'We decided to serve the price table from a cache. It answers the product decision "Publish the price table for every region".' }
+expected:
+  drafts:
+    - { id: serve-the-price-table-from-a-cache, title: "Serve the price table from a cache", motivatedBy: [ "Publish the price table for every region" ], verdict: compatible, how: auto }
+pii: []

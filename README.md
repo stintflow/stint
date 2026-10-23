@@ -775,6 +775,22 @@ plugs in beside them and must pass `KnowledgeStoreContract`, the conformance sui
   nothing; authenticating the transport itself is the deployment's. `knowledge-write` and the publication now audit too, and
   `AuditTrail` reads one execution of the scenario across the domains' logs. `docs/compliance/bridge-review.md` is the material
   for the DPO and legal opinion, which is not in the repository.
+- **The Phase 3c milestone: product to architecture, end to end (3c.6).** `ScenarioRun` chains what 3a and 3b built with the
+  bridge: the product meetings that take decisions run `product-meeting`, their minutes are ingested (the extraction cites each
+  decision the answer key lists), announced and linked; the architecture meetings (`a-001` to `a-004`, text only) are drafted into
+  decisions that answer a product decision, and each runs `architecture-adr` — pointers resolved by the product area, the conflict
+  judged, a person on every conflict and on every pair the machine cannot settle (or that the origin could not answer), the ADR
+  published. One conflict, one compatible pair, one unsure and one with the origin down, each against the key of the corpus
+  (format v1.2, `kb.decisions` and `expected.drafts`). It runs in the process (`ScenarioRunTest`) and on floci
+  (`FlociScenarioIT`: DynamoDB, SQS, S3, one worker behind the SQS binding). `ScenarioReport` is the report — conflicts found,
+  missed and invented, the review rate, the entity-resolution quality, latency and cost per execution — with ids and numbers only;
+  the committed runs are `docs/sdd/evidence/3c.6-report.json` and `3c.6-report-floci.json`. **With fake models the numbers prove
+  the plumbing and the agreement with the key, not the quality of a model.** `registerResolve` now requires the origin to declare
+  its channel. Not wired: a run of this scenario with real models (the manual run of `ProductMeetingMain` covers the product
+  area only).
+- **Language of the base (3b.1, applied in 3c.6).** The base stores the language of the source — English for the meetings — with
+  `language` on every passage, no translation, and the embedder refuses a language it does not declare. Documentation of meetings
+  in Portuguese needs a multilingual embedder and is a later SDD.
 - **Resolving a pointer (3c.2).** The origin answers: `resolve-pointers` is a task like any other (an invitation through the
   transport, with the engine's checkpoint, retry and timeout), served by the domain that holds the node, and **who asks is the
   definition of the invitation, never a field of the input**. `ResolutionPolicy` grants a definition some bases, node types and a

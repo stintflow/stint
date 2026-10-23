@@ -85,12 +85,17 @@ public final class KnowledgeWorkers {
     /**
      * SDD 3c.2: registers {@code resolve-pointers} — this origin answers the pointers of other domains by {@code policy}: the
      * content of a node through the view it publishes, to the definitions it grants, into a blob of {@code viewClass} (or the
-     * default of one day).
+     * default of one day). SDD 3c.6: the declaration of the channel is required — an origin that does not say whether its
+     * channel authenticates the requester does not answer.
      */
     public static TaskHandlerRegistry registerResolve(TaskHandlerRegistry registry, KnowledgeStore store,
             io.stintflow.knowledge.KnowledgeNodes nodes, ResolutionPolicy policy, BlobStore blobs,
-            io.stintflow.spi.RetentionClass viewClass, AuditLog audit, InstantSource clock) {
-        return registry.register(RESOLVE_ROUTE, new ResolvePointersHandler(store, nodes, policy, blobs, viewClass, audit, clock));
+            io.stintflow.spi.RetentionClass viewClass, AuditLog audit, InstantSource clock, ChannelAttestation attestation) {
+        if (attestation == null) {
+            throw new IllegalArgumentException("The origin must declare its channel (a ChannelAttestation) to answer pointers");
+        }
+        return registry.register(RESOLVE_ROUTE,
+                new ResolvePointersHandler(store, nodes, policy, blobs, viewClass, audit, clock, attestation));
     }
 
     /**

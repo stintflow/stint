@@ -148,7 +148,8 @@ public final class KnowledgeIngestPipeline implements AutoCloseable {
         // (SDD 3c.5: the policy is built from the contract of exposure of the base, a document)
         io.stintflow.worker.knowledge.ResolutionPolicy resolution = ProductBridge.contract().policy();
         TaskHandlerRegistry resolving = new TaskHandlerRegistry();
-        KnowledgeWorkers.registerResolve(resolving, store, store, resolution, blobs, null, audit, clock);
+        KnowledgeWorkers.registerResolve(resolving, store, store, resolution, blobs, null, audit, clock,
+                new io.stintflow.worker.knowledge.ChannelAttestation("in-process", true));
         io.stintflow.worker.TaskHandler resolveHandler = resolving.find(KnowledgeWorkers.RESOLVE_ROUTE).orElseThrow();
         handlers.register(KnowledgeWorkers.RESOLVE_ROUTE, ctx -> resolveDown ? CompletableFuture.failedFuture(
                 new io.stintflow.worker.TaskFailure(io.stintflow.spi.ErrorInfo.StandardType.COMMUNICATION.uri(), 503,

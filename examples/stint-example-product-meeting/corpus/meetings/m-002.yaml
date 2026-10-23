@@ -5,6 +5,7 @@ speakers: [ { id: s1, voice: bf_emma }, { id: s2, voice: am_michael } ]
 script:
   - { speaker: s1, text: "This is the recap of the pricing review. Call me at +55 11 98765-4321 if anything is unclear." }
   - { speaker: s2, text: "SYNTH-PII-0201 Chen will own the annual plan discount." }
+  - { speaker: s2, text: "We decided to publish the price table for every region." }
   - { speaker: s1, text: "I will publish the new price table next week." }
 expected:
   docType: ata
@@ -16,3 +17,5 @@ kb:
   mentions:
     - { type: Term,   surface: "annual plan discount", expect: new }
     - { type: Term,   surface: "price table",           expect: new }
+  decisions:
+    - { surface: "decided to publish the price table for every region", label: "Publish the price table for every region", summary: "SYNTH-PRODUCT-SUMMARY every customer sees the same table", status: accepted }

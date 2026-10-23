@@ -1,0 +1,10 @@
+id: a-004
+language: en
+label: confidential
+script:
+  - { speaker: s1, text: "Architecture sync on the payment provider; the product domain is down during this run." }
+  - { speaker: s2, text: 'We decided to move the checkout to a new payment provider. It answers the product decision "Keep the checkout synchronous".' }
+expected:
+  drafts:
+    - { id: move-the-checkout-to-a-new-payment-provider, title: "Move the checkout to a new payment provider", motivatedBy: [ "Keep the checkout synchronous" ], verdict: compatible, how: reviewed, originDown: true }
+pii: []

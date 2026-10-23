@@ -1,0 +1,10 @@
+id: a-003
+language: en
+label: confidential
+script:
+  - { speaker: s1, text: "Architecture sync on the schemas of the event bus." }
+  - { speaker: s2, text: 'We decided to keep the event schemas in one registry. The impact on the consumers is unclear. It answers the product decision "Adopt one shared topic with schemas".' }
+expected:
+  drafts:
+    - { id: keep-the-event-schemas-in-one-registry, title: "Keep the event schemas in one registry", motivatedBy: [ "Adopt one shared topic with schemas" ], verdict: compatible, how: reviewed }
+pii: []
